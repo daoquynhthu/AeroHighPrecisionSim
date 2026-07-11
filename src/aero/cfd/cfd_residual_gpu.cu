@@ -165,112 +165,8 @@ __device__ void d_reconstruct_primitive(
     nu_tilde = nu_tilde + g[15]*dx + g[16]*dy + g[17]*dz;
 }
 
-__global__ void __launch_bounds__(128) euler_residual_kernel_atomic(
-    const Real* d_nx, const Real* d_ny, const Real* d_nz,
-    const Real* d_area,
-    const int* d_left_cell, const int* d_right_cell,
-    const int* d_boundary,
-    const Real* d_q,
-    int face_count, int nvar, int n_cells,
-    Real gamma,
-    Real inf_rho, Real inf_p,
-    Real inf_u, Real inf_v, Real inf_w, Real inf_a, Real inf_nu_tilde,
-    Real* d_residual,
-    int* d_failed,
-    const Real* d_gradients,
-    const Real* d_face_cx, const Real* d_face_cy, const Real* d_face_cz,
-    const Real* d_cx, const Real* d_cy, const Real* d_cz,
-    const int* d_partition_owner, int my_rank) {
-    int idx = blockIdx.x * blockDim.x + threadIdx.x;
-    if (idx >= face_count) return;
-
-    int left = d_left_cell[idx];
-    if (left < 0 || left >= n_cells) { atomicExch(d_failed, 1); return; }
-    if (d_partition_owner && d_partition_owner[left] != my_rank) return;
-    int bnd = d_boundary[idx];
-    Real nx = d_nx[idx];
-    Real ny = d_ny[idx];
-    Real nz = d_nz[idx];
-    Real area = d_area[idx];
-
-    Real rhoL, uL, vL, wL, pL, nu_tildeL;
-    if (!d_conservative_to_primitive(d_q, left, nvar, gamma, rhoL, uL, vL, wL, pL, nu_tildeL)) {
-        atomicExch(d_failed, 1);
-        return;
-    }
-
-    if (d_gradients != nullptr) {
-        Real dx = d_face_cx[idx] - d_cx[left];
-        Real dy = d_face_cy[idx] - d_cy[left];
-        Real dz = d_face_cz[idx] - d_cz[left];
-        d_reconstruct_primitive(d_gradients, left, dx, dy, dz, rhoL, uL, vL, wL, pL, nu_tildeL);
-        if (!real_isfinite(rhoL) || rhoL <= 0.0f || !real_isfinite(pL) || pL <= 0.0f) {
-            atomicExch(d_failed, 1);
-            return;
-        }
-    }
-
-    Real mass, mom_x, mom_y, mom_z, energy, turbulence;
-
-    if (bnd == static_cast<int>(BoundaryKind::Interior)) {
-        int right = d_right_cell[idx];
-        if (right < 0 || right >= n_cells) { atomicExch(d_failed, 1); return; }
-        Real rhoR, uR, vR, wR, pR, nu_tildeR;
-        if (!d_conservative_to_primitive(d_q, right, nvar, gamma, rhoR, uR, vR, wR, pR, nu_tildeR)) {
-            atomicExch(d_failed, 1);
-            return;
-        }
-        if (d_gradients != nullptr) {
-            Real dx = d_face_cx[idx] - d_cx[right];
-            Real dy = d_face_cy[idx] - d_cy[right];
-            Real dz = d_face_cz[idx] - d_cz[right];
-            d_reconstruct_primitive(d_gradients, right, dx, dy, dz, rhoR, uR, vR, wR, pR, nu_tildeR);
-            if (!real_isfinite(rhoR) || rhoR <= 0.0f || !real_isfinite(pR) || pR <= 0.0f) {
-                atomicExch(d_failed, 1);
-                return;
-            }
-        }
-        d_hllc_flux(rhoL, uL, vL, wL, pL, nu_tildeL, rhoR, uR, vR, wR, pR, nu_tildeR, gamma, nx, ny, nz,
-            mass, mom_x, mom_y, mom_z, energy, turbulence);
-    } else if (bnd == static_cast<int>(BoundaryKind::SlipWall) || bnd == static_cast<int>(BoundaryKind::NoSlipWall) || bnd == static_cast<int>(BoundaryKind::Symmetry)) {
-        d_slip_wall_flux(pL, nx, ny, nz, mass, mom_x, mom_y, mom_z, energy, turbulence);
-    } else {
-        Real ghrho, ghp, ghu, ghv, ghw, ghnu;
-        d_farfield_ghost_state(rhoL, uL, vL, wL, pL, nu_tildeL,
-            inf_rho, inf_p, inf_u, inf_v, inf_w, inf_nu_tilde, inf_a,
-            nx, ny, nz, ghrho, ghp, ghu, ghv, ghw, ghnu);
-        d_hllc_flux(rhoL, uL, vL, wL, pL, nu_tildeL, ghrho, ghu, ghv, ghw, ghp, ghnu, gamma, nx, ny, nz,
-            mass, mom_x, mom_y, mom_z, energy, turbulence);
-    }
-
-    Real fmass = mass * area;
-    Real fmx = mom_x * area;
-    Real fmy = mom_y * area;
-    Real fmz = mom_z * area;
-    Real fen = energy * area;
-    Real fturb = turbulence * area;
-
-    real_atomic_add(&d_residual[left * nvar + 0], -fmass);
-    real_atomic_add(&d_residual[left * nvar + 1], -fmx);
-    real_atomic_add(&d_residual[left * nvar + 2], -fmy);
-    real_atomic_add(&d_residual[left * nvar + 3], -fmz);
-    real_atomic_add(&d_residual[left * nvar + 4], -fen);
-    real_atomic_add(&d_residual[left * nvar + 5], -fturb);
-
-    if (bnd == static_cast<int>(BoundaryKind::Interior)) {
-        int right = d_right_cell[idx];
-        if (right >= 0 && right < n_cells) {
-        real_atomic_add(&d_residual[right * nvar + 0], fmass);
-        real_atomic_add(&d_residual[right * nvar + 1], fmx);
-        real_atomic_add(&d_residual[right * nvar + 2], fmy);
-        real_atomic_add(&d_residual[right * nvar + 3], fmz);
-        real_atomic_add(&d_residual[right * nvar + 4], fen);
-        real_atomic_add(&d_residual[right * nvar + 5], fturb);
-        }
-    }
-}
-
-__global__ void __launch_bounds__(128) euler_residual_kernel_colored(
+template <bool COLORED>
+__global__ void __launch_bounds__(128) euler_residual_kernel(
     const Real* d_nx, const Real* d_ny, const Real* d_nz,
     const Real* d_area,
     const int* d_left_cell, const int* d_right_cell,
@@ -355,22 +251,43 @@ __global__ void __launch_bounds__(128) euler_residual_kernel_colored(
     Real fen = energy * area;
     Real fturb = turbulence * area;
 
-    d_residual[left * nvar + 0] += -fmass;
-    d_residual[left * nvar + 1] += -fmx;
-    d_residual[left * nvar + 2] += -fmy;
-    d_residual[left * nvar + 3] += -fmz;
-    d_residual[left * nvar + 4] += -fen;
-    d_residual[left * nvar + 5] += -fturb;
+    if constexpr (COLORED) {
+        d_residual[left * nvar + 0] += -fmass;
+        d_residual[left * nvar + 1] += -fmx;
+        d_residual[left * nvar + 2] += -fmy;
+        d_residual[left * nvar + 3] += -fmz;
+        d_residual[left * nvar + 4] += -fen;
+        d_residual[left * nvar + 5] += -fturb;
 
-    if (bnd == static_cast<int>(BoundaryKind::Interior)) {
-        int right = d_right_cell[idx];
-        if (right >= 0 && right < n_cells) {
-        d_residual[right * nvar + 0] += fmass;
-        d_residual[right * nvar + 1] += fmx;
-        d_residual[right * nvar + 2] += fmy;
-        d_residual[right * nvar + 3] += fmz;
-        d_residual[right * nvar + 4] += fen;
-        d_residual[right * nvar + 5] += fturb;
+        if (bnd == static_cast<int>(BoundaryKind::Interior)) {
+            int right = d_right_cell[idx];
+            if (right >= 0 && right < n_cells) {
+                d_residual[right * nvar + 0] += fmass;
+                d_residual[right * nvar + 1] += fmx;
+                d_residual[right * nvar + 2] += fmy;
+                d_residual[right * nvar + 3] += fmz;
+                d_residual[right * nvar + 4] += fen;
+                d_residual[right * nvar + 5] += fturb;
+            }
+        }
+    } else {
+        real_atomic_add(&d_residual[left * nvar + 0], -fmass);
+        real_atomic_add(&d_residual[left * nvar + 1], -fmx);
+        real_atomic_add(&d_residual[left * nvar + 2], -fmy);
+        real_atomic_add(&d_residual[left * nvar + 3], -fmz);
+        real_atomic_add(&d_residual[left * nvar + 4], -fen);
+        real_atomic_add(&d_residual[left * nvar + 5], -fturb);
+
+        if (bnd == static_cast<int>(BoundaryKind::Interior)) {
+            int right = d_right_cell[idx];
+            if (right >= 0 && right < n_cells) {
+                real_atomic_add(&d_residual[right * nvar + 0], fmass);
+                real_atomic_add(&d_residual[right * nvar + 1], fmx);
+                real_atomic_add(&d_residual[right * nvar + 2], fmy);
+                real_atomic_add(&d_residual[right * nvar + 3], fmz);
+                real_atomic_add(&d_residual[right * nvar + 4], fen);
+                real_atomic_add(&d_residual[right * nvar + 5], fturb);
+            }
         }
     }
 }
@@ -414,7 +331,7 @@ bool launch_euler_residual_kernel(
             int end   = mesh.host_color_offsets()[c + 1];
             int nf_c  = end - start;
             int grid_c = (nf_c + block - 1) / block;
-            euler_residual_kernel_colored<<<grid_c, block, 0, stream>>>(
+            euler_residual_kernel<true><<<grid_c, block, 0, stream>>>(
                 fd.nx, fd.ny, fd.nz, fd.area,
                 fd.left_cell, fd.right_cell, fd.boundary,
                 mesh.state_device(),
@@ -428,15 +345,15 @@ bool launch_euler_residual_kernel(
                 fd.cx, fd.cy, fd.cz,
                 cd.cx, cd.cy, cd.cz,
                 d_partition_owner, my_rank);
-            if (!cuda_check(cudaGetLastError(), "euler_residual_kernel_colored", error)) return false;
+            CUDA_KERNEL_CHECK("euler_residual_kernel<true>", error);
         }
     } else {
         int grid = (nf + block - 1) / block;
-        euler_residual_kernel_atomic<<<grid, block, 0, stream>>>(
+        euler_residual_kernel<false><<<grid, block, 0, stream>>>(
             fd.nx, fd.ny, fd.nz, fd.area,
             fd.left_cell, fd.right_cell, fd.boundary,
             mesh.state_device(),
-            nf, DeviceMesh::NVAR, nc,
+            0, nf, DeviceMesh::NVAR, nc,
             gamma,
             freestream.rho, freestream.p,
             freestream.u, freestream.v, freestream.w, a_inf, freestream.nu_tilde,
@@ -446,7 +363,7 @@ bool launch_euler_residual_kernel(
             fd.cx, fd.cy, fd.cz,
             cd.cx, cd.cy, cd.cz,
             d_partition_owner, my_rank);
-        if (!cuda_check(cudaGetLastError(), "euler_residual_kernel_atomic", error)) return false;
+        CUDA_KERNEL_CHECK("euler_residual_kernel<false>", error);
     }
     return true;
 }

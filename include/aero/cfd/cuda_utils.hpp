@@ -17,3 +17,11 @@ static inline void cuda_free_safe(T*& ptr) {
 } // namespace cfd
 } // namespace aero
 } // namespace aerosp
+
+// PERF-C3: kernel launch error checking — no-op in Release builds
+#ifdef NDEBUG
+#define CUDA_KERNEL_CHECK(msg, error) ((void)(msg), (void)(error))
+#else
+#define CUDA_KERNEL_CHECK(msg, error) \
+    do { if (!aerosp::aero::cfd::cuda_check(cudaGetLastError(), (msg), (error))) return false; } while(0)
+#endif

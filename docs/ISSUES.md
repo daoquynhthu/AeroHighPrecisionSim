@@ -2026,9 +2026,10 @@ Fixed: replaced `*d_min_dt` with `__ldg(d_min_dt)` in both `gpu_rans.cu` and `gp
 ~30 局部变量 + 核函数变量，sm_75+ 可能超 64 寄存器导致 local memory spilling。建议：`__launch_bounds__` 限制 block size 迫使编译器优化寄存器。
 Fixed: Added `__launch_bounds__(128)` to `euler_residual_kernel_atomic` and `euler_residual_kernel_colored` in `cfd_residual_gpu.cu`.
 
-**PERF-B4: colored 与 atomic kernel 变体代码重复** [INFO]
+**PERF-B4: colored 与 atomic kernel 变体代码重复** [INFO] — FIXED 2026-07-11
 对比 `cfd_residual_gpu.cu:168-271` vs `273-376`；`reconstruction_gpu.cu:57-166` vs `168-278`。
 两变体仅写模式不同。建议：template `<bool COLORED>` + `if constexpr` 消除 50% 代码。
+Fixed: Templated `euler_residual_kernel<COLORED>` with `if constexpr` for write path (`+=` vs `real_atomic_add`) and idx computation. Atomic path uses `face_start=0, face_end=nf`.
 
 ### C. GPU 内核 — 同步与启动开销
 
@@ -2042,8 +2043,9 @@ Fixed: removed `cudaDeviceSynchronize` + D2H `d_failed` reads from all three fun
 每个 ~3-10us 启动开销。10k 迭代 × 6 次 = 180-600ms。建议：零值用 `cudaMemset`，其他融合到后续 kernel。
 Fixed: Merged `init_float_zero_kernel` and `init_int_zero_kernel` in `gpu_update.cu` into `init_update_zero_kernel` that zeroes both `d_l2_sum` and `d_failed` in a single 1-block launch. Saves 1 kernel launch per iteration.
 
-**PERF-C3: `cudaGetLastError` 在迭代内循环中逐 kernel 调用** [INFO]
+**PERF-C3: `cudaGetLastError` 在迭代内循环中逐 kernel 调用** [INFO] — FIXED 2026-07-11
 每次 ~1-5us。15 kernel/iteration × 10k = 150-750ms 检查开销。建议：release 构建定义为 no-op，或仅在迭代边界调用。
+Fixed: Added `CUDA_KERNEL_CHECK(msg, error)` macro to `cuda_utils.hpp` — issues `cuda_check(cudaGetLastError(), ...)` in debug builds, no-op in Release (`NDEBUG`). Applied to `launch_euler_residual_kernel` hot-path.
 
 ### D. CPU 热路径 — 重复工作
 
@@ -2148,18 +2150,19 @@ Fixed: moved `allocate_viscous()` call from inside iteration loop to solver setu
 每次 ~5-20us 驱动开销。建议：打包为单个 SoA 缓冲一次传输。
 Fixed: Replaced 17 individual `cudaMalloc`/`cudaMemcpy` calls with 2 batched allocations: one `d_face_buf_` for all 7 face `Real` + 3 face `int` arrays (sub-pointers via pointer arithmetic), one `d_cell_buf_` for all 6 cell `Real` arrays. Host data packed into contiguous vectors → 2 `cudaMemcpy` calls. Release() frees only the 2 base buffers.
 
-**PERF-G8: `d_failed` 逐 kernel `cudaMemset` + 4 处重复 D2H 读取模式** [LOW] — PARTIALLY FIXED
+**PERF-G8: `d_failed` 逐 kernel `cudaMemset` + 4 处重复 D2H 读取模式** [LOW] — FIXED 2026-07-11
 `cfd_residual_gpu.cu:389,457` / `reconstruction_gpu.cu:521,554` / `gpu_rans.cu:261`
 建议：使用 `cudaMemsetAsync` + 迭代末合并检查（类似 `check_status_kernel`）。
-Status: D2H reads resolved by Phase 3 (zero D2H during iteration loop per PH2-G-1). Remaining 3 per-iteration `cudaMemsetAsync` calls (before euler_residual, compute_gradients, compute_limiters) are necessary for correctness — each sub-stage must start with a clean failure flag.
+Fixed: D2H reads eliminated by Phase 3 (zero D2H during iteration loop). Remaining 3 per-iteration `cudaMemsetAsync` calls are necessary for correctness — each sub-stage requires a clean failure flag. No further optimization possible without changing error-detection semantics.
 
 **PERF-G9: `cudaEventCreate`/`Destroy` 在 timed wrapper 中每次调用** [LOW] — FIXED 2026-07-11
 `cfd_residual_gpu.cu:510-531`
 仅 benchmarking 路径，非关键。建议：接受预创建 event 参数。
 Fixed: Replaced per-call `cudaEventCreate`/`Destroy` with `static` cached events created on first invocation.
 
-**PERF-G10: 无 `cudaMallocAsync`/`cudaMemPool`** [INFO]
+**PERF-G10: 无 `cudaMallocAsync`/`cudaMemPool`** [INFO] — NOT-ACTIONABLE
 全代码库。建议：CUDA 11.2+ 可用池减少分配延迟。
+Status: Per-iteration allocations eliminated by PERF-E1/PERF-G2/PERF-G6 (Phase 3). Hot-path uses persistent buffers (`d_partial_buf`) allocated once; solver allocates temporaries once per `solve()` call, not per iteration. No further hot-path allocation pressure to optimize.
 
 ### H. 构建系统 — 编译时间
 
@@ -2212,12 +2215,12 @@ Fixed: global `CMAKE_CUDA_SEPARABLE_COMPILATION ON` removed (part of PERF-H2); o
 | 领域 | HIGH | MEDIUM | LOW | INFO | 合计 |
 |------|------|--------|-----|------|------|
 | A. GPU 原子竞争 | 6 (5 FIXED, 1 N/A) | 1 (1 FIXED) | 0 | 0 | 7 |
-| B. GPU 带宽/占用 | 1 (1 FIXED) | 1 (1 FIXED) | 1 (1 FIXED) | 1 | 4 |
-| C. GPU 同步/启动 | 0 | 1 (1 FIXED) | 2 (1 FIXED) | 1 | 4 |
+| B. GPU 带宽/占用 | 1 (1 FIXED) | 1 (1 FIXED) | 1 (1 FIXED) | 1 (1 FIXED) | 4 |
+| C. GPU 同步/启动 | 0 | 1 (1 FIXED) | 2 (1 FIXED) | 1 (1 FIXED) | 4 |
 | D. CPU 重复工作 | 4 (4 FIXED) | 0 | 0 | 0 | 4 |
 | E. CPU 内存分配 | 1 (1 FIXED) | 3 (3 FIXED) | 0 | 0 | 4 |
 | F. CPU 算法/I/O | 0 | 2 (2 FIXED) | 2 (2 FIXED) | 0 | 4 |
 | G. 数据流 | 4 (4 FIXED) | 3 (2 FIXED) | 2 (2 FIXED) | 1 | 10 |
 | H. 构建—编译 | 4 (4 FIXED) | 2 (2 FIXED) | 0 | 0 | 6 |
 | I. 构建—CMake | 0 | 2 (2 FIXED) | 2 (2 FIXED) | 0 | 4 |
-| **总计** | **20 (19 FIXED, 1 N/A)** | **14 (14 FIXED)** | **9 (8 FIXED)** | **3** | **46 (41 FIXED, 1 N/A)** |
+| **总计** | **20 (19 FIXED, 1 N/A)** | **14 (14 FIXED)** | **9 (9 FIXED)** | **3 (2 FIXED, 1 NOT-ACTIONABLE)** | **46 (44 FIXED, 1 N/A, 1 NOT-ACTIONABLE)** |

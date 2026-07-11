@@ -626,3 +626,6 @@
 - PERF-B3: Added __launch_bounds__(128) to euler_residual_kernel_atomic and euler_residual_kernel_colored.
 - PERF-G9: Replaced per-call cudaEventCreate/Destroy with static cached events in timed wrapper.
 - PERF-G8: D2H reads already resolved by Phase 3; remaining cudaMemsetAsync calls per iteration are necessary for correctness.
+- PERF-B4: Templated euler_residual_kernel<COLORED> — eliminates 100 lines of duplicated code between atomic and colored variants.
+- PERF-C3: Added CUDA_KERNEL_CHECK macro (debug-only cudaGetLastError; Release no-op). Applied to hot-path kernel launches.
+- PERF-G10: Marked NOT-ACTIONABLE — per-iteration allocations already eliminated by earlier phases.
