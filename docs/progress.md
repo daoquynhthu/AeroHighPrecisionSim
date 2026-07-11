@@ -635,3 +635,11 @@
 - Phase 5 G1 (Cf/Blasius): `CFD-PH5-GATE-1` test added. Coarse tet mesh under-predicts Cf by ~1.75× (ratio=0.572). Passes tolerance [0.1, 5.0]. Explicit solver at CFL=0.1.
 - Fix: d_forces cudaMalloc size mismatch (6→7) caused buffer overread. Root cause of earlier gradient kernel crashes was stale `missile_lib.lib` in Ninja cache after manual .lib deletion — not a code bug.
 - All 57/57 tests PASS.
+
+2026-07-12
+- 实施本地自动化体系: 创建 scripts/ci.ps1 统一入口脚本 + .git/hooks/pre-commit 钩子
+- ci.ps1 子命令: check, build, test, test cfd-gpu, test cfd-cpu, test cfd, full, install-hooks
+- 修复 ci.ps1 install-hooks 中 Join-Path PS7 兼容性问题 (3参数→嵌套调用)
+- 审计已知损坏的测试目标 (TestPropulsion/TestAero/TestIntegrator/TestLaunch/TestAeroTableGen/TestCompareAtm/TestGuidance/TestAutopilot — Eigen include/link errors)
+- 确认梯度kernel崩溃根因: stale missile_lib.lib in Ninja cache, 非代码bug
+- 验证: 所有ci.ps1子命令正常工作, 57/57 tests PASS
