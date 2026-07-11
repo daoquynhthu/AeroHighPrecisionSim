@@ -10,9 +10,9 @@ namespace cfd {
 
 namespace {
 
-__global__ void init_float6_zero_kernel(Real* ptr) {
+__global__ void init_floatN_zero_kernel(Real* ptr, int n) {
     if (threadIdx.x == 0 && blockIdx.x == 0) {
-        for (int i = 0; i < 6; ++i) ptr[i] = 0.0f;
+        for (int i = 0; i < n; ++i) ptr[i] = 0.0f;
     }
 }
 
@@ -148,6 +148,11 @@ __global__ void wall_force_kernel(
         real_atomic_add(&d_forces[3], fcy * tz - fcz * ty);
         real_atomic_add(&d_forces[4], fcz * tx - fcx * tz);
         real_atomic_add(&d_forces[5], fcx * ty - fcy * tx);
+
+        Real conductivity = mu_face / ((gamma - 1.0f) * prandtl + 1e-30f);
+        Real dT_dn = dT_dx * nx + dT_dy * ny + dT_dz * nz;
+        Real q_face = -conductivity * dT_dn * inv_Re * area;
+        real_atomic_add(&d_forces[6], q_face);
     }
 }
 
@@ -160,7 +165,7 @@ bool compute_wall_forces_gpu(DeviceMesh& mesh, Real gamma, Real* d_forces) {
 bool compute_wall_forces_gpu(DeviceMesh& mesh, Real gamma, Real* d_forces,
     bool viscous, Real prandtl, Real mu_ref, Real T_ref, Real sutherland_T,
     Real Re, Real wall_T) {
-    init_float6_zero_kernel<<<1, 1>>>(d_forces);
+    init_floatN_zero_kernel<<<1, 1>>>(d_forces, 7);
     if (!cuda_check(cudaGetLastError(), "init_forces kernel launch")) return false;
 
     int block = 128;

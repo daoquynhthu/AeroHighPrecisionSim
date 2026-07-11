@@ -436,8 +436,8 @@ newton_accepted:
         }
         if (!cuda_check(cudaDeviceSynchronize(), "wall force sync", error)) goto fail;
 
-        Real forces[6];
-        if (!cuda_check(cudaMemcpy(forces, d_forces, 6 * sizeof(Real), cudaMemcpyDeviceToHost), "read d_forces", error)) goto fail;
+        Real forces[7];
+        if (!cuda_check(cudaMemcpy(forces, d_forces, 7 * sizeof(Real), cudaMemcpyDeviceToHost), "read d_forces", error)) goto fail;
 
         Real q_inf = 0.5f * condition.mach * condition.mach;
         Real inv_force_ref = 1.0f / real_fmax(q_inf * config.ref_area, 1e-30f);
@@ -446,7 +446,8 @@ newton_accepted:
         summary.forces.CZ = forces[2] * inv_force_ref;
         summary.forces.Cl = forces[3] / real_fmax(q_inf * config.ref_area * config.ref_span, 1e-30f);
         summary.forces.Cm = forces[4] / real_fmax(q_inf * config.ref_area * config.ref_length, 1e-30f);
-        summary.forces.Cn = forces[5] / real_fmax(q_inf * config.ref_area * config.ref_span, 1e-30f);
+        summary.forces.Cn = forces[5] / real_fmax(q_inf * config.ref_area * config.ref_area, 1e-30f);
+        summary.forces.Q_wall = forces[6] * inv_force_ref;
 
         constexpr Real kPi = 3.14159265358979323846;
         Real alpha = condition.alpha_deg * kPi / 180.0f;
@@ -460,7 +461,7 @@ newton_accepted:
         summary.forces.CD = -fsx;
         summary.forces.CL = -fsz;
 
-summary.forces.iterations = static_cast<int>(summary.residual_history.size());
+        summary.forces.iterations = static_cast<int>(summary.residual_history.size());
         summary.forces.residual = summary.residual_history.empty() ? 0.0f : summary.residual_history.back();
         summary.forces.turbulence_model = config.turbulence ? "rans-sa" : "laminar";
         summary.forces.fidelity = "cfd-gpu";
@@ -513,7 +514,7 @@ CfdSolveSummary solve_gpu(
     if (!cuda_check(cudaMalloc(&d_failed, sizeof(int)), "cudaMalloc d_failed", error)) { solve_gpu_free(d_failed, d_min_dt, d_l2_sum, d_forces, d_residual_history, d_state_bounds_history, d_failure_cell, d_failure_state); CfdSolveSummary s; s.failed = true; return s; }
     if (!cuda_check(cudaMalloc(&d_min_dt, sizeof(Real)), "cudaMalloc d_min_dt", error)) { solve_gpu_free(d_failed, d_min_dt, d_l2_sum, d_forces, d_residual_history, d_state_bounds_history, d_failure_cell, d_failure_state); CfdSolveSummary s; s.failed = true; return s; }
     if (!cuda_check(cudaMalloc(&d_l2_sum, sizeof(Real)), "cudaMalloc d_l2_sum", error)) { solve_gpu_free(d_failed, d_min_dt, d_l2_sum, d_forces, d_residual_history, d_state_bounds_history, d_failure_cell, d_failure_state); CfdSolveSummary s; s.failed = true; return s; }
-    if (!cuda_check(cudaMalloc(&d_forces, 6 * sizeof(Real)), "cudaMalloc d_forces", error)) { solve_gpu_free(d_failed, d_min_dt, d_l2_sum, d_forces, d_residual_history, d_state_bounds_history, d_failure_cell, d_failure_state); CfdSolveSummary s; s.failed = true; return s; }
+    if (!cuda_check(cudaMalloc(&d_forces, 7 * sizeof(Real)), "cudaMalloc d_forces", error)) { solve_gpu_free(d_failed, d_min_dt, d_l2_sum, d_forces, d_residual_history, d_state_bounds_history, d_failure_cell, d_failure_state); CfdSolveSummary s; s.failed = true; return s; }
     if (!cuda_check(cudaMalloc(&d_residual_history, config.max_iter * sizeof(Real)), "cudaMalloc d_residual_history", error)) { solve_gpu_free(d_failed, d_min_dt, d_l2_sum, d_forces, d_residual_history, d_state_bounds_history, d_failure_cell, d_failure_state); CfdSolveSummary s; s.failed = true; return s; }
 
     bool diag = config.diagnostic_level != DiagnosticLevel::Off;

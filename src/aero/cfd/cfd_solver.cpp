@@ -37,13 +37,15 @@ Real state_delta_l2(const ConservativeState& a, const ConservativeState& b) {
 
 void integrate_wall_forces(const CfdMesh& mesh, const std::vector<int>& wall_face_indices,
     const std::vector<ConservativeState>& q, const FreestreamCondition& condition,
-    const CfdConfig& config, CfdForceResult& result) {
+    const CfdConfig& config, CfdForceResult& result,
+    const std::vector<PrimitiveGradient>* grads) {
     Real fx = 0.0f;
     Real fy = 0.0f;
     Real fz = 0.0f;
     Real mx = 0.0f;
     Real my = 0.0f;
     Real mz = 0.0f;
+    Real qw = 0.0f;
 
     for (int idx : wall_face_indices) {
         const auto& face = mesh.faces[idx];
@@ -65,18 +67,50 @@ void integrate_wall_forces(const CfdMesh& mesh, const std::vector<int>& wall_fac
             Real du_dx = 0.0f, du_dy = 0.0f, du_dz = 0.0f;
             Real dv_dx = 0.0f, dv_dy = 0.0f, dv_dz = 0.0f;
             Real dw_dx = 0.0f, dw_dy = 0.0f, dw_dz = 0.0f;
+            Real dT_dx = 0.0f, dT_dy = 0.0f, dT_dz = 0.0f;
 
             Real dr_x = face.cx - mesh.cells[face.left_cell].cx;
             Real dr_y = face.cy - mesh.cells[face.left_cell].cy;
             Real dr_z = face.cz - mesh.cells[face.left_cell].cz;
-            Real inv_d2 = 1.0f / (dr_x*dr_x + dr_y*dr_y + dr_z*dr_z + 1e-30f);
+            Real d2 = dr_x*dr_x + dr_y*dr_y + dr_z*dr_z;
+            Real inv_d2 = 1.0f / (d2 + 1e-30f);
 
-            Real du_corr = (-w.u) * inv_d2;
-            Real dv_corr = (-w.v) * inv_d2;
-            Real dw_corr = (-w.w) * inv_d2;
-            du_dx += du_corr * dr_x; du_dy += du_corr * dr_y; du_dz += du_corr * dr_z;
-            dv_dx += dv_corr * dr_x; dv_dy += dv_corr * dr_y; dv_dz += dv_corr * dr_z;
-            dw_dx += dw_corr * dr_x; dw_dy += dw_corr * dr_y; dw_dz += dw_corr * dr_z;
+            int left_idx = face.left_cell;
+            if (grads && static_cast<std::size_t>(left_idx) < grads->size()) {
+                const PrimitiveGradient& g = (*grads)[left_idx];
+                du_dx += g.du_dx; du_dy += g.du_dy; du_dz += g.du_dz;
+                dv_dx += g.dv_dx; dv_dy += g.dv_dy; dv_dz += g.dv_dz;
+                dw_dx += g.dw_dx; dw_dy += g.dw_dy; dw_dz += g.dw_dz;
+                Real inv_rho2 = 1.0f / (w.rho * w.rho + 1e-30f);
+                dT_dx = (w.rho * g.dp_dx - w.p * g.drho_dx) * inv_rho2;
+                dT_dy = (w.rho * g.dp_dy - w.p * g.drho_dy) * inv_rho2;
+                dT_dz = (w.rho * g.dp_dz - w.p * g.drho_dz) * inv_rho2;
+                if (d2 > 1e-30f) {
+                    Real proj_du = du_dx*dr_x + du_dy*dr_y + du_dz*dr_z;
+                    Real proj_dv = dv_dx*dr_x + dv_dy*dr_y + dv_dz*dr_z;
+                    Real proj_dw = dw_dx*dr_x + dw_dy*dr_y + dw_dz*dr_z;
+                    Real proj_dT = dT_dx*dr_x + dT_dy*dr_y + dT_dz*dr_z;
+                    Real du_corr = ((0.0f - w.u) - proj_du) * inv_d2;
+                    Real dv_corr = ((0.0f - w.v) - proj_dv) * inv_d2;
+                    Real dw_corr = ((0.0f - w.w) - proj_dw) * inv_d2;
+                    Real T_cell = w.p / w.rho;
+                    Real dT_corr = ((config.wall_temperature - T_cell) - proj_dT) * inv_d2;
+                    du_dx += du_corr * dr_x; du_dy += du_corr * dr_y; du_dz += du_corr * dr_z;
+                    dv_dx += dv_corr * dr_x; dv_dy += dv_corr * dr_y; dv_dz += dv_corr * dr_z;
+                    dw_dx += dw_corr * dr_x; dw_dy += dw_corr * dr_y; dw_dz += dw_corr * dr_z;
+                    dT_dx += dT_corr * dr_x; dT_dy += dT_corr * dr_y; dT_dz += dT_corr * dr_z;
+                }
+            } else {
+                Real du_corr = (-w.u) * inv_d2;
+                Real dv_corr = (-w.v) * inv_d2;
+                Real dw_corr = (-w.w) * inv_d2;
+                du_dx += du_corr * dr_x; du_dy += du_corr * dr_y; du_dz += du_corr * dr_z;
+                dv_dx += dv_corr * dr_x; dv_dy += dv_corr * dr_y; dv_dz += dv_corr * dr_z;
+                dw_dx += dw_corr * dr_x; dw_dy += dw_corr * dr_y; dw_dz += dw_corr * dr_z;
+                Real T_cell = w.p / w.rho;
+                Real dT_corr = (config.wall_temperature - T_cell) * inv_d2;
+                dT_dx = dT_corr * dr_x; dT_dy = dT_corr * dr_y; dT_dz = dT_corr * dr_z;
+            }
 
             Real div_u = du_dx + dv_dy + dw_dz;
             Real tau_xx = 2.0f * (du_dx - div_u / 3.0f);
@@ -102,6 +136,10 @@ void integrate_wall_forces(const CfdMesh& mesh, const std::vector<int>& wall_fac
             mx += face.cy * tz - face.cz * ty;
             my += face.cz * tx - face.cx * tz;
             mz += face.cx * ty - face.cy * tx;
+
+            Real dT_dn = dT_dx * face.nx + dT_dy * face.ny + dT_dz * face.nz;
+            Real conductivity = mu_face / ((config.gamma - 1.0f) * config.prandtl + 1e-30f);
+            qw += -conductivity * dT_dn * inv_Re * face.area;
         }
     }
 
@@ -110,6 +148,7 @@ void integrate_wall_forces(const CfdMesh& mesh, const std::vector<int>& wall_fac
     result.CX = fx * inv_force_ref;
     result.CY = fy * inv_force_ref;
     result.CZ = fz * inv_force_ref;
+    result.Q_wall = qw * inv_force_ref;
     result.Cl = mx / std::max(q_inf * config.ref_area * config.ref_span, Real(1e-30));
     result.Cm = my / std::max(q_inf * config.ref_area * config.ref_length, Real(1e-30));
     result.Cn = mz / std::max(q_inf * config.ref_area * config.ref_span, Real(1e-30));
@@ -263,7 +302,7 @@ CfdSolveSummary CfdSolver::solve_from_state(
     std::vector<ConservativeState> q_next;
     q_next.resize(mesh_.cells.size());
     std::vector<EulerFlux> residual;
-    std::vector<PrimitiveGradient> limited;
+    std::vector<PrimitiveGradient> grads, limited;
     std::vector<RansSource> sources;
     std::vector<PrimitiveState> w(mesh_.cells.size());
     bool diagnostics_enabled = config.diagnostic_level != DiagnosticLevel::Off;
@@ -329,7 +368,6 @@ CfdSolveSummary CfdSolver::solve_from_state(
         }
 
         bool need_gradients = (config.reconstruction_order == 2) || config.viscous || config.turbulence;
-        std::vector<PrimitiveGradient> grads;
         std::vector<PrimitiveLimiter> limiters_vec;
         bool apply_limiting = config.reconstruction_order == 2 || config.turbulence;
 
@@ -452,7 +490,14 @@ CfdSolveSummary CfdSolver::solve_from_state(
         summary.diagnostics.state_bounds_history.push_back(final_bounds);
     }
 
-    integrate_wall_forces(mesh_, wall_face_indices_, q, condition, config, summary.forces);
+    {
+        bool need_grads_at_end = config.viscous && !grads.empty();
+        bool use_limited = config.reconstruction_order == 2 || config.turbulence;
+        const std::vector<PrimitiveGradient>* wall_grads = nullptr;
+        if (need_grads_at_end)
+            wall_grads = (use_limited && !limited.empty()) ? &limited : &grads;
+        integrate_wall_forces(mesh_, wall_face_indices_, q, condition, config, summary.forces, wall_grads);
+    }
     summary.forces.iterations = static_cast<int>(summary.residual_history.size());
     summary.forces.residual = summary.residual_history.empty() ? 0.0f : summary.residual_history.back();
     summary.forces.turbulence_model = config.turbulence ? "rans-sa" : "laminar";
@@ -491,6 +536,7 @@ bool assert_oracle_equivalent(
         {"Cn", gpu.forces.Cn, cpu.forces.Cn},
         {"CD", gpu.forces.CD, cpu.forces.CD},
         {"CL", gpu.forces.CL, cpu.forces.CL},
+        {"Q_wall", gpu.forces.Q_wall, cpu.forces.Q_wall},
     };
     for (const auto& p : pairs) {
         Real diff = std::fabs(p.g - p.c);

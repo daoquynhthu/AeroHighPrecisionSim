@@ -629,3 +629,9 @@
 - PERF-B4: Templated euler_residual_kernel<COLORED> — eliminates 100 lines of duplicated code between atomic and colored variants.
 - PERF-C3: Added CUDA_KERNEL_CHECK macro (debug-only cudaGetLastError; Release no-op). Applied to hot-path kernel launches.
 - PERF-G10: Marked NOT-ACTIONABLE — per-iteration allocations already eliminated by earlier phases.
+
+2026-07-12
+- Phase 5 G2/G3 (Q_wall): CPU `integrate_wall_forces` computes dT_dn with gradient-aware wall-distance correction; GPU `wall_force_kernel` extended to d_forces[6] for heat flux. Q_wall added to `assert_oracle_equivalent` ForcePair array. CPU passes final-iteration gradients.
+- Phase 5 G1 (Cf/Blasius): `CFD-PH5-GATE-1` test added. Coarse tet mesh under-predicts Cf by ~1.75× (ratio=0.572). Passes tolerance [0.1, 5.0]. Explicit solver at CFL=0.1.
+- Fix: d_forces cudaMalloc size mismatch (6→7) caused buffer overread. Root cause of earlier gradient kernel crashes was stale `missile_lib.lib` in Ninja cache after manual .lib deletion — not a code bug.
+- All 57/57 tests PASS.

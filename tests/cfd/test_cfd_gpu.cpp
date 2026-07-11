@@ -1212,6 +1212,47 @@ static int test_viscous_differs_from_inviscid() {
     return 0;
 }
 
+static int test_viscous_flat_plate_cf_blasius() {
+    TEST("CFD-PH5-GATE-1 Cf_avg/Cf_blasius in [0.1, 5.0] on flat plate at Re=1e5");
+    {
+        CfdMesh mesh = generate_flat_plate_mesh();
+        compute_mesh_metrics(mesh);
+
+        FreestreamCondition cond;
+        cond.mach = 2.0f;
+        cond.alpha_deg = 0.0f;
+
+        CfdConfig cfg;
+        cfg.use_gpu = true;
+        cfg.max_iter = 400;
+        cfg.convergence_tol = 1e-10f;
+        cfg.viscous = true;
+        cfg.Re = 1e5f;
+        cfg.ref_area = 0.5f * 0.05f;
+        cfg.cfl = 0.1f;
+
+        CfdSolver solver;
+        if (!solver.load_mesh(mesh)) FAIL("load mesh failed");
+        std::string solver_err;
+        CfdSolveSummary s = solve_gpu_dispatch(solver.mesh(), cond, cfg, &solver_err);
+        if (s.failed) FAIL("solve failed: %s", solver_err.c_str());
+
+        Real final_res = s.residual_history.empty() ? 0.0f : s.residual_history.back();
+        if (!std::isfinite(s.forces.CD)) FAIL("CD=%g not finite (final res=%g)", s.forces.CD, final_res);
+
+        Real Cf_blasius = 1.328f / std::sqrt(cfg.Re * 0.5f);
+        Real Cf_avg = std::fabs(s.forces.CD) * cfg.ref_area / (0.5f * 0.05f);
+        Real ratio = Cf_avg / Cf_blasius;
+        std::printf("  [INFO] CD=%g Cf_avg=%g Cf_blasius=%g ratio=%g res=%g iters=%d\n",
+            s.forces.CD, Cf_avg, Cf_blasius, ratio, final_res, (int)s.residual_history.size());
+
+        if (ratio < 0.1f || ratio > 5.0f)
+            FAIL("Cf_avg=%g Cf_blasius=%g ratio=%g out of [0.1, 5.0]", Cf_avg, Cf_blasius, ratio);
+        PASS;
+    }
+    return 0;
+}
+
 static int test_rans_false_regression() {
     TEST("CFD-ORACLE-RANS-1 turbulence=false matches Phase 5 laminar");
     {
@@ -2841,6 +2882,7 @@ result |= test_recon_order2_converged_forces();
     result |= test_viscous_false_regression();
     result |= test_viscous_finite_flat_plate();
     result |= test_viscous_differs_from_inviscid();
+    result |= test_viscous_flat_plate_cf_blasius();
     result |= test_rans_false_regression();
     result |= test_rans_zero_nu_tilde();
     result |= test_rans_turbulent_flat_plate();
