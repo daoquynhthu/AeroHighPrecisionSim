@@ -1,5 +1,6 @@
 #pragma once
 
+#include "aero/cfd/real_fwd.hpp"
 #include <cmath>
 #include <cuda_runtime.h>
 
@@ -14,7 +15,6 @@ namespace aerosp {
 #endif
 
 #ifdef AEROSP_REAL_DOUBLE
-    using Real = double;
 
     AEROSP_REAL_HOST_DEVICE Real real_sqrt(Real x) { return sqrt(x); }
     AEROSP_REAL_HOST_DEVICE Real real_fabs(Real x) { return fabs(x); }

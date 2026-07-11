@@ -75,6 +75,10 @@ DeviceMesh& DeviceMesh::operator=(DeviceMesh&& other) noexcept {
     host_color_offsets_ = std::move(other.host_color_offsets_);
     other.n_colors_ = 0;
     other.d_color_offsets_ = nullptr;
+    d_face_buf_ = other.d_face_buf_;
+    d_cell_buf_ = other.d_cell_buf_;
+    other.d_face_buf_ = nullptr;
+    other.d_cell_buf_ = nullptr;
     return *this;
 }
 
@@ -174,22 +178,6 @@ static int greedy_color_faces(
 void DeviceMesh::release() {
     cuda_free_safe(d_q_);
     cuda_free_safe(d_residual_);
-    cuda_free_safe(d_nx_);
-    cuda_free_safe(d_ny_);
-    cuda_free_safe(d_nz_);
-    cuda_free_safe(d_area_);
-    cuda_free_safe(d_left_cell_);
-    cuda_free_safe(d_right_cell_);
-    cuda_free_safe(d_boundary_);
-    cuda_free_safe(d_volume_);
-    cuda_free_safe(d_h_min_);
-    cuda_free_safe(d_wall_distance_);
-    cuda_free_safe(d_cx_);
-    cuda_free_safe(d_cy_);
-    cuda_free_safe(d_cz_);
-    cuda_free_safe(d_face_cx_);
-    cuda_free_safe(d_face_cy_);
-    cuda_free_safe(d_face_cz_);
     cuda_free_safe(d_gradients_);
     cuda_free_safe(d_limiters_);
     cuda_free_safe(d_minmax_);
@@ -199,6 +187,17 @@ void DeviceMesh::release() {
     cuda_free_safe(d_halo_indices_);
     cuda_free_safe(d_halo_send_buf_);
     cuda_free_safe(d_halo_recv_buf_);
+    // Batched face/cell buffers (PERF-G7): free the base allocations
+    cuda_free_safe(d_face_buf_);
+    cuda_free_safe(d_cell_buf_);
+    // Null all sub-pointers (they live inside the batched buffers)
+    d_nx_ = d_ny_ = d_nz_ = nullptr;
+    d_area_ = nullptr;
+    d_left_cell_ = d_right_cell_ = nullptr;
+    d_boundary_ = nullptr;
+    d_volume_ = d_h_min_ = d_wall_distance_ = nullptr;
+    d_cx_ = d_cy_ = d_cz_ = nullptr;
+    d_face_cx_ = d_face_cy_ = d_face_cz_ = nullptr;
     cell_count_ = 0;
     face_count_ = 0;
     n_colors_ = 0;
@@ -229,30 +228,34 @@ bool DeviceMesh::upload_mesh(const CfdMesh& mesh, std::string* error, bool skip_
     std::size_t nf = face_count_;
     std::size_t nc = cell_count_;
 
-    if (!alloc(d_nx_, nf * sizeof(Real), "cudaMalloc face nx")) return false;
-    if (!alloc(d_ny_, nf * sizeof(Real), "cudaMalloc face ny")) return false;
-    if (!alloc(d_nz_, nf * sizeof(Real), "cudaMalloc face nz")) return false;
-    if (!alloc(d_area_, nf * sizeof(Real), "cudaMalloc face area")) return false;
-    if (!alloc(d_left_cell_, nf * sizeof(int), "cudaMalloc face left_cell")) return false;
-    if (!alloc(d_right_cell_, nf * sizeof(int), "cudaMalloc face right_cell")) return false;
-    if (!alloc(d_boundary_, nf * sizeof(int), "cudaMalloc face boundary")) return false;
+    // PERF-G7: allocate one buffer for all face data and one for all cell data
+    std::size_t face_real_bytes = 7 * nf * sizeof(Real);
+    std::size_t face_int_bytes = 3 * nf * sizeof(int);
+    std::size_t cell_real_bytes = 6 * nc * sizeof(Real);
+    if (!alloc(d_face_buf_, face_real_bytes + face_int_bytes, "cudaMalloc d_face_buf_")) return false;
+    if (!alloc(d_cell_buf_, cell_real_bytes, "cudaMalloc d_cell_buf_")) return false;
 
-    std::vector<int> temp_boundary(nf);
-    for (std::size_t i = 0; i < nf; ++i) {
-        temp_boundary[i] = static_cast<int>(mesh.faces[i].boundary);
-    }
+    // Sub-pointers into the face buffer: Reals first, then ints
+    d_nx_ = reinterpret_cast<Real*>(d_face_buf_);
+    d_ny_ = d_nx_ + nf;
+    d_nz_ = d_ny_ + nf;
+    d_area_ = d_nz_ + nf;
+    d_face_cx_ = d_area_ + nf;
+    d_face_cy_ = d_face_cx_ + nf;
+    d_face_cz_ = d_face_cy_ + nf;
+    d_left_cell_ = reinterpret_cast<int*>(d_face_buf_ + face_real_bytes);
+    d_right_cell_ = d_left_cell_ + nf;
+    d_boundary_ = d_right_cell_ + nf;
 
-    if (!alloc(d_face_cx_, nf * sizeof(Real), "cudaMalloc face cx")) return false;
-    if (!alloc(d_face_cy_, nf * sizeof(Real), "cudaMalloc face cy")) return false;
-    if (!alloc(d_face_cz_, nf * sizeof(Real), "cudaMalloc face cz")) return false;
+    // Sub-pointers into the cell buffer
+    d_volume_ = reinterpret_cast<Real*>(d_cell_buf_);
+    d_h_min_ = d_volume_ + nc;
+    d_wall_distance_ = d_h_min_ + nc;
+    d_cx_ = d_wall_distance_ + nc;
+    d_cy_ = d_cx_ + nc;
+    d_cz_ = d_cy_ + nc;
 
-    if (!alloc(d_volume_, nc * sizeof(Real), "cudaMalloc cell volume")) return false;
-    if (!alloc(d_h_min_, nc * sizeof(Real), "cudaMalloc cell h_min")) return false;
-    if (!alloc(d_wall_distance_, nc * sizeof(Real), "cudaMalloc cell wall_distance")) return false;
-    if (!alloc(d_cx_, nc * sizeof(Real), "cudaMalloc cell cx")) return false;
-    if (!alloc(d_cy_, nc * sizeof(Real), "cudaMalloc cell cy")) return false;
-    if (!alloc(d_cz_, nc * sizeof(Real), "cudaMalloc cell cz")) return false;
-
+    // Solution/working arrays remain separate allocations
     if (!alloc(d_q_, nc * NVAR * sizeof(Real), "cudaMalloc state")) return false;
     if (!alloc(d_residual_, nc * NVAR * sizeof(Real), "cudaMalloc residual")) return false;
     if (!alloc(d_gradients_, nc * DeviceMesh::NGRAD * sizeof(Real), "cudaMalloc gradients")) return false;
@@ -265,12 +268,13 @@ bool DeviceMesh::upload_mesh(const CfdMesh& mesh, std::string* error, bool skip_
     if (!cuda_check(cudaMemset(d_minmax_, 0, nc * DeviceMesh::kMinmaxStride * sizeof(Real)), "cudaMemset minmax", error)) { release(); return false; }
 
     std::vector<Real> h_nx(nf), h_ny(nf), h_nz(nf), h_area(nf), h_face_cx(nf), h_face_cy(nf), h_face_cz(nf);
-    std::vector<int> h_left_cell(nf), h_right_cell(nf);
+    std::vector<int> h_left_cell(nf), h_right_cell(nf), h_boundary(nf);
     for (std::size_t i = 0; i < nf; ++i) {
         const auto& f = mesh.faces[i];
         h_nx[i] = f.nx; h_ny[i] = f.ny; h_nz[i] = f.nz;
         h_area[i] = f.area;
         h_left_cell[i] = f.left_cell; h_right_cell[i] = f.right_cell;
+        h_boundary[i] = static_cast<int>(f.boundary);
         h_face_cx[i] = f.cx; h_face_cy[i] = f.cy; h_face_cz[i] = f.cz;
     }
     if (!skip_coloring && nf > 0) {
@@ -304,7 +308,7 @@ bool DeviceMesh::upload_mesh(const CfdMesh& mesh, std::string* error, bool skip_
             reorder(h_nx, reorder_tmp_real); reorder(h_ny, reorder_tmp_real); reorder(h_nz, reorder_tmp_real);
             reorder(h_area, reorder_tmp_real);
             reorder(h_left_cell, reorder_tmp_int); reorder(h_right_cell, reorder_tmp_int);
-            reorder(temp_boundary, reorder_tmp_int);
+            reorder(h_boundary, reorder_tmp_int);
             reorder(h_face_cx, reorder_tmp_real); reorder(h_face_cy, reorder_tmp_real); reorder(h_face_cz, reorder_tmp_real);
 
             // PERF-B1: sort faces within each color by left_cell for coalesced d_q reads
@@ -323,34 +327,50 @@ bool DeviceMesh::upload_mesh(const CfdMesh& mesh, std::string* error, bool skip_
             apply_perm(h_nx, reorder_tmp_real); apply_perm(h_ny, reorder_tmp_real); apply_perm(h_nz, reorder_tmp_real);
             apply_perm(h_area, reorder_tmp_real);
             apply_perm(h_left_cell, reorder_tmp_int); apply_perm(h_right_cell, reorder_tmp_int);
-            apply_perm(temp_boundary, reorder_tmp_int);
+            apply_perm(h_boundary, reorder_tmp_int);
             apply_perm(h_face_cx, reorder_tmp_real); apply_perm(h_face_cy, reorder_tmp_real); apply_perm(h_face_cz, reorder_tmp_real);
         }
     }
 
-    if (!copy(d_nx_, h_nx.data(), nf * sizeof(Real), "cudaMemcpy nx")) return false;
-    if (!copy(d_ny_, h_ny.data(), nf * sizeof(Real), "cudaMemcpy ny")) return false;
-    if (!copy(d_nz_, h_nz.data(), nf * sizeof(Real), "cudaMemcpy nz")) return false;
-    if (!copy(d_area_, h_area.data(), nf * sizeof(Real), "cudaMemcpy area")) return false;
-    if (!copy(d_left_cell_, h_left_cell.data(), nf * sizeof(int), "cudaMemcpy left_cell")) return false;
-    if (!copy(d_right_cell_, h_right_cell.data(), nf * sizeof(int), "cudaMemcpy right_cell")) return false;
-    if (!copy(d_boundary_, temp_boundary.data(), nf * sizeof(int), "cudaMemcpy boundary")) return false;
-    if (!copy(d_face_cx_, h_face_cx.data(), nf * sizeof(Real), "cudaMemcpy face cx")) return false;
-    if (!copy(d_face_cy_, h_face_cy.data(), nf * sizeof(Real), "cudaMemcpy face cy")) return false;
-    if (!copy(d_face_cz_, h_face_cz.data(), nf * sizeof(Real), "cudaMemcpy face cz")) return false;
+    // PERF-G7: pack all face data into contiguous host buffer → single cudaMemcpy
+    {
+        std::vector<Real> face_real_buf(7 * nf);
+        Real* fr = face_real_buf.data();
+        std::memcpy(fr, h_nx.data(), nf * sizeof(Real)); fr += nf;
+        std::memcpy(fr, h_ny.data(), nf * sizeof(Real)); fr += nf;
+        std::memcpy(fr, h_nz.data(), nf * sizeof(Real)); fr += nf;
+        std::memcpy(fr, h_area.data(), nf * sizeof(Real)); fr += nf;
+        std::memcpy(fr, h_face_cx.data(), nf * sizeof(Real)); fr += nf;
+        std::memcpy(fr, h_face_cy.data(), nf * sizeof(Real)); fr += nf;
+        std::memcpy(fr, h_face_cz.data(), nf * sizeof(Real));
+        if (!copy(d_face_buf_, face_real_buf.data(), face_real_bytes, "cudaMemcpy face_real_buf")) return false;
 
+        std::vector<int> face_int_buf(3 * nf);
+        int* fi = face_int_buf.data();
+        std::memcpy(fi, h_left_cell.data(), nf * sizeof(int)); fi += nf;
+        std::memcpy(fi, h_right_cell.data(), nf * sizeof(int)); fi += nf;
+        std::memcpy(fi, h_boundary.data(), nf * sizeof(int));
+        if (!copy(d_left_cell_, face_int_buf.data(), face_int_bytes, "cudaMemcpy face_int_buf")) return false;
+    }
+
+    // Cell data: pack into contiguous host buffer → single cudaMemcpy
     std::vector<Real> h_volume(nc), h_h_min(nc), h_wall_distance(nc), h_cx(nc), h_cy(nc), h_cz(nc);
     for (std::size_t i = 0; i < nc; ++i) {
         const auto& c = mesh.cells[i];
         h_volume[i] = c.volume; h_h_min[i] = c.h_min; h_wall_distance[i] = c.wall_distance;
         h_cx[i] = c.cx; h_cy[i] = c.cy; h_cz[i] = c.cz;
     }
-    if (!copy(d_volume_, h_volume.data(), nc * sizeof(Real), "cudaMemcpy volume")) return false;
-    if (!copy(d_h_min_, h_h_min.data(), nc * sizeof(Real), "cudaMemcpy h_min")) return false;
-    if (!copy(d_wall_distance_, h_wall_distance.data(), nc * sizeof(Real), "cudaMemcpy wall_distance")) return false;
-    if (!copy(d_cx_, h_cx.data(), nc * sizeof(Real), "cudaMemcpy cx")) return false;
-    if (!copy(d_cy_, h_cy.data(), nc * sizeof(Real), "cudaMemcpy cy")) return false;
-    if (!copy(d_cz_, h_cz.data(), nc * sizeof(Real), "cudaMemcpy cz")) return false;
+    {
+        std::vector<Real> cell_real_buf(6 * nc);
+        Real* cr = cell_real_buf.data();
+        std::memcpy(cr, h_volume.data(), nc * sizeof(Real)); cr += nc;
+        std::memcpy(cr, h_h_min.data(), nc * sizeof(Real)); cr += nc;
+        std::memcpy(cr, h_wall_distance.data(), nc * sizeof(Real)); cr += nc;
+        std::memcpy(cr, h_cx.data(), nc * sizeof(Real)); cr += nc;
+        std::memcpy(cr, h_cy.data(), nc * sizeof(Real)); cr += nc;
+        std::memcpy(cr, h_cz.data(), nc * sizeof(Real));
+        if (!copy(d_cell_buf_, cell_real_buf.data(), cell_real_bytes, "cudaMemcpy cell_real_buf")) return false;
+    }
 
     if (!cuda_check(cudaMemset(d_residual_, 0, nc * NVAR * sizeof(Real)), "cudaMemset residual", error)) {
         release();

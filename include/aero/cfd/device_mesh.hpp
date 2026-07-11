@@ -1,6 +1,6 @@
 #pragma once
 
-#include "aero/cfd/real.hpp"
+#include "aero/cfd/real_fwd.hpp"
 #include "aero/cfd/cfd_config.hpp"
 #include "aero/cfd/cfd_mesh.hpp"
 #include "aero/cfd/cfd_state.hpp"
@@ -163,6 +163,10 @@ private:
     int n_halo_cells_ = 0;
 
     const GpuPartition* gpu_part_ = nullptr;
+
+    // Batched allocation base pointers (PERF-G7)
+    char* d_face_buf_ = nullptr;
+    char* d_cell_buf_ = nullptr;
 };
 
 } // namespace cfd

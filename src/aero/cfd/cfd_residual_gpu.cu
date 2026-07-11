@@ -165,7 +165,7 @@ __device__ void d_reconstruct_primitive(
     nu_tilde = nu_tilde + g[15]*dx + g[16]*dy + g[17]*dz;
 }
 
-__global__ void euler_residual_kernel_atomic(
+__global__ void __launch_bounds__(128) euler_residual_kernel_atomic(
     const Real* d_nx, const Real* d_ny, const Real* d_nz,
     const Real* d_area,
     const int* d_left_cell, const int* d_right_cell,
@@ -270,7 +270,7 @@ __global__ void euler_residual_kernel_atomic(
     }
 }
 
-__global__ void euler_residual_kernel_colored(
+__global__ void __launch_bounds__(128) euler_residual_kernel_colored(
     const Real* d_nx, const Real* d_ny, const Real* d_nz,
     const Real* d_area,
     const int* d_left_cell, const int* d_right_cell,
@@ -507,29 +507,39 @@ bool compute_euler_residual_gpu_timed(
         return false;
     }
 
-    int* d_failed = nullptr;
-    cudaEvent_t start = nullptr;
-    cudaEvent_t stop = nullptr;
-    if (!cuda_check(cudaMalloc(&d_failed, sizeof(int)), "cudaMalloc failed", error)) goto fail;
-    if (!cuda_check(cudaEventCreate(&start), "cudaEventCreate start", error)) goto fail;
-    if (!cuda_check(cudaEventCreate(&stop), "cudaEventCreate stop", error)) goto fail;
-    if (!launch_euler_residual_kernel(mesh, freestream, gamma, d_failed, start, error, reconstruction_order)) goto fail;
-    if (!cuda_check(cudaEventRecord(stop), "cudaEventRecord stop", error)) goto fail;
-    if (!cuda_check(cudaEventSynchronize(stop), "cudaEventSynchronize stop", error)) goto fail;
-    if (elapsed_ms) {
-        if (!cuda_check(cudaEventElapsedTime(elapsed_ms, start, stop), "cudaEventElapsedTime", error)) goto fail;
+    // PERF-G9: cache events across calls
+    static cudaEvent_t s_start = nullptr;
+    static cudaEvent_t s_stop = nullptr;
+    if (!s_start) {
+        if (!cuda_check(cudaEventCreate(&s_start), "cudaEventCreate start", error)) return false;
     }
-    if (!read_kernel_failed_flag(d_failed, error)) goto fail;
-    cudaEventDestroy(start);
-    cudaEventDestroy(stop);
-    cuda_free_safe(d_failed);
-    return true;
+    if (!s_stop) {
+        if (!cuda_check(cudaEventCreate(&s_stop), "cudaEventCreate stop", error)) return false;
+    }
 
-fail:
-    if (start) cudaEventDestroy(start);
-    if (stop) cudaEventDestroy(stop);
+    int* d_failed = nullptr;
+    if (!cuda_check(cudaMalloc(&d_failed, sizeof(int)), "cudaMalloc failed", error)) { return false; }
+    if (!launch_euler_residual_kernel(mesh, freestream, gamma, d_failed, s_start, error, reconstruction_order)) {
+        cuda_free_safe(d_failed);
+        return false;
+    }
+    if (!cuda_check(cudaEventRecord(s_stop), "cudaEventRecord stop", error)) {
+        cuda_free_safe(d_failed);
+        return false;
+    }
+    if (!cuda_check(cudaEventSynchronize(s_stop), "cudaEventSynchronize stop", error)) {
+        cuda_free_safe(d_failed);
+        return false;
+    }
+    if (elapsed_ms) {
+        if (!cuda_check(cudaEventElapsedTime(elapsed_ms, s_start, s_stop), "cudaEventElapsedTime", error)) {
+            cuda_free_safe(d_failed);
+            return false;
+        }
+    }
+    bool ok = read_kernel_failed_flag(d_failed, error);
     cuda_free_safe(d_failed);
-    return false;
+    return ok;
 }
 
 bool compute_euler_residual_gpu(

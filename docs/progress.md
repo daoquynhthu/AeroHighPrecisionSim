@@ -618,4 +618,11 @@
   - Norm: dot product writes to `d_hess_` subdiagonal.
   - Per column j: single `cudaMemcpy2DAsync` copies j+2 strided elements from `d_hess_` column to `h_host`.
   - One `cudaStreamSynchronize` per outer iteration (vs (j+2) per iteration).
-  - m=50: ~50 syncs/restart-cycle vs ~2500 before. 50x reduction.
+   - m=50: ~50 syncs/restart-cycle vs ~2500 before. 50x reduction.
+2026-07-11 — Sweep remaining PERF items
+- PERF-G7: Batched mesh upload — 2 base buffers (d_face_buf_, d_cell_buf_) replace 17 individual cudaMalloc/cudaMemcpy. Sub-pointers via pointer arithmetic. Release frees only 2 base allocations.
+- PERF-H5: Split real.hpp → real_fwd.hpp (just using Real, zero includes) + real.hpp (math wrappers). 15 headers switch to real_fwd.hpp, avoiding <cuda_runtime.h> parsing in non-CUDA include chains.
+- PERF-C2: Merged init_float_zero_kernel + init_int_zero_kernel into init_update_zero_kernel in gpu_update.cu (1 fewer kernel launch per iteration).
+- PERF-B3: Added __launch_bounds__(128) to euler_residual_kernel_atomic and euler_residual_kernel_colored.
+- PERF-G9: Replaced per-call cudaEventCreate/Destroy with static cached events in timed wrapper.
+- PERF-G8: D2H reads already resolved by Phase 3; remaining cudaMemsetAsync calls per iteration are necessary for correctness.

@@ -10,12 +10,12 @@ namespace cfd {
 
 namespace {
 
-__global__ void init_float_zero_kernel(Real* ptr) {
-    if (threadIdx.x == 0 && blockIdx.x == 0) *ptr = 0.0f;
-}
-
-__global__ void init_int_zero_kernel(int* ptr) {
-    if (threadIdx.x == 0 && blockIdx.x == 0) *ptr = 0;
+// PERF-C2: merged init kernel — zeroes both scalar and failure flag in one launch
+__global__ void init_update_zero_kernel(Real* d_l2_sum, int* d_failed) {
+    if (threadIdx.x == 0 && blockIdx.x == 0) {
+        *d_l2_sum = 0.0f;
+        *d_failed = 0;
+    }
 }
 
 // Persistent scratch buffer for two-stage L2 reduction.
@@ -129,10 +129,8 @@ bool compute_update_gpu(DeviceMesh& mesh, const Real* d_min_dt, Real gamma,
     Real* d_l2_sum, int* d_failed,
     int* d_failure_cell, Real* d_failure_state,
     cudaStream_t stream) {
-    init_float_zero_kernel<<<1, 1, 0, stream>>>(d_l2_sum);
-    if (!cuda_check(cudaGetLastError(), "init_l2 kernel launch")) return false;
-    init_int_zero_kernel<<<1, 1, 0, stream>>>(d_failed);
-    if (!cuda_check(cudaGetLastError(), "init_failed kernel launch")) return false;
+    init_update_zero_kernel<<<1, 1, 0, stream>>>(d_l2_sum, d_failed);
+    if (!cuda_check(cudaGetLastError(), "init_update_zero kernel launch")) return false;
     if (d_failure_cell) {
         if (!cuda_check(cudaMemsetAsync(d_failure_cell, 0xFF, sizeof(int), stream), "init_failure_cell memset")) return false;
     }

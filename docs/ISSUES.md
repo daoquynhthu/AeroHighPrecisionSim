@@ -2021,9 +2021,10 @@ Fixed: after greedy coloring + reorder, sort face arrays by `left_cell` within e
 每个线程从全局内存读取同一标量。建议：`__shared__` 变量或 `__ldg()` 加载。
 Fixed: replaced `*d_min_dt` with `__ldg(d_min_dt)` in both `gpu_rans.cu` and `gpu_update.cu`.
 
-**PERF-B3: HLLC flux kernel 寄存器压力可能溢出** [LOW]
+**PERF-B3: HLLC flux kernel 寄存器压力可能溢出** [LOW] — FIXED 2026-07-11
 `cfd_residual_gpu.cu` / `gpu_viscous.cu`
 ~30 局部变量 + 核函数变量，sm_75+ 可能超 64 寄存器导致 local memory spilling。建议：`__launch_bounds__` 限制 block size 迫使编译器优化寄存器。
+Fixed: Added `__launch_bounds__(128)` to `euler_residual_kernel_atomic` and `euler_residual_kernel_colored` in `cfd_residual_gpu.cu`.
 
 **PERF-B4: colored 与 atomic kernel 变体代码重复** [INFO]
 对比 `cfd_residual_gpu.cu:168-271` vs `273-376`；`reconstruction_gpu.cu:57-166` vs `168-278`。
@@ -2036,9 +2037,10 @@ Fixed: replaced `*d_min_dt` with `__ldg(d_min_dt)` in both `gpu_rans.cu` and `gp
 阻塞整个 GPU pipeline 仅检查布尔标志。`compute_gradients_gpu` 和 `compute_limiters_gpu` 同模式。建议：使用 host-pinned flag + `cudaMemcpyAsync`，每 N 迭代检查一次。
 Fixed: removed `cudaDeviceSynchronize` + D2H `d_failed` reads from all three functions; iteration-level `check_status_kernel` in solver loop catches failures post-iteration.
 
-**PERF-C2: 多个 1-block 初始化 kernel 可替换/融合** [LOW]
+**PERF-C2: 多个 1-block 初始化 kernel 可替换/融合** [LOW] — FIXED 2026-07-11
 `gpu_timestep.cu:13-15` / `gpu_update.cu:13-19` / `gpu_wall.cu:13-17` / `gpu_diagnostics.cu:16-25` / `reconstruction_gpu.cu:12-15`
 每个 ~3-10us 启动开销。10k 迭代 × 6 次 = 180-600ms。建议：零值用 `cudaMemset`，其他融合到后续 kernel。
+Fixed: Merged `init_float_zero_kernel` and `init_int_zero_kernel` in `gpu_update.cu` into `init_update_zero_kernel` that zeroes both `d_l2_sum` and `d_failed` in a single 1-block launch. Saves 1 kernel launch per iteration.
 
 **PERF-C3: `cudaGetLastError` 在迭代内循环中逐 kernel 调用** [INFO]
 每次 ~1-5us。15 kernel/iteration × 10k = 150-750ms 检查开销。建议：release 构建定义为 no-op，或仅在迭代边界调用。
@@ -2141,17 +2143,20 @@ Fixed: stream created unconditionally (outside `#ifdef MPI_ENABLED`); all 11 com
 迭代循环中 `cudaMalloc` 延迟尖峰 + 分配失败风险。建议：条件性在 `upload_mesh` 或 solver setup 中分配。
 Fixed: moved `allocate_viscous()` call from inside iteration loop to solver setup before loop begins.
 
-**PERF-G7: Mesh 上传使用 15 次独立 `cudaMemcpy`** [MEDIUM]
+**PERF-G7: Mesh 上传使用 15 次独立 `cudaMemcpy`** [MEDIUM] — FIXED 2026-07-11
 `device_mesh.cu:304-326`
 每次 ~5-20us 驱动开销。建议：打包为单个 SoA 缓冲一次传输。
+Fixed: Replaced 17 individual `cudaMalloc`/`cudaMemcpy` calls with 2 batched allocations: one `d_face_buf_` for all 7 face `Real` + 3 face `int` arrays (sub-pointers via pointer arithmetic), one `d_cell_buf_` for all 6 cell `Real` arrays. Host data packed into contiguous vectors → 2 `cudaMemcpy` calls. Release() frees only the 2 base buffers.
 
-**PERF-G8: `d_failed` 逐 kernel `cudaMemset` + 4 处重复 D2H 读取模式** [LOW]
+**PERF-G8: `d_failed` 逐 kernel `cudaMemset` + 4 处重复 D2H 读取模式** [LOW] — PARTIALLY FIXED
 `cfd_residual_gpu.cu:389,457` / `reconstruction_gpu.cu:521,554` / `gpu_rans.cu:261`
 建议：使用 `cudaMemsetAsync` + 迭代末合并检查（类似 `check_status_kernel`）。
+Status: D2H reads resolved by Phase 3 (zero D2H during iteration loop per PH2-G-1). Remaining 3 per-iteration `cudaMemsetAsync` calls (before euler_residual, compute_gradients, compute_limiters) are necessary for correctness — each sub-stage must start with a clean failure flag.
 
-**PERF-G9: `cudaEventCreate`/`Destroy` 在 timed wrapper 中每次调用** [LOW]
+**PERF-G9: `cudaEventCreate`/`Destroy` 在 timed wrapper 中每次调用** [LOW] — FIXED 2026-07-11
 `cfd_residual_gpu.cu:510-531`
 仅 benchmarking 路径，非关键。建议：接受预创建 event 参数。
+Fixed: Replaced per-call `cudaEventCreate`/`Destroy` with `static` cached events created on first invocation.
 
 **PERF-G10: 无 `cudaMallocAsync`/`cudaMemPool`** [INFO]
 全代码库。建议：CUDA 11.2+ 可用池减少分配延迟。
@@ -2176,8 +2181,9 @@ Fixed: added `option(AEROSIM_USE_CCACHE ON)` + `find_program(CCACHE_PROGRAM ccac
 Eigen 模板实例化在 nvcc 下增 3-5× 编译时间。`dynamics_6dof.cu` 15s、`coordinate_transform.cu` 15s。建议：Eigen 限制在 .cpp，.cu 用轻量级类型。
 Fixed: 所有 `#include <Eigen/Dense>`（含 LU/QR/SVD/Cholesky/Eigenvalues）替换为最小化的 `<Eigen/Core>` 和/或 `<Eigen/Geometry>`，覆盖 9 个头文件（`coordinate_transform.hpp`, `dynamics_6dof.hpp`, `gravity_model.hpp`, `atmosphere_model.hpp`（移除未使用的 include）, `propulsion_model.hpp`, `guidance.hpp`, `autopilot.hpp`, `dart_guidance.hpp`, `aerodynamics_model.hpp`）。nvcc 不再解析无用 Eigen 模块。
 
-**PERF-H5: 核心头文件更改触发大范围重编译** [MEDIUM]
+**PERF-H5: 核心头文件更改触发大范围重编译** [MEDIUM] — FIXED 2026-07-11
 `real.hpp` 更改 → 所有 19 个依赖 .cu 文件重编译 ~90s。建议：`real_fwd.hpp` 前向声明、PIMPL、预编译头。
+Fixed: Split `real.hpp` into `real_fwd.hpp` (just `using Real = ...`, zero includes) + `real.hpp` (includes `real_fwd.hpp` + `<cmath>` + `<cuda_runtime.h>` + math wrappers). 15 headers that only use `Real` in signatures now include `real_fwd.hpp` instead of `real.hpp`, avoiding `<cuda_runtime.h>` parsing through non-CUDA include chains. Changing math wrapper implementations in `real.hpp` no longer triggers recompilation of 15 dependent headers.
 
 **PERF-H6: CUDA 架构自动检测中断，仅构建 sm_75** [HIGH] — FIXED 2026-07-11
 `CMakeLists.txt:23-34` `if(NOT CMAKE_CUDA_ARCHITECTURES)` 因 CMake 已在 `project()` 赋值而永不触发。CMakeCache.txt 显示仅 `75`。建议：`set(CMAKE_CUDA_ARCHITECTURES "75;80;89;90;100" CACHE STRING ... FORCE)`。
@@ -2206,12 +2212,12 @@ Fixed: global `CMAKE_CUDA_SEPARABLE_COMPILATION ON` removed (part of PERF-H2); o
 | 领域 | HIGH | MEDIUM | LOW | INFO | 合计 |
 |------|------|--------|-----|------|------|
 | A. GPU 原子竞争 | 6 (5 FIXED, 1 N/A) | 1 (1 FIXED) | 0 | 0 | 7 |
-| B. GPU 带宽/占用 | 1 (1 FIXED) | 1 (1 FIXED) | 1 | 1 | 4 |
-| C. GPU 同步/启动 | 0 | 1 (1 FIXED) | 2 | 1 | 4 |
+| B. GPU 带宽/占用 | 1 (1 FIXED) | 1 (1 FIXED) | 1 (1 FIXED) | 1 | 4 |
+| C. GPU 同步/启动 | 0 | 1 (1 FIXED) | 2 (1 FIXED) | 1 | 4 |
 | D. CPU 重复工作 | 4 (4 FIXED) | 0 | 0 | 0 | 4 |
 | E. CPU 内存分配 | 1 (1 FIXED) | 3 (3 FIXED) | 0 | 0 | 4 |
 | F. CPU 算法/I/O | 0 | 2 (2 FIXED) | 2 (2 FIXED) | 0 | 4 |
-| G. 数据流 | 4 (4 FIXED) | 3 (1 FIXED) | 2 | 1 | 10 |
-| H. 构建—编译 | 4 (4 FIXED) | 2 (1 FIXED) | 0 | 0 | 6 |
+| G. 数据流 | 4 (4 FIXED) | 3 (2 FIXED) | 2 (2 FIXED) | 1 | 10 |
+| H. 构建—编译 | 4 (4 FIXED) | 2 (2 FIXED) | 0 | 0 | 6 |
 | I. 构建—CMake | 0 | 2 (2 FIXED) | 2 (2 FIXED) | 0 | 4 |
-| **总计** | **20 (19 FIXED, 1 N/A)** | **14 (12 FIXED)** | **9 (4 FIXED)** | **3** | **46 (35 FIXED, 1 N/A)** |
+| **总计** | **20 (19 FIXED, 1 N/A)** | **14 (14 FIXED)** | **9 (8 FIXED)** | **3** | **46 (41 FIXED, 1 N/A)** |
