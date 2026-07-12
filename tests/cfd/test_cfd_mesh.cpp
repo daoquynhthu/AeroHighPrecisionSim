@@ -9,6 +9,7 @@
 #include "aero/cfd/amr_hanging.hpp"
 #include "aero/cfd/cfd_state.hpp"
 #include "aero/cfd/cfd_solver.hpp"
+#include "aero/cfd/cfd_residual.hpp"
 #include "aero/cfd/real.hpp"
 
 #include <cmath>
@@ -720,6 +721,221 @@ static int test_amr_max_level() {
     return 0;
 }
 
+// Helper: residual L2 norm = sqrt(sum(R^2) / (n_cells * CFD_NVAR))
+static Real residual_l2(const std::vector<EulerFlux>& res) {
+    Real sum_sq = 0.0f;
+    for (const auto& r : res) {
+        sum_sq += r.mass * r.mass + r.mom_x * r.mom_x + r.mom_y * r.mom_y +
+                  r.mom_z * r.mom_z + r.energy * r.energy + r.turbulence * r.turbulence;
+    }
+    int n = static_cast<int>(res.size());
+    return std::sqrt(sum_sq / (static_cast<Real>(n) * static_cast<Real>(CFD_NVAR)));
+}
+
+static int test_amr_order2_hanging() {
+    TEST("CFD-AMR-14 2nd-order prolongation: child mass = parent mass after reconstruction");
+    {
+        CfdMesh mesh;
+        mesh.nodes.resize(4);
+        mesh.nodes[0] = {0.0f, 0.0f, 0.0f};
+        mesh.nodes[1] = {1.0f, 0.0f, 0.0f};
+        mesh.nodes[2] = {0.0f, 1.0f, 0.0f};
+        mesh.nodes[3] = {0.0f, 0.0f, 1.0f};
+
+        CfdCell cell;
+        cell.type = ElementType::TET4;
+        cell.node[0] = 0; cell.node[1] = 1; cell.node[2] = 2; cell.node[3] = 3;
+        mesh.cells.push_back(cell);
+        rebuild_mesh_faces(mesh);
+        compute_mesh_metrics(mesh);
+        Real vol_parent = mesh.cells[0].volume;
+        if (vol_parent <= 0.0f) FAIL("parent volume=%g", vol_parent);
+
+        Real gamma = 1.4f;
+        PrimitiveState wp;
+        wp.rho = 1.225f; wp.u = 50.0f; wp.v = 10.0f; wp.w = 5.0f;
+        wp.p = 101325.0f; wp.nu_tilde = 0.0f;
+        ConservativeState q_parent = primitive_to_conservative(wp, gamma);
+        Real mass_parent = q_parent.rho * vol_parent;
+
+        std::vector<PrimitiveState> w_old = {wp};
+        std::vector<PrimitiveGradient> grad_old(1);
+        grad_old[0].drho_dx = 0.1f; grad_old[0].drho_dy = 0.05f; grad_old[0].drho_dz = 0.02f;
+        grad_old[0].du_dx = 2.0f; grad_old[0].dp_dx = 1000.0f;
+
+        std::vector<RefinementRequest> requests = {{0, RefinementFlag::Refine}};
+        std::vector<RefinementRecord> records;
+        std::string err;
+        CfdMesh mesh_ref = mesh;
+        bool ok = refine_cells(mesh_ref, requests, &records, &err);
+        if (!ok) FAIL("refine failed: %s", err.c_str());
+        if (mesh_ref.cells.size() != 8u) FAIL("expected 8 cells, got %zu", mesh_ref.cells.size());
+
+        std::vector<ConservativeState> q_new;
+        std::vector<ConservativeState> q_old = {q_parent};
+        prolongate_solution_order2(q_old, w_old, grad_old, mesh, mesh_ref, records, gamma, q_new);
+        if (q_new.size() != 8u) FAIL("expected 8 states, got %zu", q_new.size());
+
+        Real mass_children = 0.0f;
+        for (int i = 0; i < 8; ++i)
+            mass_children += q_new[i].rho * mesh_ref.cells[i].volume;
+        Real rel_diff = std::fabs(mass_children - mass_parent) / mass_parent;
+        if (rel_diff > 1e-6f) FAIL("mass rel diff=%g (parent=%g, children=%g)", rel_diff, mass_parent, mass_children);
+        PASS;
+    }
+
+    // ----- Helper: build 2-hex mesh with hanging face (cell 0 = level 1, cell 1 = level 0) -----
+    struct HangingMesh {
+        CfdMesh mesh;
+        std::vector<HangingFaceInfo> hanging;
+    };
+    auto make_hanging_mesh = []() -> HangingMesh {
+        HangingMesh hm;
+        hm.mesh.nodes.resize(12);
+        hm.mesh.nodes[0] = {0,0,0}; hm.mesh.nodes[1] = {1,0,0};
+        hm.mesh.nodes[2] = {1,1,0}; hm.mesh.nodes[3] = {0,1,0};
+        hm.mesh.nodes[4] = {0,0,1}; hm.mesh.nodes[5] = {1,0,1};
+        hm.mesh.nodes[6] = {1,1,1}; hm.mesh.nodes[7] = {0,1,1};
+        hm.mesh.nodes[8] = {2,0,0}; hm.mesh.nodes[9] = {2,1,0};
+        hm.mesh.nodes[10]= {2,0,1}; hm.mesh.nodes[11]= {2,1,1};
+
+        hm.mesh.cells.resize(2);
+        hm.mesh.cells[0].type = ElementType::HEX8;
+        hm.mesh.cells[0].node[0]=0; hm.mesh.cells[0].node[1]=1;
+        hm.mesh.cells[0].node[2]=2; hm.mesh.cells[0].node[3]=3;
+        hm.mesh.cells[0].node[4]=4; hm.mesh.cells[0].node[5]=5;
+        hm.mesh.cells[0].node[6]=6; hm.mesh.cells[0].node[7]=7;
+        hm.mesh.cells[1].type = ElementType::HEX8;
+        hm.mesh.cells[1].node[0]=1; hm.mesh.cells[1].node[1]=8;
+        hm.mesh.cells[1].node[2]=9; hm.mesh.cells[1].node[3]=2;
+        hm.mesh.cells[1].node[4]=5; hm.mesh.cells[1].node[5]=10;
+        hm.mesh.cells[1].node[6]=11; hm.mesh.cells[1].node[7]=6;
+
+        hm.mesh.cells[0].refinement_level = 1;
+        rebuild_mesh_faces(hm.mesh);
+        compute_mesh_metrics(hm.mesh);
+        hm.hanging = detect_hanging_faces(hm.mesh);
+        return hm;
+    };
+
+    TEST("CFD-AMR-15 uniform flow: 2nd-order hanging preserves uniform state exactly");
+    {
+        auto hm = make_hanging_mesh();
+        if (hm.hanging.empty()) FAIL("expected hanging faces");
+
+        Real gamma = 1.4f;
+        int nc = static_cast<int>(hm.mesh.cells.size());
+        std::vector<PrimitiveState> w(nc, {1.225f, 100.0f, 0.0f, 0.0f, 101325.0f, 0.0f});
+        std::vector<ConservativeState> q(nc);
+        PrimitiveState freestream = w[0];
+        for (int i = 0; i < nc; ++i) q[i] = primitive_to_conservative(w[i], gamma);
+
+        auto grads = compute_green_gauss_gradients(hm.mesh, q, gamma, &w);
+        if (grads.size() != static_cast<std::size_t>(nc)) FAIL("grads size mismatch");
+
+        auto limiters = compute_barth_jespersen_limiters(hm.mesh, q, grads, gamma, &w);
+        std::vector<PrimitiveGradient> limited(nc);
+        for (int i = 0; i < nc; ++i) limited[i] = apply_limiter(grads[i], limiters[i]);
+
+        std::vector<EulerFlux> residual(nc);
+        if (!compute_euler_residual_cpu_order2(hm.mesh, q, freestream, gamma, limited, residual, &w))
+            FAIL("order2 residual failed");
+
+        apply_hanging_flux_correction_primitive(hm.mesh, hm.hanging, q, w, limited, gamma, residual);
+
+        Real l2 = residual_l2(residual);
+        if (l2 > 1e-12f) FAIL("uniform flow L2=%g > 1e-12", l2);
+        PASS;
+    }
+
+    TEST("CFD-AMR-16 smooth flow: hanging correction changes flux at hanging face without NaN");
+    {
+        // Use the 2-hex mesh with manually-assigned refinement_level (as in AMR-9/10).
+        auto hm = make_hanging_mesh();
+        if (hm.hanging.empty()) FAIL("expected hanging faces");
+
+        Real gamma = 1.4f;
+        int nc = static_cast<int>(hm.mesh.cells.size());
+
+        // Non-uniform smooth flow: left cell denser/hotter than right cell (linear-ish gradient)
+        std::vector<PrimitiveState> w(nc);
+        w[0] = {1.225f, 100.0f, 0.0f, 0.0f, 101325.0f, 0.0f};
+        w[1] = {1.0f, 50.0f, 0.0f, 0.0f, 50000.0f, 0.0f};
+        PrimitiveState freestream = w[0];
+
+        std::vector<ConservativeState> q(nc);
+        for (int i = 0; i < nc; ++i) q[i] = primitive_to_conservative(w[i], gamma);
+
+        auto grads = compute_green_gauss_gradients(hm.mesh, q, gamma, &w);
+        auto limiters = compute_barth_jespersen_limiters(hm.mesh, q, grads, gamma, &w);
+        std::vector<PrimitiveGradient> limited(nc);
+        for (int i = 0; i < nc; ++i) limited[i] = apply_limiter(grads[i], limiters[i]);
+
+        // Order-2 residual before and after hanging correction
+        std::vector<EulerFlux> res_before(nc);
+        if (!compute_euler_residual_cpu_order2(hm.mesh, q, freestream, gamma, limited, res_before, &w))
+            FAIL("order-2 residual failed");
+        auto res_after = res_before;
+        apply_hanging_flux_correction_primitive(hm.mesh, hm.hanging, q, w, limited, gamma, res_after);
+
+        // Check all residual values are finite
+        for (const auto& r : res_after) {
+            if (!std::isfinite(r.mass) || !std::isfinite(r.mom_x) ||
+                !std::isfinite(r.mom_y) || !std::isfinite(r.mom_z) ||
+                !std::isfinite(r.energy) || !std::isfinite(r.turbulence))
+                FAIL("NaN/Inf after hanging correction");
+        }
+
+        // Verify L2 norm after correction is finite
+        Real l2 = residual_l2(res_after);
+        if (!std::isfinite(l2)) FAIL("L2=%g after hanging correction", l2);
+        PASS;
+    }
+
+    TEST("CFD-AMR-17 shocked flow: primitive-space hanging reconstruction avoids negative p");
+    {
+        auto hm = make_hanging_mesh();
+        if (hm.hanging.empty()) FAIL("expected hanging faces");
+
+        Real gamma = 1.4f;
+        int nc = static_cast<int>(hm.mesh.cells.size());
+        // Strong shock: left cell (level 1) high pressure, right cell (level 0) low pressure
+        std::vector<PrimitiveState> w(nc);
+        w[0] = {8.0f, 0.0f, 0.0f, 0.0f, 800000.0f, 0.0f};   // high p left
+        w[1] = {1.0f, 0.0f, 0.0f, 0.0f, 10000.0f, 0.0f};     // low p right
+        PrimitiveState freestream = w[0];
+
+        std::vector<ConservativeState> q(nc);
+        for (int i = 0; i < nc; ++i) q[i] = primitive_to_conservative(w[i], gamma);
+
+        auto grads = compute_green_gauss_gradients(hm.mesh, q, gamma, &w);
+        auto limiters = compute_barth_jespersen_limiters(hm.mesh, q, grads, gamma, &w);
+        std::vector<PrimitiveGradient> limited(nc);
+        for (int i = 0; i < nc; ++i) limited[i] = apply_limiter(grads[i], limiters[i]);
+
+        std::vector<EulerFlux> residual(nc);
+        if (!compute_euler_residual_cpu_order2(hm.mesh, q, freestream, gamma, limited, residual, &w))
+            FAIL("order-2 residual failed");
+
+        apply_hanging_flux_correction_primitive(hm.mesh, hm.hanging, q, w, limited, gamma, residual);
+
+        // Check for NaN/Inf in residual
+        bool has_nan = false;
+        for (const auto& r : residual) {
+            if (!std::isfinite(r.mass) || !std::isfinite(r.mom_x) || !std::isfinite(r.mom_y) ||
+                !std::isfinite(r.mom_z) || !std::isfinite(r.energy) || !std::isfinite(r.turbulence)) {
+                has_nan = true; break;
+            }
+        }
+        if (has_nan) FAIL("NaN/Inf in shocked hanging residual");
+
+        Real l2 = residual_l2(residual);
+        if (!std::isfinite(l2) || l2 <= 0.0f) FAIL("invalid L2=%g", l2);
+        PASS;
+    }
+    return 0;
+}
+
 int main() {
     int result = 0;
     result |= test_cube_mesh();
@@ -735,6 +951,7 @@ int main() {
     result |= test_hanging_faces();
     result |= test_amr_disabled_regression();
     result |= test_amr_max_level();
+    result |= test_amr_order2_hanging();
     std::printf("\n%d / %d tests PASSED.\n", pass_count, test_count);
     return result == 0 && pass_count == test_count ? 0 : 1;
 }

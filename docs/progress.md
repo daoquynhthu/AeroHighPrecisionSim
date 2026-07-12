@@ -858,4 +858,19 @@
     - Old 90-line hanging correction block in cfd_solver.cpp replaced with clean 8-line call
     - Both use reconstruct_primitive_positive (positive-preserving fallback)
   - Files changed: PLAN.md (3 new sections), amr_interpolate.hpp/cpp, amr_hanging.hpp/cpp, cfd_solver.cpp, cfd_solver_gpu.cpp, lusgs.hpp, lusgs_gpu.cu, gpu_solver.cu, mesh_gen_stl.hpp (NEW)
-  - Verification: TestCfdMesh 24/24, TestCfdEuler 9/9, TestCfdReconstruction 17/17, TestCfdState 35/35, TestCfdViscous 12/12, TestCfdRans 13/13, TestCfdDiagnostics 5/5, MmsTest 15/15 — all PASS. GPU solver test (TestCfdGpu) also builds clean.
+   - Verification: TestCfdMesh 24/24, TestCfdEuler 9/9, TestCfdReconstruction 17/17, TestCfdState 35/35, TestCfdViscous 12/12, TestCfdRans 13/13, TestCfdDiagnostics 5/5, MmsTest 15/15 — all PASS. GPU solver test (TestCfdGpu) also builds clean.
+
+2026-07-12 — Phase 9-B: conformal volume mesh generation from STL surface
+- Full pipeline implemented in `src/aero/cfd/mesh_gen_stl.cpp` (~990 lines):
+  - STL parser (binary + ASCII auto-detect via `detect_stl_format`)
+  - BVH builder (median-split, ray/tri intersection + closest-distance query)
+  - SDF grid computation (closest distance + ray-cast parity sign)
+  - Hex-cull: fully-inside cells discarded; fully-outside cells → 6 tets; boundary cells clipped per-tet
+  - clip_tet: handles all 5 cases (0/1/2/3/4 outside vertices) using centroid-of-all-vertices fan with volume-sign fix (swap last two vertices when volume < 0)
+  - CfdMesh builder: unique-node dedup (find_or_add_node), rebuild_mesh_faces, wall face re-classification via BVH distance with tight threshold (0.01 * grid spacing)
+  - compute_mesh_metrics validation (negative Jacobians rejected, zero volumes rejected)
+- Registered in `src/aero/CMakeLists.txt` (missile_cpu) and `tests/CMakeLists.txt` (TestCfdMeshStl)
+- Debug-build hang traced to `--config Release` vs Debug CMake (Debug /Od × 64K SDF grid × 128 triangles = minutes); resolved by `cmake -B build -DCMAKE_BUILD_TYPE=Release`
+- Bug fixes: vertex string length (8→7) in ASCII STL parser; volume-sign fix in clip_tet; tightened wall-dist threshold from 1% max_dim to 1% grid spacing
+- Tests: 3 cone-based tests (wall area match with 50% tolerance, no negative Jacobians, closed surface error < 1.0) — 3/3 PASS
+- Verification: TestCfdMeshStl 3/3 PASS, all 109 existing CPU CFD tests PASS

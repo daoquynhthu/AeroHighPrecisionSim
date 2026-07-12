@@ -8,6 +8,7 @@ target_sources(missile_cpu PRIVATE
     cfd/cfd_residual.cpp
     cfd/cfd_solver.cpp
     cfd/diagnostics.cpp
+    cfd/mesh_gen_stl.cpp
     cfd/mesh_metrics.cpp
     cfd/mesh_io_su2.cpp
     cfd/mesh_io_cgns.cpp
