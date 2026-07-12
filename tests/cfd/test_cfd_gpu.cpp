@@ -3173,6 +3173,40 @@ static int test_robust_negative_wall_distance() {
     return 0;
 }
 
+static int test_unknown_boundary_type_fails() {
+    TEST("CFD-PHYS3 unknown boundary type triggers GPU residual failure");
+    {
+        CfdMesh mesh = generate_structured_cube_mesh(5.0f, 7);
+        compute_mesh_metrics(mesh);
+
+        int corrupt_count = 0;
+        for (auto& face : mesh.faces) {
+            if (face.boundary != BoundaryKind::Interior) {
+                face.boundary = static_cast<BoundaryKind>(99);
+                corrupt_count++;
+                break;
+            }
+        }
+        if (corrupt_count == 0) FAIL("no boundary face to corrupt");
+
+        PrimitiveState w_inf;
+        w_inf.rho = 1.0f; w_inf.u = 2.0f; w_inf.p = 1.0f / 1.4f;
+        std::vector<ConservativeState> q(mesh.cells.size(), primitive_to_conservative(w_inf, 1.4f));
+        Real gamma = 1.4f;
+        std::string error;
+
+        DeviceMesh d_mesh;
+        if (!d_mesh.upload_mesh(mesh, &error)) FAIL("upload mesh: %s", error.c_str());
+        if (!d_mesh.upload_state(q, &error)) FAIL("upload state: %s", error.c_str());
+
+        if (compute_euler_residual_gpu(d_mesh, w_inf, gamma, &error))
+            FAIL("expected failure for unknown boundary type, but succeeded");
+
+        PASS;
+    }
+    return 0;
+}
+
 int main() {
     int result = 0;
     result |= test_residual_equivalence_single_face();
@@ -3239,6 +3273,7 @@ result |= test_recon_order2_converged_forces();
     result |= test_robust_nan_vel();
     result |= test_robust_zero_volume();
     result |= test_robust_negative_wall_distance();
+    result |= test_unknown_boundary_type_fails();
     std::printf("\n%d / %d tests PASSED.\n", pass_count, test_count);
     return result == 0 && pass_count == test_count ? 0 : 1;
 }

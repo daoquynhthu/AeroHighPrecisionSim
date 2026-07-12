@@ -2647,8 +2647,8 @@ Fix: 移除分母中多余的 `karman * karman *`。回归测试 `CFD-RANS-IMPLI
 **PHYS-2** [FIXED] `src/aero/cfd/rans.cpp:79, gpu_rans.cu:118`
 SA-neg 分支（chi < 0）：破坏项为 `-cw1*(nu_tilde/d)^2`，推动负 nu_tilde 进一步为负。修复：改为 `+cw1*(nu_tilde/d)^2`（标准 SA-neg 将破坏项作为恢复项添加）。同时将 `(1-ft2)` 替换为标准中的 `(1-ct3)`（常数 ct3=1.2 而非 ft2 函数）。GPU/CPU 两分支均已修复。测试 CFD-RANS-13/14 验证修复后破坏项为正、总源项为正。
 
-**PHYS-3** [HIGH] `src/aero/cfd/cfd_residual_gpu.cu:236-244`
-GPU 残差组装中所有未知边界类型静默按远场处理。`else` 分支捕获未识别的 BoundaryKind 时应报错而非静默错误。
+**PHYS-3** [FIXED] `src/aero/cfd/cfd_residual_gpu.cu:236-244`
+GPU 残差组装中所有未知边界类型静默按远场处理。`else` 分支捕获未识别的 BoundaryKind 时应报错而非静默错误。修复：GPU kernel 添加 `else if (Farfield)` + `else { atomicExch(d_failed,1); return; }`；CPU `cfd_residual.cpp` 三处同步修复。回归测试 `CFD-PHYS3` 验证未知边界类型触发失败。
 
 **PHYS-4** [HIGH] `src/aero/cfd/gpu_solver.cu:103`
 `d_dt_cell` 分配 `nvar_cells = n_cells * nvar` 但按每单元访问（`d_dt_cell[idx]`），多分配 6 倍内存。功能正确但浪费内存，且表明单元计数与数组跨度之间存在潜在歧义。

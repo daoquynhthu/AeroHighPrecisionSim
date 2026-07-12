@@ -235,13 +235,16 @@ __global__ void __launch_bounds__(128) euler_residual_kernel(
             mass, mom_x, mom_y, mom_z, energy, turbulence);
     } else if (bnd == static_cast<int>(BoundaryKind::SlipWall) || bnd == static_cast<int>(BoundaryKind::NoSlipWall) || bnd == static_cast<int>(BoundaryKind::Symmetry)) {
         d_slip_wall_flux(pL, nx, ny, nz, mass, mom_x, mom_y, mom_z, energy, turbulence);
-    } else {
+    } else if (bnd == static_cast<int>(BoundaryKind::Farfield)) {
         Real ghrho, ghp, ghu, ghv, ghw, ghnu;
         d_farfield_ghost_state(rhoL, uL, vL, wL, pL, nu_tildeL,
             inf_rho, inf_p, inf_u, inf_v, inf_w, inf_nu_tilde, inf_a,
             nx, ny, nz, ghrho, ghp, ghu, ghv, ghw, ghnu);
         d_hllc_flux(rhoL, uL, vL, wL, pL, nu_tildeL, ghrho, ghu, ghv, ghw, ghp, ghnu, gamma, nx, ny, nz,
             mass, mom_x, mom_y, mom_z, energy, turbulence);
+    } else {
+        atomicExch(d_failed, 1);
+        return;
     }
 
     Real fmass = mass * area;

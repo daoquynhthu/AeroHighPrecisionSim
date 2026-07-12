@@ -931,3 +931,9 @@
 - Updated test RANS-12: expects positive production for negative chi (correct SA-neg behavior)
 - New tests: RANS-13 (destruction positive), RANS-14 (total source positive, dominated by recovery)
 - Verification: TestCfdRans 14/14 PASS, TestCfdGpu 64/64 PASS
+
+2026-07-12 — PHYS-3: Guard unknown boundary types in GPU/CPU residual
+- Fix: GPU kernel `euler_residual_kernel` now explicitly checks `Farfield` before `else { atomicExch(d_failed,1); return; }` (cfd_residual_gpu.cu:238)
+- Fix: CPU `cfd_residual.cpp` 3 locations add `else if (Farfield)` + `else { return false; }`
+- New test: CFD-PHYS3 — corrupt one face to unknown BoundaryKind(99), verify GPU residual fails
+- Verification: TestCfdGpu 65/65 PASS

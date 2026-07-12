@@ -40,7 +40,7 @@ bool compute_euler_residual_cpu(
             flux = hllc_flux(wl, wr, gamma, face.nx, face.ny, face.nz);
         } else if (face.boundary == BoundaryKind::SlipWall || face.boundary == BoundaryKind::NoSlipWall || face.boundary == BoundaryKind::Symmetry) {
             flux = slip_wall_flux(wl, face.nx, face.ny, face.nz);
-        } else {
+        } else if (face.boundary == BoundaryKind::Farfield) {
             PrimitiveState wr;
             if (mms_solution) {
                 wr = mms_solution->eval(face.cx, face.cy, face.cz);
@@ -48,6 +48,8 @@ bool compute_euler_residual_cpu(
                 wr = farfield_ghost_state(wl, freestream, gamma, face.nx, face.ny, face.nz);
             }
             flux = hllc_flux(wl, wr, gamma, face.nx, face.ny, face.nz);
+        } else {
+            return false;
         }
 
         Real area = face.area;
@@ -126,7 +128,7 @@ bool compute_euler_residual_cpu_order2(
             flux = hllc_flux(wl, wr, gamma, face.nx, face.ny, face.nz);
         } else if (face.boundary == BoundaryKind::SlipWall || face.boundary == BoundaryKind::NoSlipWall || face.boundary == BoundaryKind::Symmetry) {
             flux = slip_wall_flux(wl, face.nx, face.ny, face.nz);
-        } else {
+        } else if (face.boundary == BoundaryKind::Farfield) {
             PrimitiveState wr;
             if (mms_solution) {
                 wr = mms_solution->eval(face.cx, face.cy, face.cz);
@@ -134,6 +136,8 @@ bool compute_euler_residual_cpu_order2(
                 wr = farfield_ghost_state(wl, freestream, gamma, face.nx, face.ny, face.nz);
             }
             flux = hllc_flux(wl, wr, gamma, face.nx, face.ny, face.nz);
+        } else {
+            return false;
         }
 
         Real area = face.area;
@@ -202,7 +206,7 @@ bool compute_euler_residual_cpu_order2(
             flux = hllc_flux(wl, wr, gamma, face.nx, face.ny, face.nz);
         } else if (face.boundary == BoundaryKind::SlipWall || face.boundary == BoundaryKind::NoSlipWall || face.boundary == BoundaryKind::Symmetry) {
             flux = slip_wall_flux(wl, face.nx, face.ny, face.nz);
-        } else {
+        } else if (face.boundary == BoundaryKind::Farfield) {
             PrimitiveState wr;
             if (mms_solution) {
                 wr = mms_solution->eval(face.cx, face.cy, face.cz);
@@ -210,6 +214,8 @@ bool compute_euler_residual_cpu_order2(
                 wr = farfield_ghost_state(wl, freestream, gamma, face.nx, face.ny, face.nz);
             }
             flux = hllc_flux(wl, wr, gamma, face.nx, face.ny, face.nz);
+        } else {
+            return false;
         }
 
         Real area = face.area;
