@@ -2579,3 +2579,240 @@ If STL has zero extent in any dimension, grid spacing is zero → threshold zero
 - **PH9B-I5** [RESOLVED]: Prism layer config fields are placeholders for 9-B.4 (not started); kept for API completeness.
 - **PH9B-I1** [FIXED]: BVH `closest_dist_node` now visits the nearer child first, enabling earlier `best` pruning.
 - **PH9B-I6** [FIXED]: `WallTri` stores indices (`i0,i1,i2`) into a shared `wall_verts` buffer instead of duplicating Vec3 coordinates.
+
+---
+
+## Pre-Phase 13 全量审计 (2026-07-12)
+
+Four-parallel subagent audit covering architecture compliance, physical/numerical correctness, test coverage, and performance optimization. Total 68 findings.
+
+### Summary
+
+| Category | HIGH | MEDIUM | LOW | INFO | Total |
+|----------|------|--------|-----|------|-------|
+| 架构合规 (ARCH) | 3 | 2 | 3 | 4 | 12 |
+| 物理正确 (PHYS) | 4 | 8 | 5 | 4 | 21 |
+| 测试覆盖 (COV) | 3 | 8 | 6 | 6 | 23 |
+| 性能优化 (PERF2) | 3 | 5 | 3 | 1 | 12 |
+| **Total** | **13** | **23** | **17** | **15** | **68** |
+
+---
+
+### 架构合规 (ARCH)
+
+**ARCH-1** [HIGH] `include/aero/cfd/cfd_config.hpp:26`
+`bool use_gpu = false` — 生产配置默认关闭 GPU，违反 GPU 为生产路径的架构决策。建议改为 `true`，CPU 测试显式覆盖为 `false`。
+
+**ARCH-2** [LOW] `app/aero_calc/main.cpp:77`
+入口点默认 `use_gpu = false`，但第 85 行自动选择逻辑覆盖此值。
+
+**ARCH-3** [HIGH] `src/aero/panel/aero_solver.cu:288-455`
+面板法求解器中所有 CUDA API 调用和内核启动均无 CUDA_CHECK 错误检查（cudaMalloc、cudaMemcpy、cudaFree、内核启动等全部缺失），与 CFD 求解器的约定不一致。
+
+**ARCH-4** [HIGH] `src/sim/gravity/gravity_model.cu:216-438`
+重力模型 CUDA 错误检查缺失：`gravity_kernel` 三次内核启动无 CUDA_KERNEL_CHECK，cudaMalloc/cudaMemcpy/cudaFree 无 CUDA_CHECK。`prepare_cuda` 使用 `std::cerr` 而非 `CUDA_CHECK` 并静默继续。
+
+**ARCH-5** [MEDIUM] `include/aero/engineering/engineering_aero.hpp:9, include/aero/engineering/aero_skin_friction.hpp:9`
+工程学命名空间声明为 `aerosp::aero::panel`，但目录为 `include/aero/engineering/`，应为 `aerosp::aero::eng`。
+
+**ARCH-6** [INFO] `CMakeLists.txt:229-239`
+CMake install 规则使用旧品牌名 `AeroSimTargets`，应为 `AerospTargets`。
+
+**ARCH-7** [LOW] `src/aero/cfd/cfd_residual_gpu.cu:427, device_mesh.cu:231/314/335, gpu_update.cu:13`
+GPU 代码中存在 PERF-* 任务追踪注释（如 `// PERF-G9: cache events across calls`），非算法注释，违反 AGENTS.md 代码风格。
+
+**ARCH-8** [INFO] `src/aero/cfd/amr_refine.cpp:41-385, amr_hanging.cpp:69-125, amr_interpolate.cpp:23-144, aero_solver.cu:14-480`
+大量非算法性行注释（如 `// 8 child tets`, `// Edge midpoints (12)`），违反 AGENTS.md 代码风格。
+
+**ARCH-9** [LOW] `docs/progress.md:416`
+2026-07-10 条目插入在 2026-07-11 条目之后，违反 progress.md 仅追加不插入的约定。
+
+**ARCH-10** [MEDIUM] `tests/test_gravity.cu`
+文件存在于磁盘但未注册在任何 CMakeLists.txt 中，永不编译。
+
+**ARCH-11** [INFO] `src/aero/panel/aero_table_gen.cpp`
+面板表生成位于 `src/aero/panel/` 而非 `app/aero_table_gen/`，与 REPO_SPEC.md 目录布局不一致。
+
+**ARCH-12** [INFO] `include/aero/cfd/cuda_utils.hpp:9`
+`CUDA_KERNEL_CHECK` 宏已定义但从未被使用，所有内核使用 `cuda_check(cudaGetLastError(), ...)` 代替。
+
+---
+
+### 物理/数值正确性 (PHYS)
+
+**PHYS-1** [HIGH] `src/aero/cfd/gpu_rans.cu:161`
+SA 隐式核函数破坏缩放分母错误：`d_dest = 2*cw1*nu_tilde/(karman^2 * d^2)` 含有额外的 `karman^2` 因子。标准 SA 破坏项为 `cw1*fw*(nu_tilde/d)^2`（无 karman^2），隐式 Jacobian 应为 `~2*cw1*nu_tilde/d^2`。多出的 `1/karman^2 ≈ 5.95` 使隐式校正弱约 6 倍。
+
+**PHYS-2** [HIGH] `src/aero/cfd/rans.cpp:79, gpu_rans.cu:118`
+SA-neg 分支（chi < 0）：破坏项为 `-cw1*(nu_tilde/d)^2`。对于负 nu_tilde，nu_tilde² > 0 使此项为负，推动 nu_tilde 进一步为负。标准 SA-neg 应销毁（添加）此项以将 nu_tilde 推回至零。
+
+**PHYS-3** [HIGH] `src/aero/cfd/cfd_residual_gpu.cu:236-244`
+GPU 残差组装中所有未知边界类型静默按远场处理。`else` 分支捕获未识别的 BoundaryKind 时应报错而非静默错误。
+
+**PHYS-4** [HIGH] `src/aero/cfd/gpu_solver.cu:103`
+`d_dt_cell` 分配 `nvar_cells = n_cells * nvar` 但按每单元访问（`d_dt_cell[idx]`），多分配 6 倍内存。功能正确但浪费内存，且表明单元计数与数组跨度之间存在潜在歧义。
+
+**PHYS-5** [MEDIUM] `src/aero/cfd/cfd_residual_gpu.cu:70-153`
+GPU HLLC 通量缺乏熵修正/保号声速校正。波速 `s_l = fmin(vn_l - a_l, vn_r - a_r)` 和 `s_r = fmax(vn_l + a_l, vn_r + a_r)` 未使用 `min(0, ...)`/`max(0, ...)` 稳定化。CPU 版本（`cfd_solver.cpp:227`）也存在同样遗漏。
+
+**PHYS-6** [MEDIUM] `src/aero/cfd/gpu_viscous.cu:194-216`
+粘性应力计算使用面平均梯度，梯度 NaN 时无保护（如果单元梯度变为 NaN 未被核函数检测到），`div_u`, `tau_xx`, `dT_dn` 将静默传播 NaN。
+
+**PHYS-7** [MEDIUM] `src/aero/cfd/gpu_viscous.cu:26-29, gpu_rans.cu:19-21`
+`d_sutherland_mu` 检查 `T <= 0.0f` 但不检查 `T` 是否为 NaN。NaN 通过 `T <= 0.0f` 检查（返回 false），经 `t_ratio` 和 `real_sqrt(t_ratio)` 传播为 NaN 粘度。
+
+**PHYS-8** [MEDIUM] `src/aero/cfd/gpu_rans.cu:86`
+SA chi 公式：`chi = Re * rho * nu_tilde / (mu + 1e-30f) + 1e-30f`。加法项使 chi 偏移 ~1e-30，阻止 chi 在壁面处精确为零。CPU 版本（`rans.cpp:43`）也存在同样模式。
+
+**PHYS-9** [MEDIUM] `src/aero/cfd/gpu_wall.cu:152`
+壁面热导率：`conductivity = mu_face / ((gamma - 1.0f) * prandtl + 1e-30f)`。标准粘性能量通量使用 `kappa = mu * Cp / Pr = mu * gamma * R / ((gamma-1) * Pr)`，但代码缺少 `gamma * R` 因子。需要对照无量纲形式验证。
+
+**PHYS-10** [MEDIUM] `src/aero/cfd/mesh_validator.cpp:211-228`
+`compute_mesh_quality_detail` 计算 `closed_surface_error` 并存储于 `MeshQualityReport` 中，但求解器启动前不检查此值。非水密网格上的守恒误差不被检测。
+
+**PHYS-11** [MEDIUM] `src/aero/cfd/gpu_timestep.cu:54, 113`
+CFL 时间步长使用 `numeric_limits<Real>::min()` (~1.175e-38) 作为 `denom = vmag + a` 的底线。FTZ 模式下真正的零或次正规数被刷新为 0，`> :min()` 检查失败，使用底线值，产生极大 dt（~1e38），可导致求解器爆炸。
+
+**PHYS-12** [MEDIUM] `src/aero/cfd/gpu_timestep.cu:61`
+粘性时间步长公式已验证正确：`dt_visc = CFL * rho * h^2 * Re / mu`。无量纲化分析确认无误。
+
+**PHYS-13** [LOW] `include/aero/cfd/cfd_state.hpp:38-42` vs `cfd_residual_gpu.cu:12-24`
+`is_valid_primitive`（CPU）已定义但未在 GPU 上使用。GPU 内联等价检查。功能一致但存在维护缺口（对 CPU 的修改可能不同步到 GPU）。
+
+**PHYS-14** [LOW] `src/aero/cfd/gpu_viscous.cu:16`
+`primitive_from_q` 失败时设置 `rho = -1.0f` 但**不**设置 `d_failed` 标志。调用者静默返回，无效状态在粘性核函数中不产生失效信号。
+
+**PHYS-15** [LOW] `src/aero/cfd/gpu_rans.cu:83`
+SA 扩散 `grad_nu2` 添加 `1e-30f` 确保正性，但 CPU 版本（`rans.cpp:46-49`）不添加——零梯度单元存在微小 GPU/CPU 差异。
+
+**PHYS-16** [LOW] `src/aero/cfd/gpu_rans.cu:162, 196`
+`dt_over_V = min_dt / (d_volume[idx] + 1e-30f)` 添加 1e-30f 体积底线。极小体积且 h_min 不小可能表明几何错误。功能安全但应验证。
+
+**PHYS-17** [LOW] `src/aero/cfd/gpu_diagnostics.cu:17-25`
+边界初始化使用 `numeric_limits<Real>::max()` 和 `lowest()`。float 为 3.4e38/-3.4e38，在有效 float 范围内正确工作。
+
+**PHYS-18** [INFO] `src/aero/cfd/gpu_rans.cu:39,49,66,125, reconstruction_gpu.cu:76,90,etc.`
+`atomicCAS(d_failed, 0, 1)` 用于失败标志，具有获取-释放语义。正确。
+
+**PHYS-19** [INFO] `src/aero/cfd/gpu_update.cu:22-24`
+`d_partial_buf` 为模块作用域静态指针。多 GPU 分区时多流并发调用可能导致缓冲区覆盖。当前单流求解器不触发。
+
+**PHYS-20** [INFO] `src/aero/cfd/cfd_residual_gpu.cu:79-80`
+GPU/CPU HLLC 波速公式一致。对称流极限下正确。
+
+**PHYS-21** [INFO] `src/aero/cfd/cfd_residual_gpu.cu:338`
+`check_status_kernel` 计算的 L2 实际为 `(q_new - q_old)^2`（状态变化量）而非残差 L2。收敛判据 `convergence_tol` 与状态变化量单位不一致。
+
+---
+
+### 测试覆盖 (COV)
+
+**COV-1** [HIGH] `src/aero/cfd/cfd_residual.cpp:12`
+`compute_euler_residual_cpu`（一阶）无直接 CPU 测试，仅通过 GPU oracle 对比间接验证。建议添加 `test_cfd_residual.cpp`。
+
+**COV-2** [HIGH] `src/aero/cfd/rans.cpp:92`
+`compute_rans_sources`（网格级循环包装器）未被测试。`compute_rans_source`（单元级）已通过 12 个测试覆盖。
+
+**COV-3** [HIGH] `src/aero/cfd/cfd_solver.cpp:41`
+`compact_mesh_nodes` 从未被任何测试直接调用。
+
+**COV-4** [MEDIUM] `src/aero/cfd/mesh_validator.cpp:63,94,135,175`
+各单元类型雅可比符号函数（`tet/hex/penta/pyramid_jacobian_sign`）仅通过 `compute_mesh_quality_detail` 间接测试，缺乏直接单元测试。
+
+**COV-5** [MEDIUM] `src/aero/cfd/reconstruction.cpp:335`
+`compute_barth_jespersen_limiters`（需要网格+梯度）无直接测试。
+
+**COV-6** [MEDIUM] `src/aero/cfd/reconstruction.cpp:280`
+LU 分解与求解函数（`solve_3x3`, `lu_factor_3x3`, `lu_solve_3x3`）无直接单元测试。
+
+**COV-7** [MEDIUM] `src/aero/cfd/mesh_io_cgns.cpp:88`
+`read_mesh_cgns` 仅测试了不可用回退路径，无实际 CGNS 文件测试。CGNS 读取功能实际未被测试。
+
+**COV-8** [MEDIUM] `src/aero/cfd/cfd_solver.cpp:74`
+`integrate_wall_forces` 无直接单元测试，仅通过全求解器力结果间接验证。
+
+**COV-9** [MEDIUM] `src/aero/cfd/mms.cpp:96`
+MMS 测试覆盖 Euler 一阶/二阶、NS 二阶、SA 一阶/二阶，但缺少 NS 一阶源一致性测试。
+
+**COV-10** [MEDIUM] `src/aero/cfd/mesh_gen_stl.cpp:1064` 行
+STL 网格生成器仅 3 个端到端测试，内部函数（`detect_stl_format`, `compute_sdf_grid`, `build_bvh`, `hex_to_6_tets`）无独立测试。
+
+**COV-11** [MEDIUM] `tests/cfd/test_cfd_gpu.cpp:1058`
+着色确定性测试仅检查残差确定性，未测试梯度和限幅器的着色确定性。
+
+**COV-12** [LOW] `tests/cfd/test_cfd_gpu.cpp:1347`
+无粘性+湍流组合模式下注入 NaN u/v/w 的 GPU 失效检测测试。
+
+**COV-13** [LOW] 无测试文件
+空网格（0 单元）未被构造并传递给求解器函数。`compute_state_bounds` 有 `q.empty()` 提前返回但未被测试。
+
+**COV-14** [LOW] 无测试文件
+单单元网格未被测试。求解器状态机在 1 单元时可能暴露面循环除零。
+
+**COV-15** [LOW] `tests/cfd/test_cfd_state.cpp:313`
+`make_freestream` 测试 Mach=10 但未测试 Mach > 30 的高超声速情况。
+
+**COV-16** [LOW] 无测试文件
+极低 Mach（< 0.01）未被测试 `make_freestream` 或 HLLC 通量。
+
+**COV-17** [LOW] 未找到
+PH7- 和 PH12- 问题 ID 的回归测试未在测试文件中找到。PH2-/PH4-/PH5-/PH8-/PH11- 存在。
+
+**COV-18** [LOW] 未找到
+PERF- 回归测试未在任何测试文件中找到。
+
+**COV-19** [INFO] `src/aero/cfd/partition.cpp:36`
+`partition_linear` 仅测试了 n_ranks=1 和 n_ranks=2，无 n_ranks > 2 或 `upload_partition_to_device` 测试。
+
+**COV-20** [INFO] `tests/cfd/test_cfd_mesh_stl.cpp:94`
+STL 测试仅使用程序化生成的锥体，无二进制格式 STL、多实体 STL 或退化三角形 STL。
+
+**COV-21** [INFO] `tests/cfd/test_oracle_fp64.cpp`
+FP64 oracle 仅测试平板 Euler/粘性/RANS，无立方体网格、混合单元或 MMS 源项测试。
+
+**COV-22** [INFO] `tests/cfd/test_cfd_mesh.cpp:426`
+CGNS 测试仅测试库不可用回退，无实际 CGNS 文件读写。
+
+**COV-23** [INFO] `tests/cfd/test_cfd_euler.cpp:10`
+Euler 测试仅使用结构化立方体网格，无 tet-only 或混合单元网格测试。
+
+---
+
+### 性能优化 (PERF2)
+
+**PERF2-1** [HIGH] `gpu_solver.cu:214, 229, 308`
+隐式 Newton 回溯循环中 L2 范数通过 `cudaMemcpy DeviceToHost` 回读。每轮外迭代至少 3 次同步，最坏情况每轮 Newton 迭代最多 19 次。建议使用设备端核函数检查收敛性。
+
+**PERF2-2** [HIGH] `gpu_viscous.cu:32, 317`
+两个粘性通量核函数均缺 `__launch_bounds__`，~70+ 局部变量可能导致寄存器溢出至 local memory。`euler_residual_kernel` 已有 `__launch_bounds__(128)`。
+
+**PERF2-3** [HIGH] `lusgs_gpu.cu:84-120, 160-192, 224-256`
+`compute_diag_kernel`/`forward_sweep_kernel`/`backward_sweep_kernel` 各自迭代所有面来搜索每个单元的邻接点。`O(N_cells * N_faces)` 复杂度，对大规模网格极为低效。建议构建 CSR 格式的单元-面邻接列表。
+
+**PERF2-4** [MEDIUM] `lusgs_gpu.cu:70, 95-106, 143-184, 214-248`
+LU-SGS 核函数中对 `d_q[cell * nvar + k]` 的步长-6 访问，每次 warp 命中 6 条缓存线，实际利用的 L2 带宽约 1/6。建议 `float4`/`float2` 向量化加载。
+
+**PERF2-5** [MEDIUM] `reconstruction_gpu.cu:75-78, 89-91, 186-205, 220-222`
+梯度核函数对每个面冗余进行保守→原始转换。六面体网格上每个单元被 6 个面共享，每轮梯度计算中每个单元被转换多达 6 次（GPU 版的 PERF-D1 问题）。建议预转换 `d_q`。
+
+**PERF2-6** [MEDIUM] `gpu_wall.cu:79-84, 145-155`
+壁面力核函数始终使用原子操作，7 个力/力矩计数器上的冲突。PERF-A4 尝试着色路径但回退。建议每块共享内存部分归约，每块仅一次 atomicAdd。
+
+**PERF2-7** [MEDIUM] `gpu_solver.cu:115`
+尽管所有 GPU 函数已有流参数，求解器仅使用单条流。核函数无法并发执行。建议创建 2-3 条计算流。
+
+**PERF2-8** [LOW] `gpu_diagnostics.cu:88-93`
+`state_bounds_kernel` 使用 `real_atomic_min/max` 将局部极值写入 6 个全局标量。PERF-A1/A2 已修复时间步长和 L2 的类似问题。
+
+**PERF2-9** [LOW] `lusgs_gpu.cu:281-283, 314-316`
+`allocate()`/`rebuild_coloring()` 完整 D2H 面数组拷贝用于 CPU 侧着色。AMR 网格上频繁重建时可能累积开销。建议将着色移至 GPU。
+
+**PERF2-10** [LOW] `gpu_rans.cu:105, 108, 115`
+RANS 核函数每单元重新计算循环不变 SA 常数（cw1、cv1³、cw3⁶ 等）。建议提升至 `constexpr` 或 `__constant__` 内存。
+
+**PERF2-11** [INFO] `CMakeLists.txt:67`
+CUDA Release 编译缺少强制 `-O3` 优化。nvcc 默认 `-O2`。
+
+**PERF2-12** [MEDIUM] 多个文件
+多数热点核函数缺 `__launch_bounds__` 标注：`gg_gradient_kernel_*`、`update_minmax_kernel_*`、`bj_limiter_kernel_*`、`viscous_flux_kernel_*`、`wall_force_kernel`、`rans_source_kernel`、`timestep_kernel`、`update_and_l2_kernel`、`compute_diag_kernel`、`sweep_kernel`。建议面级核函数加 `__launch_bounds__(128)`，单元级核函数加 `__launch_bounds__(256)`。
+

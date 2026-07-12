@@ -910,3 +910,10 @@
 - I4 [OPEN]: Shared Vec3 header deferred (risk > benefit, different function sets in each TU)
 - Verification: TestCfdMeshStl 3/3 PASS
 - Committed as 67ca3ed
+
+2026-07-12 — Pre-Phase 13 四路并行全量审计
+- Architecture compliance (ARCH): 12 findings (3 HIGH, 2 MEDIUM, 3 LOW, 4 INFO) — panel solver/gravity missing CUDA_CHECK, use_gpu default false, engineering namespace wrong
+- Physical correctness (PHYS): 21 findings (4 HIGH, 8 MEDIUM, 5 LOW, 4 INFO) — SA implicit karman^2 bug, SA-neg branch wrong, HLLC no entropy fix, NaN propagation in viscous kernel, FTZ timestep issue
+- Test coverage (COV): 23 findings (3 HIGH, 8 MEDIUM, 6 LOW, 6 INFO) — untested functions (compact_mesh_nodes, compute_rans_sources mesh-wrapper), no CGNS round-trip, no NS order-1 MMS
+- Performance (PERF2): 12 findings (3 HIGH, 5 MEDIUM, 3 LOW, 1 INFO) — implicit D2H syncs in Newton loop, viscous kernel no __launch_bounds__, LU-SGS O(N*F) scan, no multi-stream
+- Total: 68 findings written to ISSUES.md as `## Pre-Phase 13 Audit (2026-07-12)`
