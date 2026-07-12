@@ -2600,8 +2600,8 @@ Four-parallel subagent audit covering architecture compliance, physical/numerica
 
 ### 架构合规 (ARCH)
 
-**ARCH-1** [HIGH] `include/aero/cfd/cfd_config.hpp:26`
-`bool use_gpu = false` — 生产配置默认关闭 GPU，违反 GPU 为生产路径的架构决策。建议改为 `true`，CPU 测试显式覆盖为 `false`。
+**ARCH-1** [FIXED] `include/aero/cfd/cfd_config.hpp:26`
+`bool use_gpu = false` → `true`。
 
 **ARCH-2** [LOW] `app/aero_calc/main.cpp:77`
 入口点默认 `use_gpu = false`，但第 85 行自动选择逻辑覆盖此值。
@@ -2612,8 +2612,8 @@ Four-parallel subagent audit covering architecture compliance, physical/numerica
 **ARCH-4** [HIGH] `src/sim/gravity/gravity_model.cu:216-438`
 重力模型 CUDA 错误检查缺失：`gravity_kernel` 三次内核启动无 CUDA_KERNEL_CHECK，cudaMalloc/cudaMemcpy/cudaFree 无 CUDA_CHECK。`prepare_cuda` 使用 `std::cerr` 而非 `CUDA_CHECK` 并静默继续。
 
-**ARCH-5** [MEDIUM] `include/aero/engineering/engineering_aero.hpp:9, include/aero/engineering/aero_skin_friction.hpp:9`
-工程学命名空间声明为 `aerosp::aero::panel`，但目录为 `include/aero/engineering/`，应为 `aerosp::aero::eng`。
+**ARCH-5** [FIXED] `include/aero/engineering/engineering_aero.hpp:9, include/aero/engineering/aero_skin_friction.hpp:9`
+工程学命名空间 `panel` → `eng`。`aero_solver.cu`/`test_aero_viscous.cu` 添加 `using namespace aerosp::aero::eng;`，`main.cpp` 使用 `eng::` 前缀。
 
 **ARCH-6** [INFO] `CMakeLists.txt:229-239`
 CMake install 规则使用旧品牌名 `AeroSimTargets`，应为 `AerospTargets`。
@@ -2627,8 +2627,8 @@ GPU 代码中存在 PERF-* 任务追踪注释（如 `// PERF-G9: cache events ac
 **ARCH-9** [LOW] `docs/progress.md:416`
 2026-07-10 条目插入在 2026-07-11 条目之后，违反 progress.md 仅追加不插入的约定。
 
-**ARCH-10** [MEDIUM] `tests/test_gravity.cu`
-文件存在于磁盘但未注册在任何 CMakeLists.txt 中，永不编译。
+**ARCH-10** [FIXED] `tests/test_gravity.cu`
+已注册为 `TestGravity` 并可通过 CTest 运行。
 
 **ARCH-11** [INFO] `src/aero/panel/aero_table_gen.cpp`
 面板表生成位于 `src/aero/panel/` 而非 `app/aero_table_gen/`，与 REPO_SPEC.md 目录布局不一致。
