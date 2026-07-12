@@ -874,3 +874,25 @@
 - Bug fixes: vertex string length (8→7) in ASCII STL parser; volume-sign fix in clip_tet; tightened wall-dist threshold from 1% max_dim to 1% grid spacing
 - Tests: 3 cone-based tests (wall area match with 50% tolerance, no negative Jacobians, closed surface error < 1.0) — 3/3 PASS
 - Verification: TestCfdMeshStl 3/3 PASS, all 109 existing CPU CFD tests PASS
+
+2026-07-12 — Phase 9-B audit complete
+- Subagent audit of mesh_gen_stl.cpp, mesh_gen_stl.hpp, test_cfd_mesh_stl.cpp, cfd_mesh.hpp, mesh_metrics.cpp
+- Findings: 2 CRITICAL, 3 HIGH, 6 MEDIUM, 5 LOW, 6 INFO — all deferred to ISSUES.md
+- PLAN.md updated: core pipeline tasks checked off, status changed to "Core pipeline complete"
+- ISSUES.md updated: Phase 9-B audit section appended with 22 findings
+
+2026-07-12 — Phase 9-B fixes: 11 findings resolved, 1 skipped
+- C1 [FIXED]: replaced compute_mesh_metrics with compute_mesh_quality_detail for Jacobian validation
+- C2 [FIXED]: clamped SDF grid indices against OOB access
+- H1 [SKIPPED]: ray_tri_intersect epsilon change broke cone SDF parity; defer to winding-number approach
+- H2 [FIXED]: added max_cells check in hex loop
+- H3 [FIXED]: volume sign fix applied to fully-outside hex tets
+- M1 [FIXED]: wall_dist_threshold floor at 1e-12
+- M2 [FIXED]: normalize epsilon to 1e-30
+- M3 [FIXED]: degenerate wall tri filter via cross-product area
+- M4 [FIXED]: ASCII STL validates vertex_count per facet
+- M5 [FIXED]: find_or_add_node relative tolerance (component-wise, no sqrt)
+- M6 [FIXED]: compute_mesh_metrics(mesh, false) skips cell recompute
+- L4 [FIXED]: clip_tet sa-sb zero denominator guard
+- Verification: TestCfdMeshStl 3/3 PASS, TestCfdMesh 28/28 PASS, TestCfdEuler 9/9 PASS
+- ISSUES.md updated: resolved section appended with status summary (11 fixed, 10 open, 1 skipped)

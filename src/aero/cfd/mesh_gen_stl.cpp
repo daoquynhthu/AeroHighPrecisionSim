@@ -1,6 +1,7 @@
 #include "aero/cfd/mesh_gen_stl.hpp"
 #include "aero/cfd/real.hpp"
 #include "aero/cfd/element_types.hpp"
+#include "aero/cfd/mesh_validator.hpp"
 
 #include <algorithm>
 #include <array>
@@ -37,7 +38,7 @@ Vec3 cross(Vec3 a, Vec3 b) {
 
 Vec3 normalize(Vec3 a) {
     Real n = norm(a);
-    if (n < std::numeric_limits<Real>::min()) return {0, 0, 0};
+    if (n < Real(1e-30)) return {0, 0, 0};
     return a * (1.0f / n);
 }
 
@@ -436,6 +437,11 @@ std::vector<Tri> parse_stl_ascii(const std::string& path, std::string* error) {
         line = line.substr(start);
 
         if (line.compare(0, 6, "facet ") == 0 && line.find("normal") != std::string::npos) {
+            // If we were accumulating a facet and didn't get 3 vertices, it's malformed
+            if (vertex_count != 0 && vertex_count != 3) {
+                if (error) *error = "Malformed ASCII STL: facet with " + std::to_string(vertex_count) + " vertices";
+                return {};
+            }
             size_t pos = line.find("normal");
             if (pos != std::string::npos) {
                 n = parse_vec3(line, pos + 6);
@@ -454,6 +460,10 @@ std::vector<Tri> parse_stl_ascii(const std::string& path, std::string* error) {
             }
         } else if (line.compare(0, 5, "solid") == 0) {
             // Start of a solid — reset
+            if (vertex_count != 0 && vertex_count != 3) {
+                if (error) *error = "Malformed ASCII STL: solid with " + std::to_string(vertex_count) + " vertices";
+                return {};
+            }
             vertex_count = 0;
         }
     }
@@ -610,7 +620,9 @@ ClipOutput clip_tet(Vec3 v[4], Real sdf[4]) {
     auto interp = [&](int a, int b) -> Vec3 {
         // a must be outside (SDF >= 0), b inside (SDF < 0)
         Real sa = sdf[a], sb = sdf[b];
-        Real t = sa / (sa - sb);
+        Real denom = sa - sb;
+        if (std::fabs(denom) < Real(1e-30)) return (v[a] + v[b]) * 0.5f;
+        Real t = sa / denom;
         return v[a] + (v[b] - v[a]) * t;
     };
 
@@ -863,6 +875,12 @@ bool generate_conformal_mesh_from_stl(
                         GeneratedCell gc;
                         for (int nv = 0; nv < 4; ++nv) gc.nodes[nv] = tet_v[t][nv];
                         gc.n_nodes = 4;
+                        // Fix negative volumes like clip_tet does
+                        Real vol = volume_tet_signed(
+                            gc.nodes[0], gc.nodes[1], gc.nodes[2], gc.nodes[3]);
+                        if (vol < 0) {
+                            std::swap(gc.nodes[2], gc.nodes[3]);
+                        }
                         cells.push_back(gc);
                     }
                 } else {
@@ -882,6 +900,9 @@ bool generate_conformal_mesh_from_stl(
                             int gi = static_cast<int>((tv.x - grid.origin.x) / grid.dx + 0.5f);
                             int gj = static_cast<int>((tv.y - grid.origin.y) / grid.dy + 0.5f);
                             int gk = static_cast<int>((tv.z - grid.origin.z) / grid.dz + 0.5f);
+                            gi = std::clamp(gi, 0, grid.nx);
+                            gj = std::clamp(gj, 0, grid.ny);
+                            gk = std::clamp(gk, 0, grid.nz);
                             tet_sdf[nv] = grid.at(gi, gj, gk);
                         }
 
@@ -900,15 +921,22 @@ bool generate_conformal_mesh_from_stl(
                             }
                         }
 
-                        // Add wall triangles
+                        // Add wall triangles, filtering degenerates
                         for (size_t ti = 0; ti + 2 < clip.wall_indices.size(); ti += 3) {
                             WallTri wt;
                             wt.v0 = clip.wall_verts[clip.wall_indices[ti]];
                             wt.v1 = clip.wall_verts[clip.wall_indices[ti + 1]];
                             wt.v2 = clip.wall_verts[clip.wall_indices[ti + 2]];
+                            Vec3 e01 = wt.v1 - wt.v0, e02 = wt.v2 - wt.v0;
+                            if (norm(cross(e01, e02)) < Real(1e-20)) continue;
                             wall_tris.push_back(wt);
                         }
                     }
+                }
+
+                if (cells.size() > cfg.max_cells) {
+                    if (error) *error = "Exceeded max_cells limit (" + std::to_string(cfg.max_cells) + ")";
+                    return false;
                 }
             }
         }
@@ -927,9 +955,11 @@ bool generate_conformal_mesh_from_stl(
     };
     std::vector<NodeRef> unique_nodes;
     auto find_or_add_node = [&](Vec3 p) -> int {
+        Real scale = std::max({std::fabs(p.x), std::fabs(p.y), std::fabs(p.z), Real(1)});
+        Real eps = 1e-8f * scale;
         for (size_t i = 0; i < unique_nodes.size(); ++i) {
             Vec3 d = unique_nodes[i].pos - p;
-            if (std::fabs(d.x) < 1e-8f && std::fabs(d.y) < 1e-8f && std::fabs(d.z) < 1e-8f)
+            if (std::fabs(d.x) < eps && std::fabs(d.y) < eps && std::fabs(d.z) < eps)
                 return unique_nodes[i].idx;
         }
         int idx = static_cast<int>(unique_nodes.size());
@@ -965,7 +995,8 @@ bool generate_conformal_mesh_from_stl(
     // Classify boundary faces: wall faces are those on the iso-surface
     // Use a very tight threshold based on grid spacing to avoid mis-classifying
     // cap/side faces of the clipped region as wall faces.
-    Real wall_dist_threshold = std::min({grid.dx, grid.dy, grid.dz}) * 0.01f;
+    Real min_spacing = std::min({grid.dx, grid.dy, grid.dz});
+    Real wall_dist_threshold = std::max(min_spacing * 0.01f, Real(1e-12f));
 
     for (auto& face : mesh.faces) {
         if (face.boundary != BoundaryKind::Interior) {
@@ -977,8 +1008,11 @@ bool generate_conformal_mesh_from_stl(
         }
     }
 
-    // Recompute metrics with correct boundary classification
-    MeshQualityReport report = compute_mesh_metrics(mesh);
+    // Recompute metrics with correct boundary classification (skip cell recompute — quality_detail handles it)
+    compute_mesh_metrics(mesh, false);
+
+    // Full quality check including negative Jacobians
+    MeshQualityReport report = compute_mesh_quality_detail(mesh);
 
     if (report.negative_jacobian_count > 0) {
         if (error) {

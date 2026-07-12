@@ -2441,3 +2441,133 @@ All 30 Phase 12 audit findings resolved (2026-07-12). The remaining 4 items are 
 | INFO | 8 | 8 | 0 |
 
 **Total**: 30 findings, all fixed or resolved (PH12-M1/M3/M6/M7/L6/L7 fixed in subagent A; I1-I8 resolved via tests/docs in subagent B and follow-up Plan 12.5/12.6 extensions). See `docs/PLAN.md` Phase 12.5 and 12.6 for remaining planned improvements (second-order hanging interpolation, AMR + implicit integration).
+
+## Phase 9-B Audit (2026-07-12)
+
+Source: `src/aero/cfd/mesh_gen_stl.cpp`, `include/aero/cfd/mesh_gen_stl.hpp`, `tests/cfd/test_cfd_mesh_stl.cpp`.
+
+### CRITICAL
+
+**PH9B-C1: `negative_jacobian_count` always zero — dead code quality gate**
+`src/aero/cfd/mesh_gen_stl.cpp:981-989`
+
+`generate_conformal_mesh_from_stl` calls `compute_mesh_metrics()` (from `mesh_metrics.cpp`) and checks `report.negative_jacobian_count > 0`. But `compute_mesh_metrics` never sets this field — it remains at struct-default 0. The Jacobian computation lives in `compute_mesh_quality_detail()` (`mesh_validator.cpp:186`), which is not called here. The test at `test_cfd_mesh_stl.cpp:91` calls `compute_mesh_quality_detail` (the correct function), so the test catches negative Jacobians — but the generator's own validation is broken. Fix: call `compute_mesh_quality_detail` instead, or make `compute_mesh_metrics` populate `negative_jacobian_count`.
+
+**PH9B-C2: SDF grid access for clipped tet vertices has no bounds check — potential OOB**
+`src/aero/cfd/mesh_gen_stl.cpp:882-886`
+
+After clipping, tet vertices (including interpolated edge points) are mapped back to SDF grid indices via `static_cast<int>((tv.x - origin.x) / dx + 0.5f)`. If `tv` lies exactly at a grid boundary and FP rounding pushes the index to -1 or nx+1, `grid.at(gi, gj, gk)` performs OOB vector access. Fix: clamp indices.
+
+### HIGH
+
+**PH9B-H1: Ray-parity inside/outside test double-counts edge/vertex intersections**
+`src/aero/cfd/mesh_gen_stl.cpp:132-156, 255-275, 298-313`
+
+`signed_distance` determines sign by counting ray-triangle intersections (odd = inside). `ray_tri_intersect` uses strict inequalities, so a ray hitting exactly at u=0, v=0, or u+v=1 (edge/vertex) is accepted. When the ray passes through a shared edge, it hits multiple adjacent triangles, causing an even count → wrong sign. Fix: add epsilon tolerance to reject near-edge intersections, or use winding-number approach.
+
+**PH9B-H2: `max_cells` config parameter is never checked — unbounded vector growth**
+`src/aero/cfd/mesh_gen_stl.cpp:831,832` and `mesh_gen_stl.hpp:17`
+
+`StlMeshConfig::max_cells = 500000` is declared and set in the test, but `generate_conformal_mesh_from_stl` never checks `cells.size()` or `wall_tris.size()` against it. Fix: insert a check in the hex loop.
+
+**PH9B-H3: Fully-outside hex cells bypass volume sign fix**
+`src/aero/cfd/mesh_gen_stl.cpp:857-867`
+
+Cells where all 8 corners are outside are decomposed into 6 tets via `hex_to_6_tets` and pushed directly — they never pass through `clip_tet`, which is the only place the volume sign fix is applied. If the hex has inverted winding, all 6 tets could have negative signed volume. Face normals would be inverted. Fix: apply same correction to fully-outside tets, or always route through `clip_tet`.
+
+### MEDIUM
+
+**PH9B-M1: Wall distance threshold is absolute — brittle for extreme scales**
+`src/aero/cfd/mesh_gen_stl.cpp:968`
+
+`wall_dist_threshold = min(dx, dy, dz) * 0.01f`. For micron-scale geometry (dx ≈ 1e-6), threshold = 1e-8, which is at float precision limit. Fix: add guard `std::max(..., 1e-12f)`.
+
+**PH9B-M2: `normalize` uses `min()` for zero detection — too permissive**
+`src/aero/cfd/mesh_gen_stl.cpp:39-42`
+
+`if (n < std::numeric_limits<Real>::min())` — for float this is 1.175e-38. The intent is "near-zero", not "below smallest normalized". Fix: use `epsilon()` or absolute tolerance.
+
+**PH9B-M3: Degenerate wall triangles from clip_tet not filtered**
+`src/aero/cfd/mesh_gen_stl.cpp:904-910, 721-729`
+
+When SDF=0 passes exactly through a hex corner, two interpolated vertices from different edges can land at the same position, producing zero-area wall triangles. Fix: check area and skip degenerates.
+
+**PH9B-M4: ASCII STL parser does not validate vertex count per facet**
+`src/aero/cfd/mesh_gen_stl.cpp:438-458`
+
+If a malformed ASCII STL has <3 `vertex` lines per `facet`, incomplete data is silently overwritten. Fix: assert `vertex_count == 3` before resetting.
+
+**PH9B-M5: `find_or_add_node` tolerance is absolute — problematic for `float` at large scale**
+`src/aero/cfd/mesh_gen_stl.cpp:929-938`
+
+Dedup check `fabs(d) < 1e-8f` is absolute. At coordinate magnitude 1e4, ulp ≈ 0.001 — 1e-8 is below representable precision, so all vertices are unique. Fix: use relative tolerance or hash-based approach.
+
+**PH9B-M6: `compute_mesh_metrics` called twice — redundant work**
+`src/aero/cfd/mesh_gen_stl.cpp:963,981`
+
+`rebuild_mesh_faces(mesh)` internally calls `compute_mesh_metrics`. Then after wall classification, `compute_mesh_metrics` is called again. Fix: skip recompute on second call.
+
+### LOW
+
+**PH9B-L1: `ray_aabb_intersect` division by zero on zero-length direction**
+`src/aero/cfd/mesh_gen_stl.cpp:284-295`
+
+`inv_d = 1.0f / dir_component` produces ±inf when component is zero. Mathematically correct for axis-aligned rays, but fragile. Fix: guard with epsilon.
+
+**PH9B-L2: Binary STL detection can misidentify files with "solid" in binary header**
+`src/aero/cfd/mesh_gen_stl.cpp:392-398`
+
+`detect_stl_format` checks first 5 bytes for "solid". A binary STL whose header starts with "solid" and whose random num_triangles happens to match file size could be misidentified as ASCII. Fix: use more robust heuristic.
+
+**PH9B-L3: No validation of STL triangle normal direction consistency**
+`src/aero/cfd/mesh_gen_stl.cpp:504-506, 452`
+
+Normal vectors are recomputed from geometry, but no check is made for consistent manifold orientation. Inconsistent normals produce incorrect SDF signs. Fix: add optional validation pass.
+
+**PH9B-L4: `clip_tet` interpolation denominator `sa-sb` could be zero**
+`src/aero/cfd/mesh_gen_stl.cpp:611-614`
+
+`t = sa / (sa - sb)`. If both sa and sb are zero (SDF exactly 0 at both endpoints), denominator is 0 → NaN. Fix: check `fabs(sa - sb) < epsilon`.
+
+**PH9B-L5: `wall_dist_threshold` uses `min()` of grid spacings — zero if any spacing is zero**
+`src/aero/cfd/mesh_gen_stl.cpp:968`
+
+If STL has zero extent in any dimension, grid spacing is zero → threshold zero → all wall faces fail. Fix: use `std::max(min(dx, dy, dz), 1e-12f)`.
+
+### INFO
+
+| ID | Issue | File:Line | Detail |
+|----|-------|-----------|--------|
+| I1 | BVH `closest_distance` O(N) worst case | mesh_gen_stl.cpp:210-227 | When query point is inside root AABB, `box_dist` returns 0 → no pruning. All leaves visited. |
+| I2 | `find_or_add_node` O(N²) | mesh_gen_stl.cpp:929-938 | Linear scan for every tet vertex. Use `std::unordered_map` with spatial hash. |
+| I3 | `max_cells` config unused | mesh_gen_stl.hpp:17 | Declared, initialized, set in test, but never read. |
+| I4 | Two `Vec3` definitions in anonymous namespaces | mesh_gen_stl.cpp:21, mesh_metrics.cpp:17 | Separate TUs, no ODR violation, but could be unified. |
+| I5 | Prism layer config fields unused | mesh_gen_stl.hpp:19-22 | `prism_layers`, `n_prism_layers`, `prism_first_height`, `prism_growth_ratio` declared but not referenced. |
+| I6 | Wall triangle vertex coordinates duplicated | mesh_gen_stl.cpp:904-910 | Wall tri copies vertices by value; memory impact small but unnecessary. |
+
+### Summary
+
+| Severity | Count | Fixed | Open | Skipped |
+|----------|-------|-------|------|---------|
+| CRITICAL | 2 | 2 | 0 | 0 |
+| HIGH | 3 | 2 | 0 | 1 |
+| MEDIUM | 6 | 6 | 0 | 0 |
+| LOW | 5 | 1 | 4 | 0 |
+| INFO | 6 | 0 | 6 | 0 |
+
+**Total**: 22 findings, 11 fixed, 10 open, 1 skipped. See `docs/progress.md` 2026-07-12 for fix details.
+
+### Resolved (2026-07-12)
+
+- **PH9B-C1** [FIXED]: Added `#include "mesh_validator.hpp"` and replaced `compute_mesh_metrics(mesh)` with `compute_mesh_quality_detail(mesh)` at end of `generate_conformal_mesh_from_stl`. The quality gate now actually checks `negative_jacobian_count`.
+- **PH9B-C2** [FIXED]: Added `std::clamp(gi, 0, grid.nx)` etc. before `grid.at(gi, gj, gk)` in the tet vertex SDF lookup.
+- **PH9B-H1** [SKIPPED]: Epsilon tolerance in `ray_tri_intersect` (`u < 1e-12f` etc.) systematically alters SDF parity for the cone STL, reducing wall area from 1.74 to 0.98. The parity double-count is a known limitation of single-ray inside/outside testing; a proper fix would require multiple random directions or winding-number approach.
+- **PH9B-H2** [FIXED]: Added `cells.size() > cfg.max_cells` check in the hex loop body.
+- **PH9B-H3** [FIXED]: Added `volume_tet_signed` check + vertex swap after `hex_to_6_tets` in the fully-outside branch.
+- **PH9B-M1** [FIXED]: `wall_dist_threshold = std::max(min_spacing * 0.01f, Real(1e-12f))`.
+- **PH9B-M2** [FIXED]: `normalize`: `n < 1e-30` instead of `n < std::numeric_limits<Real>::min()`.
+- **PH9B-M3** [FIXED]: Wall tri degenerate filter: `norm(cross(e01, e02)) < 1e-20` → skip.
+- **PH9B-M4** [FIXED]: ASCII parser validates `vertex_count == 3` at each new "facet" and "solid" boundary.
+- **PH9B-M5** [FIXED]: `find_or_add_node` uses component-wise comparison with scale `eps = 1e-8 * max(|p|, 1)` — avoids `norm()` (sqrt) for performance.
+- **PH9B-M6** [FIXED]: Second `compute_mesh_metrics(mesh, false)` skips cell recompute.
+- **PH9B-L4** [FIXED]: `clip_tet` interp: guard `fabs(denom) < 1e-30` → return midpoint.
