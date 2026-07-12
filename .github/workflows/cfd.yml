@@ -1,9 +1,14 @@
 name: CFD
 
-on: [push, pull_request]
+on:
+  push:
+  pull_request:
+  schedule:
+    - cron: '0 6 * * 1'
 
 jobs:
   build:
+    if: github.event_name != 'schedule'
     name: Build + Test (Windows)
     runs-on: windows-latest
     steps:
@@ -42,6 +47,7 @@ jobs:
           path: build/coverage/
 
   sanitize:
+    if: github.event_name != 'schedule'
     name: Sanitize (ASAN+UBSAN)
     runs-on: ubuntu-latest
     steps:

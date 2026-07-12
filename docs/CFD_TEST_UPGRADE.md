@@ -341,7 +341,7 @@ Zero tolerance: any ASAN/UBSAN error is a CI failure.
 - [x] Write tests for uncovered blocks (priority: core arithmetic, boundary conditions, reconstruction)
 - [x] Add coverage threshold gate to CI pipeline
 - [x] Add sanitizer gate to CI pipeline
-- [ ] Set up cron job (weekly) to regenerate coverage report and detect regressions
+- [x] Set up cron job (weekly) to regenerate coverage report and detect regressions
 
 ### 3.5 Files Changed
 

@@ -677,3 +677,10 @@
 - Registered TestCfdFuzz in tests/CMakeLists.txt (CUDA target, links missile_lib).
 - Created scripts/run_cuda_memcheck.ps1 helper.
 - Verification: `ctest -R Cfd` reports 8/8 PASS (CfdMesh 11/11, CfdEuler 8/8, CfdDiagnostics 4/4, CfdReconstruction 7/7, CfdViscous 11/11, CfdState 26/26, CfdGpu 62/62, CfdFuzz 6/6). Phase B gate: all 7 tasks complete.
+
+2026-07-12 — Phase C cron job (CFD_TEST_UPGRADE.md 3.4 final task)
+- Added `on: schedule` with `cron: '0 6 * * 1'` (weekly Monday 6AM UTC) to `.github/workflows/cfd.yml`.
+- Build (Windows) and sanitize jobs skip on schedule (`if: github.event_name != 'schedule'`).
+- Coverage job runs on schedule too, serving as weekly regression detection with threshold gate (line≥45%, branch≥28%).
+- docs/CFD_TEST_UPGRADE.md Phase C 3.4: cron task marked [x].
+- Phase C fully closed.
