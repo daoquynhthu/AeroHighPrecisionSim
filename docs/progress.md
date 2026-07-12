@@ -937,3 +937,9 @@
 - Fix: CPU `cfd_residual.cpp` 3 locations add `else if (Farfield)` + `else { return false; }`
 - New test: CFD-PHYS3 — corrupt one face to unknown BoundaryKind(99), verify GPU residual fails
 - Verification: TestCfdGpu 65/65 PASS
+
+2026-07-12 — PHYS-4: Fix d_dt_cell over-allocation (nvar_cells → n_cells)
+- Fix: d_dt_cell now allocates n_cells (per-cell timestep); separated d_neg_r at nvar_cells for residual negation scratch
+- The alias `Real* d_neg_r = d_dt_cell` removed; d_neg_r has its own proper allocation
+- Existing implicit solver tests (test_implicit_solver_euler_sanity, etc.) cover the path
+- Verification: TestCfdGpu 65/65 PASS

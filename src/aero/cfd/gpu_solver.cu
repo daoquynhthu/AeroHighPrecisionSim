@@ -92,6 +92,7 @@ static CfdSolveSummary solve_gpu_impl(
     LusgsPreconditioner* lusgs = nullptr;
     Real* d_dq = nullptr;
     Real* d_dt_cell = nullptr;
+    Real* d_neg_r = nullptr;
     Real* d_r_saved = nullptr;
     Real* d_q_backup = nullptr;
     Real* d_scratch = nullptr;
@@ -100,7 +101,8 @@ static CfdSolveSummary solve_gpu_impl(
         d_dq = nullptr; d_dt_cell = nullptr; d_r_saved = nullptr; d_q_backup = nullptr;
         if (!cuda_check(cudaMalloc(&d_dq, nvar_cells * sizeof(Real)), "cudaMalloc d_dq", error)) goto fail;
         if (!cuda_check(cudaMemset(d_dq, 0, nvar_cells * sizeof(Real)), "zero d_dq", error)) goto fail;
-        if (!cuda_check(cudaMalloc(&d_dt_cell, nvar_cells * sizeof(Real)), "cudaMalloc d_dt_cell", error)) goto fail;
+        if (!cuda_check(cudaMalloc(&d_dt_cell, n_cells * sizeof(Real)), "cudaMalloc d_dt_cell", error)) goto fail;
+        if (!cuda_check(cudaMalloc(&d_neg_r, nvar_cells * sizeof(Real)), "cudaMalloc d_neg_r", error)) goto fail;
         if (!cuda_check(cudaMalloc(&d_r_saved, nvar_cells * sizeof(Real)), "cudaMalloc d_r_saved", error)) goto fail;
         if (!cuda_check(cudaMalloc(&d_q_backup, nvar_cells * sizeof(Real)), "cudaMalloc d_q_backup", error)) goto fail;
         if (!cuda_check(cudaMalloc(&d_scratch, 4 * nvar_cells * sizeof(Real)), "cudaMalloc d_scratch", error)) goto fail;
@@ -205,7 +207,6 @@ if (config.viscous) {
                 }
             }
 
-            Real* d_neg_r = d_dt_cell;
             if (!dcopy_gpu(d_mesh.residual_device(), d_neg_r, nvar_cells, stream)) { if (error) *error = "copy R failed"; goto fail; }
             if (!dscal_gpu(-1, d_neg_r, nvar_cells, stream)) { if (error) *error = "negate R failed"; goto fail; }
 
@@ -487,6 +488,7 @@ cleanup:
     if (lusgs) { delete lusgs; lusgs = nullptr; }
     cuda_free_safe(d_dq);
     cuda_free_safe(d_dt_cell);
+    cuda_free_safe(d_neg_r);
     cuda_free_safe(d_r_saved);
     cuda_free_safe(d_q_backup);
     cuda_free_safe(d_scratch);

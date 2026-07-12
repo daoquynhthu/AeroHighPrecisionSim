@@ -2650,8 +2650,8 @@ SA-neg 分支（chi < 0）：破坏项为 `-cw1*(nu_tilde/d)^2`，推动负 nu_t
 **PHYS-3** [FIXED] `src/aero/cfd/cfd_residual_gpu.cu:236-244`
 GPU 残差组装中所有未知边界类型静默按远场处理。`else` 分支捕获未识别的 BoundaryKind 时应报错而非静默错误。修复：GPU kernel 添加 `else if (Farfield)` + `else { atomicExch(d_failed,1); return; }`；CPU `cfd_residual.cpp` 三处同步修复。回归测试 `CFD-PHYS3` 验证未知边界类型触发失败。
 
-**PHYS-4** [HIGH] `src/aero/cfd/gpu_solver.cu:103`
-`d_dt_cell` 分配 `nvar_cells = n_cells * nvar` 但按每单元访问（`d_dt_cell[idx]`），多分配 6 倍内存。功能正确但浪费内存，且表明单元计数与数组跨度之间存在潜在歧义。
+**PHYS-4** [FIXED] `src/aero/cfd/gpu_solver.cu:103`
+`d_dt_cell` 之前分配 `nvar_cells` 但仅需每单元一个值。分离出 `d_neg_r`（需要 `nvar_cells` 作残差暂存），`d_dt_cell` 改为 `n_cells`。现有隐式求解器测试覆盖此路径。
 
 **PHYS-5** [MEDIUM] `src/aero/cfd/cfd_residual_gpu.cu:70-153`
 GPU HLLC 通量缺乏熵修正/保号声速校正。波速 `s_l = fmin(vn_l - a_l, vn_r - a_r)` 和 `s_r = fmax(vn_l + a_l, vn_r + a_r)` 未使用 `min(0, ...)`/`max(0, ...)` 稳定化。CPU 版本（`cfd_solver.cpp:227`）也存在同样遗漏。
