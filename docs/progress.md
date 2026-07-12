@@ -954,6 +954,13 @@
 - PHYS-6: Added 12-component gradient finite check in viscous_flux_kernel_atomic and viscous_flux_kernel_colored (gpu_viscous.cu)
 - Verification: TestCfdGpu 65/65, TestCfdRans 14/14, TestCfdEuler 9/9 all PASS
 
+2026-07-12 — PHYS-9: wall heat flux missing gamma factor
+- Fix: added gamma to wall conductivity in gpu_wall.cu and cfd_solver.cpp
+- Non-dimensional derivation: k = Cp*mu/Pr = gamma*R*mu/(Pr*(gamma-1));
+  with T = p/rho (R=1), the code needs gamma factor
+- Consistent with existing GPU viscous flux kernel formula
+- Verification: TestCfdGpu 65/65, TestCfdRans 14/14, TestCfdEuler 9/9 all PASS
+
 2026-07-12 — PHYS-4: Fix d_dt_cell over-allocation (nvar_cells → n_cells)
 - Fix: d_dt_cell now allocates n_cells (per-cell timestep); separated d_neg_r at nvar_cells for residual negation scratch
 - The alias `Real* d_neg_r = d_dt_cell` removed; d_neg_r has its own proper allocation

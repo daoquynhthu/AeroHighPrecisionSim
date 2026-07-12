@@ -2665,8 +2665,8 @@ GPU HLLC 通量缺乏熵修正/保号声速校正。波速 `s_l = fmin(vn_l - a_
 **PHYS-8** [FIXED] `src/aero/cfd/gpu_rans.cu:86`
 SA chi 公式：`chi = Re * rho * nu_tilde / (mu + 1e-30f) + 1e-30f`。加法项使 chi 偏移 ~1e-30，阻止 chi 在壁面处精确为零。修复：移除尾端 `+ 1e-30f`。GPU RANS source、GPU viscous（2处）、CPU viscous 均已修复。
 
-**PHYS-9** [MEDIUM] `src/aero/cfd/gpu_wall.cu:152`
-壁面热导率：`conductivity = mu_face / ((gamma - 1.0f) * prandtl + 1e-30f)`。标准粘性能量通量使用 `kappa = mu * Cp / Pr = mu * gamma * R / ((gamma-1) * Pr)`，但代码缺少 `gamma * R` 因子。需要对照无量纲形式验证。
+**PHYS-9** [FIXED] `src/aero/cfd/gpu_wall.cu:152`
+壁面热导率：`conductivity = mu_face / ((gamma - 1.0f) * prandtl + 1e-30f)` 缺少 gamma 因子。无量纲分析确认正确公式为 `gamma * mu / (Pr * (gamma-1))`（与 GPU 粘性通量核一致）。GPU/CPU 均已修复。
 
 **PHYS-10** [FIXED] `src/aero/cfd/mesh_validator.cpp:211-228`
 `compute_mesh_quality_detail` 计算 `closed_surface_error` 并存储于 `MeshQualityReport` 中，但求解器启动前不检查此值。非水密网格上的守恒误差不被检测。修复：`CfdSolver::load_mesh` 新增面积-法向向量和检查，封闭性误差 > 1e-4×总面积时返回 false。

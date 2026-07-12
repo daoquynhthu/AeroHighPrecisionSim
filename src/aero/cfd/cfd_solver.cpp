@@ -174,7 +174,7 @@ void integrate_wall_forces(const CfdMesh& mesh, const std::vector<int>& wall_fac
             mz += face.cx * ty - face.cy * tx;
 
             Real dT_dn = dT_dx * face.nx + dT_dy * face.ny + dT_dz * face.nz;
-            Real conductivity = mu_face / ((config.gamma - 1.0f) * config.prandtl + 1e-30f);
+            Real conductivity = mu_face * config.gamma / ((config.gamma - 1.0f) * config.prandtl + 1e-30f);
             qw += -conductivity * dT_dn * inv_Re * face.area;
         }
     }

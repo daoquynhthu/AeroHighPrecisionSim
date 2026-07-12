@@ -149,7 +149,7 @@ __global__ void wall_force_kernel(
         real_atomic_add(&d_forces[4], fcz * tx - fcx * tz);
         real_atomic_add(&d_forces[5], fcx * ty - fcy * tx);
 
-        Real conductivity = mu_face / ((gamma - 1.0f) * prandtl + 1e-30f);
+        Real conductivity = mu_face * gamma / ((gamma - 1.0f) * prandtl + 1e-30f);
         Real dT_dn = dT_dx * nx + dT_dy * ny + dT_dz * nz;
         Real q_face = -conductivity * dT_dn * inv_Re * area;
         real_atomic_add(&d_forces[6], q_face);
