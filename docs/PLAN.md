@@ -1251,6 +1251,19 @@ Gate:
 Files changed: `amr_types.hpp`, `amr_refine.cpp`, `amr_interpolate.cpp`, `mesh_metrics.cpp`, `cfd_solver.cpp`, `cfd_solver_gpu.cpp`
 Verification: TestCfdMesh 22/22, TestCfdEuler 9/9 — all PASS.
 
+All 5 HIGH issues fixed (2026-07-12 follow-up):
+
+| ID | Description | Fix |
+|----|-------------|------|
+| PH12-H1 | TET4 negative Jacobian (4/8 sub-cells) | Swap last two vertices in children[1][3][4][7] |
+| PH12-H2 | Hanging interpolation never called | Post-residual correction: detect+convert gradients+apply_hanging_interpolation |
+| PH12-H3 | Stale gradients after AMR | Recompute w+grads+limited after AMR block |
+| PH12-H4 | Redundant compute_mesh_metrics | Remove call from CfdSolver::load_mesh |
+| PH12-H5 | No 2:1 balance after coarsening | Filter coarsening requests: block if finer neighbor isn't also coarsening |
+
+Files changed: `cfd_solver.cpp` (+180 lines), `ISSUES.md`, `progress.md`
+Verification: TestCfdMesh 22/22, TestCfdEuler 9/9 — all PASS.
+
 ---
 
 ## Phase 13 — Advanced Turbulence Models

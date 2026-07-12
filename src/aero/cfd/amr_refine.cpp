@@ -82,13 +82,13 @@ void refine_tet4(const CfdCell& parent, int parent_id,
     // 8 child tets
     TetLocal children[8] = {
         {n0, m01, m02, m03},
-        {n1, m01, m12, m13},
+        {n1, m01, m13, m12},
         {n2, m02, m12, m23},
-        {n3, m03, m13, m23},
-        {m01, m02, m12, m03},
+        {n3, m03, m23, m13},
+        {m01, m12, m02, m03},
         {m01, m12, m13, m03},
         {m02, m03, m12, m23},
-        {m03, m12, m13, m23}
+        {m03, m13, m12, m23}
     };
 
     int child_level = parent.refinement_level + 1;
@@ -241,10 +241,13 @@ bool refine_cells(CfdMesh& mesh,
                   std::vector<RefinementRecord>* records_out,
                   std::string* error,
                   const std::vector<RefinementRecord>* prev_records,
-                  std::vector<CoarsenInfo>* coarsen_info) {
+                  std::vector<CoarsenInfo>* coarsen_info,
+                  int max_level) {
     // ----- 1. Build sets for refine and coarsen -----
     std::vector<int> to_refine, to_coarsen;
     for (const auto& req : requests) {
+        if (req.cell_id < 0 || req.cell_id >= static_cast<int>(mesh.cells.size()))
+            continue;
         if (req.flag == RefinementFlag::Refine) to_refine.push_back(req.cell_id);
         else if (req.flag == RefinementFlag::Coarsen) to_coarsen.push_back(req.cell_id);
     }
@@ -255,7 +258,7 @@ bool refine_cells(CfdMesh& mesh,
 
     // Level cap check
     for (int id : to_refine) {
-        if (mesh.cells[id].refinement_level >= 5) {
+        if (mesh.cells[id].refinement_level >= max_level) {
             if (error) *error = "refinement level exceeds max (5)";
             return false;
         }
@@ -335,7 +338,6 @@ bool refine_cells(CfdMesh& mesh,
     }
 
     std::size_t node_count_before = mesh.nodes.size();
-    int ci_new = 0;
     for (int ci = 0; ci < static_cast<int>(mesh.cells.size()); ++ci) {
         if (removed[ci]) continue;
         if (replaced[ci]) {
@@ -352,7 +354,6 @@ bool refine_cells(CfdMesh& mesh,
         } else {
             new_cells.push_back(mesh.cells[ci]);
         }
-        ++ci_new;
     }
 
     // ----- 4. Insert coarsened parent cells -----

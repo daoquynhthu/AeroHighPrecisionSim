@@ -39,28 +39,21 @@ std::vector<RefinementRequest> compute_gradient_sensor(
         Real rho_L = q[L].rho;
         Real rho_R = q[R].rho;
         Real avg_rho = 0.5f * (std::fabs(rho_L) + std::fabs(rho_R));
-        if (avg_rho < std::numeric_limits<Real>::min()) continue;
+        if (avg_rho < 1e-10f) continue;
 
         Real jump = std::fabs(rho_L - rho_R) / avg_rho;
         if (jump > cell_error[L]) cell_error[L] = jump;
         if (jump > cell_error[R]) cell_error[R] = jump;
     }
 
-    // Also check boundary faces (ghost density ≈ left cell density for slip walls,
-    // or extrapolated for other boundaries — use face's left cell rho as estimate)
-    for (const auto& face : mesh.faces) {
-        if (face.boundary == BoundaryKind::Interior) continue;
-        int L = face.left_cell;
-        if (L < 0 || L >= n_cells) continue;
-        // For boundary faces, the density gradient across is zero (ghost = interior)
-        // so skip — no refinement trigger from boundaries.
-    }
+    // Boundary faces are skipped: ghost density ≈ interior cell density, so
+    // no refinement trigger from boundaries.
 
     // Generate requests based on cell error vs thresholds
     for (int i = 0; i < n_cells; ++i) {
         if (cell_error[i] > config.refine_tol) {
             requests[i].flag = RefinementFlag::Refine;
-        } else if (cell_error[i] < config.coarsen_tol && mesh.cells[i].refinement_level > 0) {
+        } else if (cell_error[i] <= config.coarsen_tol && mesh.cells[i].refinement_level > 0) {
             requests[i].flag = RefinementFlag::Coarsen;
         }
     }

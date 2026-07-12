@@ -2,7 +2,7 @@
 
 #include "aero/cfd/cfd_mesh.hpp"
 #include "aero/cfd/cfd_state.hpp"
-#include "aero/cfd/real.hpp"
+#include "aero/cfd/real_fwd.hpp"
 
 #include <vector>
 

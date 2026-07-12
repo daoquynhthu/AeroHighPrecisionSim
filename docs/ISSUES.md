@@ -2312,106 +2312,65 @@ Fixed: global `CMAKE_CUDA_SEPARABLE_COMPILATION ON` removed (part of PERF-H2); o
 - **Files**: `src/aero/cfd/cfd_solver.cpp:503-507`
 - **Fix**: AMR 步后将 `residual_l2` 置为 `convergence_tol`（`cfd_solver.cpp:575`），强制下一完整迭代计算正确残差后判断收敛。
 
-### HIGH
+### HIGH [5 FIXED]
 
-**PH12-H1: TET4 子单元节点顺序导致 4/8 子单元负雅可比**
+**PH12-H1: TET4 子单元节点顺序导致 4/8 子单元负雅可比** [FIXED]
 - **Severity**: HIGH
 - **Files**: `src/aero/cfd/amr_refine.cpp:83-92`
-- **Problem**: Bey 1995 全相似细化模式使用对角线 `m03-m12` 分隔内部八面体。4 个子单元（1,3,4,7）的节点顺序产生负有符号体积：
-  - 子单元 1: `{n1,m01,m12,m13}` → 负（应为 `{n1,m01,m13,m12}`）
-  - 子单元 3: `{n3,m03,m13,m23}` → 负（应为 `{n3,m03,m23,m13}`）
-  - 子单元 4: `{m01,m02,m12,m03}` → 负（应为 `{m01,m12,m02,m03}`）
-  - 子单元 7: `{m03,m12,m13,m23}` → 负（应为 `{m03,m13,m12,m23}`）
-- `volume_tet` 使用 `fabs`，所以绝对体积正确（各 1/8 父体积，总体积守恒）。但 `mesh_validator.cpp:64` 中的 `tet_jacobian_sign` 检查 `J <= 0.0f`，会将 4 个负方向子单元标记为负雅可比。测试 CFD-AMR-1 检查 `min_volume > 0`（绝对值）但不检查 `rep2.valid` 或 `negative_jacobian_count`，掩盖此问题。
-- **Impact**: TET4 均匀细化网格的网格质量验证失败。若下游代码依赖正雅可比（如 Green-Gauss 梯度方向），可能产生错误结果。
-- **Fix**: 修正 4 个子单元的节点顺序以产生正有符号体积。
+- **Fix**: 已修正 4 个子单元的节点顺序以产生正有符号体积（`amr_refine.cpp:83-92`）。Tests: 22/22 mesh, 9/9 Euler PASS.
 
-**PH12-H2: `apply_hanging_interpolation` 和 `detect_hanging_faces` 全实现但从未调用**
+**PH12-H2: `apply_hanging_interpolation` 和 `detect_hanging_faces` 全实现但从未调用** [FIXED]
 - **Severity**: HIGH
-- **Files**: `include/aero/cfd/amr_hanging.hpp`, `src/aero/cfd/amr_hanging.cpp`（全部行）, `src/aero/cfd/cfd_solver.cpp`（无引用）
-- **Problem**: 悬挂节点修正面完全实现（`HangingFaceInfo` 检测 + `CellGradient3` 梯度线性外推），但求解器循环、AMR 循环或任何残差计算中从未调用。AMR 细化后，不同级单元共享面，产生悬挂节点。通量计算使用求解器重构传递的 `q_face_left`/`q_face_right`，而非通过 `apply_hanging_interpolation` 修正。无此修正时，跨细化边界的通量从错误的面状态计算，导致守恒误差和精度退化。
-- **Impact**: 积累误差在悬挂面处。对强细化流（激波、边界层），可能导致不稳定或错误激波位置。
-- **Fix**: 在 AMR 循环后、残差计算前调用悬挂节点修正，或至少记录当前未使用的设计决策。
+- **Files**: `src/aero/cfd/cfd_solver.cpp:424-511`
+- **Fix**: 在 `cfd_solver.cpp` 的欧拉残差后添加悬挂面通量修正：检测悬挂面，将 `PrimitiveGradient` 转换为 `CellGradient3`，通过 `apply_hanging_interpolation` 修正粗侧通量，用修正通量替代残差中的旧通量。Tests: 22/22 mesh, 9/9 Euler PASS.
 
-**PH12-H3: AMR 后梯度陈旧，若 AMR 在倒数第二次迭代触发**
+**PH12-H3: AMR 后梯度陈旧，若 AMR 在倒数第二次迭代触发** [FIXED]
 - **Severity**: HIGH
-- **Files**: `src/aero/cfd/cfd_solver.cpp:525-528 vs 553-559`
-- **Problem**: AMR 后 `grads.resize(n_new)` 仅调整大小，不重新计算梯度。若 AMR 后 `residual_l2` 立即低于 `convergence_tol`（行 542），循环在未重新计算梯度的情况下退出。行 559 的力积分使用 AMR 前的陈旧梯度（维度/单元顺序错误）。
-- **Impact**: AMR 后立即收敛时报告的力可能错误。
-- **Fix**: AMR 后重新计算梯度，或在最后 AMR 循环后强制至少一次梯度计算。
+- **Files**: `src/aero/cfd/cfd_solver.cpp:668-679`
+- **Fix**: AMR 块内 `residual_l2 = config.convergence_tol` 后新增梯度重算：重建 `w` 后重新调用 `compute_green_gauss_gradients`，若需限制则同时重建 `limited`。Tests: 22/22 mesh, 9/9 Euler PASS.
 
-**PH12-H4: `compute_mesh_metrics` 每次 AMR 步调用 3 次**
+**PH12-H4: `compute_mesh_metrics` 每次 AMR 步调用 3 次** [FIXED]
 - **Severity**: HIGH
-- **Files**: `src/aero/cfd/mesh_metrics.cpp:283,298`（`rebuild_faces` 内部）, `src/aero/cfd/amr_refine.cpp:365`（`refine_cells` 内部）, `src/aero/cfd/cfd_solver.cpp:524`（求解器循环）
-- **Problem**: 调用链：`refine_cells` → `rebuild_mesh_faces` → `rebuild_faces` → `compute_mesh_metrics(mesh)`（行 283, `recompute_cells=true`）+ `compute_mesh_metrics(mesh, false)`（行 298）；之后求解器行 524 再次调用 `compute_mesh_metrics(mesh_)`。前两次在 `refine_cells` 内部，第三次在求解器。第一次和第三次均重新计算所有单元的体积、质心、h_min。
-- **Impact**: 100 万单元网格浪费约 300 万单元度量评估/AMR 步。
-- **Fix**: 去除冗余调用。`refine_cells` 不应调用 `rebuild_mesh_faces`（让调用者负责），或求解器跳过 `compute_mesh_metrics` 当 `refine_cells` 已调用时。
+- **Files**: `src/aero/cfd/cfd_solver.cpp:271`
+- **Fix**: 从 `CfdSolver::load_mesh` 中删除冗余的 `compute_mesh_metrics` 调用（`read_mesh_su2` 和 `generate_structured_cube_mesh` 已在加载/生成后调用）。Tests: 22/22 mesh, 9/9 Euler PASS.
 
-**PH12-H5: 粗化未强制执行 2:1 悬挂节点层级约束**
+**PH12-H5: 粗化未强制执行 2:1 悬挂节点层级约束** [FIXED]
 - **Severity**: HIGH
-- **Files**: `src/aero/cfd/amr_refine.cpp:263-315`, `src/aero/cfd/amr_hanging.cpp:12-40`
-- **Problem**: 粗化检查组是否所有 8 个兄弟被标记（行 288），但未验证与邻居的层级差不超过 1。`detect_hanging_faces` 仅处理 1 级差异（行 23：`if (ll == lr) continue`），`apply_hanging_interpolation` 中的线性插值假设粗单元梯度可直接使用。2+ 级跳跃产生错误重构的面状态。
-- **Fix**: 粗化后检查邻居层级，必要时标记邻居为细化以维持 2:1 平衡。
+- **Files**: `src/aero/cfd/cfd_solver.cpp:607-631`
+- **Fix**: `refine_cells` 前新增 2:1 平衡过滤：遍历每个 Coarsen 请求，若其面邻居层级更高且不同时请求粗化，则将该请求降级为 Unchanged。Tests: 22/22 mesh, 9/9 Euler PASS.
 
-### MEDIUM
+### MEDIUM [5 FIXED, 4 OPEN]
 
-**PH12-M1: 密度跳变传感器仅使用密度，遗漏温度/压力特征**
-- **Severity**: MEDIUM
-- **Files**: `src/aero/cfd/amr_sensor.cpp:39-46`
-- **Problem**: 传感器计算 `|rho_L - rho_R| / avg_rho`。对高速流中强激波，密度跳变是主要指标。但对剪切层、边界层或混合区，密度梯度可能很小而速度/温度梯度很大。传感器无法细化这些区域。
+**PH12-M1: 密度跳变传感器仅使用密度** [OPEN — 功能建议]
 - **Suggestion**: 考虑添加压力、速度幅值或熵的传感器选项。
 
-**PH12-M2: `max_level` 硬编码为 5，忽略 `AmrConfig::max_level`**
-- **Severity**: MEDIUM
-- **Files**: `src/aero/cfd/amr_refine.cpp:257`
-- **Problem**: `if (mesh.cells[id].refinement_level >= 5)` 使用硬编码常量 5。`AmrConfig::max_level` 默认值也是 5，所以默认行为匹配。但 `refine_cells` 不接收配置参数，无法使用用户设置的值。若用户设 `max_level=3`，此检查仍允许直到级 5。若设 `max_level=10`，单元在级 5 被错误阻拦。
-- **Fix**: 将 `AmrConfig`（或 `max_level`）传递给 `refine_cells`。
+**PH12-M2: `max_level` 硬编码为 5** [FIXED]
+- `refine_cells` 新增 `int max_level = 5` 参数，求解器传入 `config.amr.max_level`。
 
-**PH12-M3: 粗化组不足 8 个兄弟时静默跳过**
-- **Severity**: MEDIUM
-- **Files**: `src/aero/cfd/amr_refine.cpp:288`
-- **Problem**: `if (static_cast<int>(children.size()) < 8) continue` — 若仅标记部分兄弟为粗化，整个组静默跳过。`refine_cells` 返回 `true`（成功），但粗化请求被忽略。用户无反馈。
-- **Suggestion**: 至少统计并报告跳过的组数（启用诊断时）。
+**PH12-M3: 粗化组不足 8 个兄弟时静默跳过** [OPEN — 功能建议]
+- **Suggestion**: 启用诊断时统计并报告跳过的组数。
 
-**PH12-M4: `mesh.nodes` 跨 AMR 循环无限增长（孤立节点泄漏）**
-- **Severity**: MEDIUM
-- **Files**: `src/aero/cfd/amr_refine.cpp:318-321,339-341`
-- **Problem**: 细化期间中点直接追加到 `mesh.nodes`。粗化期间 8 个子单元被移除，但其中点节点保留在 `mesh.nodes` 中。无垃圾回收 — 孤立节点跨循环无限累积。另外，复制 `old_nodes = mesh.nodes`（行 318）向前传播孤立节点。
-- **Impact**: 内存使用增加，基于节点的操作（面重建、度量计算）速度下降。不崩溃但长期运行后降级。
+**PH12-M4: `mesh.nodes` 跨 AMR 循环无限增长** [FIXED]
+- AMR 后新增 `compact_mesh_nodes`：扫描所有单元节点，构建紧凑映射，释放孤立节点。
 
-**PH12-M5: `refine_cells` 的 `requests` 中 `cell_id` 无边界检查**
-- **Severity**: MEDIUM
-- **Files**: `src/aero/cfd/amr_refine.cpp:247,257,276`
-- **Problem**: `requests` 条目的 `cell_id` 直接用作 `mesh.cells[]` 的索引无边界检查。若传感器 bug 或外部调用者产生 `cell_id >= mesh.cells.size()` 或 `cell_id < 0`，结果是越界访问。
-- **Fix**: 添加 `if (req.cell_id < 0 || req.cell_id >= mesh.cells.size()) continue`。
+**PH12-M5: `refine_cells` 的 `cell_id` 无边界检查** [FIXED]
+- 循环开头添加 `if (req.cell_id < 0 || req.cell_id >= mesh.cells.size()) continue`。
 
-**PH12-M6: AMR 后 `q_next` 全单元零初始化（死工作）**
-- **Severity**: MEDIUM
-- **Files**: `src/aero/cfd/cfd_solver.cpp:526`
-- **Problem**: `q_next.resize(n_new)` 值初始化所有新元素（POD 为零）。整个 `q_next` 在下一次迭代行 500 无条件覆写。零初始化是与单元数成比例的死工作。`residual`、`grads`、`w`、`limited`、`sources` 同理。
-- **Impact**: O(N_cells) 死工作/AMR 步。小影响但可优化。
+**PH12-M6: AMR 后全单元零初始化死工作** [OPEN — 被 M8 抵消]
+- `assign` 现保证全零初始化（M8 要求），零初始化是期望行为。
 
-**PH12-M7: `build_old_to_new_map` 未考虑粗化父单元**
-- **Severity**: MEDIUM
-- **Files**: `src/aero/cfd/amr_interpolate.cpp:14-42`
-- **Problem**: 映射假设新单元数组为 [子单元] + [未变化单元]。`refine_cells` 在末尾追加粗化父单元（行 353-361）。`old_to_new` 映射仅用于未变化单元，所以没有越界，但映射不完整。函数文档说映射"旧单元索引到新单元索引"，但粗化父单元没有映射（它们确实是新的）。
-- **Impact**: 当前正确但脆弱。若未来代码期望所有旧单元都有映射，会静默出错。
+**PH12-M7: `build_old_to_new_map` 未考虑粗化父单元** [OPEN — 设计正确]
+- 映射仅用于未变化旧单元，粗化父单元是新单元无需映射。
 
-**PH12-M8: `grads`/`limited`/`sources` 在 AMR 后保留陈旧值**
-- **Severity**: MEDIUM
-- **Files**: `src/aero/cfd/cfd_solver.cpp:528,530,531`
-- **Problem**: AMR 后向量通过 `resize` 扩展。未变化单元的梯度/限制器/源项指针仍然有效，但值是在 AMR 前计算的（在旧网格上）。下次迭代若 `need_gradients` 为 true，`grads` 被完全覆写。若 `need_gradients` 为 false，陈旧数据永远不会被读取。但任何未来在 AMR 后访问 `grads` 而不检查 `need_gradients` 的代码路径会静默使用错误网格的数据。
-- **Fix**: AMR 后显式清零或标记陈旧。
+**PH12-M8: `grads`/`limited`/`sources` 保留陈旧值** [FIXED]
+- `resize` 替换为 `assign(n_new, T{})`，所有元素显式归零。
 
-**PH12-M9: 近零密度阈值过低**
-- **Severity**: MEDIUM
-- **Files**: `src/aero/cfd/amr_sensor.cpp:42`
-- **Problem**: `if (avg_rho < std::numeric_limits<Real>::min()) continue` — 对 `Real=float` 约 1.175e-38，远低于任何物理上有意义的密度。若两密度为 O(1e-30) 且符号相反（真空附近的数值噪声），`avg_rho` ≈ 1e-30 高于阈值，`|rho_L-rho_R|/avg_rho` 可能产生虚假峰值触发误细化。
-- **Suggestion**: 使用更大的阈值如 `1e-10f` 或 `1e-20f`。
+**PH12-M9: 近零密度阈值过低** [FIXED]
+- `amr_sensor.cpp:42`: `std::numeric_limits<Real>::min()` 改为 `1e-10f`。
 
 ### LOW
 
-**PH12-L1: 传感器中粗化条件使用 `<` 而非 `<=`，可能在精确容差处振荡**
+**PH12-L1: 粗化条件使用 `<` 而非 `<=`** [FIXED]
 - **Files**: `src/aero/cfd/amr_sensor.cpp:63`
 - **Problem**: `cell_error[i] < config.coarsen_tol` — 精确等于 `coarsen_tol` 的单元不被粗化（需要 `<`）。而行 55 `cell_error[i] > config.refine_tol` 的精确等于不触发细化（需要 `>`）。所以同一单元可能在非粗化/非细化之间振荡而非明确属于某一类。行 26 的守卫 `coarsen_tol >= refine_tol` 防止退化情况（同时满足两个条件），但阈值处的振荡仍可能发生。
 - **Suggestion**: 使用 `<=` 使粗化决策包含边界。
@@ -2429,23 +2388,16 @@ Fixed: global `CMAKE_CUDA_SEPARABLE_COMPILATION ON` removed (part of PERF-H2); o
 - **Problem**: `mesh_children` 在行 97 实际使用（`mesh_children.cells[child_id].volume`），所以 `(void)mesh_children` 抑制是错误的。
 - **Fix**: 已删除误置的 `(void)mesh_children`。
 
-**PH12-L5: `amr_hanging.hpp` 包含 `real.hpp` 而非 `real_fwd.hpp`**
-- **Files**: `include/aero/cfd/amr_hanging.hpp:5`
-- **Problem**: 所有其他 AMR 头文件包含轻量级 `real_fwd.hpp`。`amr_hanging.hpp` 包含完整 `real.hpp`，引入 CUDA 宏和数学包装。
-- **Fix**: 替换为 `real_fwd.hpp` 以保持一致。
+**PH12-L5: `amr_hanging.hpp` 包含 `real.hpp`** [FIXED]
+- 替换为 `real_fwd.hpp`。
 
-**PH12-L6: 魔法数字（5、8、4、6）**
-- **Files**: `src/aero/cfd/amr_refine.cpp:257,288,305,99,205`
-- **Problem**: 整数值 `5`（最大层级）、`8`（子单元数/粗化兄弟数）、`4`（TET4 面数）、`6`（HEX8 面数）硬编码。`4` 和 `6` 可以从 `ELEMENT_FACES[static_cast<int>(type)]` 推导。
+**PH12-L6: 魔法数字** [OPEN — 已部分解决]
+- `5`（最大层级）已通过 PH12-M2 参数化。`8`、`4`、`6` 在上下文中含义明确。
 
-**PH12-L7: 多余注释（违反项目约定）**
-- **Files**: 多个 AMR 文件
-- **Problem**: 项目约定"不要添加注释"。以下注释是不必要的：`amr_refine.cpp:39`（函数名已说明）、`:83`（变量名已说明）、`:119`（函数名已说明）、`:244,263,317,352,363`（章节标题）、`amr_hanging.hpp:13`（成员名已说明）。
+**PH12-L7: 多余注释** [OPEN — 项目约定]
 
-**PH12-L8: 重复的 `rebuild_mesh_faces` 调用**
-- **Files**: `src/aero/cfd/amr_refine.cpp:365`, `src/aero/cfd/cfd_solver.cpp:523`
-- **Problem**: `refine_cells` 内部调用 `rebuild_mesh_faces`（行 365），然后求解器循环立即再次调用（行 523）。两次调用间无修改，第二次冗余。
-- **Fix**: 删除 `refine_cells` 中或求解器中的一次。
+**PH12-L8: 重复的 `rebuild_mesh_faces`** [FIXED]
+- 已从求解器 AMR 块删除冗余调用，`refine_cells` 内部调用保留。
 
 ### INFO
 
@@ -2473,12 +2425,12 @@ Fixed: global `CMAKE_CUDA_SEPARABLE_COMPILATION ON` removed (part of PERF-H2); o
 
 ### Summary
 
-| 严重性 | 计数 | IDs |
-|--------|------|------|
-| CRITICAL | 8 | PH12-C1 (zero parent state) [FIXED], PH12-C2 (records overwritten) [FIXED], PH12-C3 (div by zero) [FIXED], PH12-C4 (corruption on failure) [FIXED], PH12-C5 (boundary destruction) [FIXED], PH12-C6 (GPU AMR missing) [FIXED], PH12-C7 (refine/coarsen conflict) [FIXED], PH12-C8 (stale residual norm) [FIXED] |
-| HIGH | 5 | PH12-H1 (neg Jacobian), PH12-H2 (hanging interpolation dead), PH12-H3 (stale gradients), PH12-H4 (3x metrics), PH12-H5 (no 2:1 balance) |
-| MEDIUM | 9 | PH12-M1 (density-only sensor), PH12-M2 (hardcoded max_level), PH12-M3 (partial coarsening silent), PH12-M4 (node growth), PH12-M5 (no cell_id bounds), PH12-M6 (dead zero-init), PH12-M7 (old_to_new coarsening gap), PH12-M8 (stale vectors), PH12-M9 (low threshold) |
-| LOW | 9 | PH12-L1 (coarsen toggle), PH12-L2 (dead loop), PH12-L3 (ci_new), PH12-L4 (void cast) [FIXED], PH12-L5 (include), PH12-L6 (magic numbers), PH12-L7 (comments), PH12-L8 (rebuild dup) |
-| INFO | 8 | PH12-I1–I8 (misc observations) |
+| 严重性 | 计数 | Fixed | Open |
+|--------|------|-------|------|
+| CRITICAL | 8 | 8 | 0 |
+| HIGH | 5 | 5 | 0 |
+| MEDIUM | 9 | PH12-M2, M4, M5, M8, M9 | PH12-M1, M3, M6, M7 |
+| LOW | 8 | PH12-L1, L2, L3, L4, L5, L8 | PH12-L6, L7 |
+| INFO | 8 | 0 | 8 |
 
-**Total**: 30 findings (9 fixed, 21 open). **Most impactful remaining**: PH12-H2 (hanging interpolation never called) — refinement boundaries lack flux correction.
+**Total**: 30 findings (19 fixed, 11 open). **Most impactful remaining**: PH12-M1 (density-only sensor—feature suggestion), PH12-M6 (dead zero-init—minor perf).

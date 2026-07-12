@@ -781,3 +781,33 @@
   - Fixes: 8 files (amr_types.hpp, amr_refine.cpp, amr_interpolate.cpp, mesh_metrics.cpp,
     cfd_solver.cpp, cfd_solver_gpu.cpp, cfd_solver.hpp, cfd_config.hpp).
   - Verification: TestCfdMesh 22/22, TestCfdEuler 9/9 — all PASS.
+
+2026-07-12
+- Phase 12 MEDIUM+LOW audit fixes (10 findings → 10 fixed, total 30→19/30 fixed).
+  - MEDIUM:
+    - PH12-M2: refine_cells int max_level param, solver passes config.amr.max_level.
+    - PH12-M4: compact_mesh_nodes() garbage-collects orphan nodes after coarsening.
+    - PH12-M5: bounds check on req.cell_id in refine_cells.
+    - PH12-M8: assign(n,T{}) replaces resize to zero all AMR-resized vectors.
+    - PH12-M9: density threshold 1e-10f replaces numeric_limits<Real>::min().
+  - LOW:
+    - PH12-L1: coarsen tol <= vs < toggle.
+    - PH12-L2: removed empty boundary-face loop in sensor.
+    - PH12-L3: removed unused ci_new variable.
+    - PH12-L5: real_fwd.hpp in amr_hanging.hpp.
+    - PH12-L8: removed redundant rebuild_mesh_faces call from solver.
+  - Remaining open: M1 (feature), M3 (feature), M6 (minor perf), M7 (by-design),
+    L6 (magic numbers), L7 (comments), I1–I8 (info).
+  - Files changed: amr_refine.cpp, amr_sensor.cpp, cfd_solver.cpp, amr_types.hpp,
+    amr_hanging.hpp, ISSUES.md.
+  - Verification: TestCfdMesh 22/22, TestCfdEuler 9/9 — all PASS.
+
+2026-07-12
+- Phase 12 HIGH audit fixes (5 findings → all 5 fixed, total 14/30 fixed).
+  - PH12-H1: TET4 sub-cell node order fixed for children 1,3,4,7 (swap last two vertices) — negative Jacobians eliminated.
+  - PH12-H2: Hanging face flux correction wired into solver: detect_hanging_faces + apply_hanging_interpolation called after Euler residual, with PrimitiveGradient→CellGradient3 conversion.
+  - PH12-H3: Gradients recomputed after AMR block (w rebuild + green-gauss) so wall-force integration after loop exit uses valid post-AMR data.
+  - PH12-H4: Redundant compute_mesh_metrics call removed from CfdSolver::load_mesh (callers already compute).
+  - PH12-H5: 2:1 balance enforced before coarsening — coarsening requests with a face neighbor at a higher non-coarsening level are demoted to Unchanged.
+  - Files changed: cfd_solver.cpp (+180 loops/logic), ISSUES.md (summary updated).
+  - Verification: TestCfdMesh 22/22, TestCfdEuler 9/9 — all PASS.

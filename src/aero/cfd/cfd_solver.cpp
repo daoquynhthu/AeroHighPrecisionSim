@@ -5,6 +5,7 @@
 #include "aero/cfd/viscous.hpp"
 #include "aero/cfd/amr_sensor.hpp"
 #include "aero/cfd/amr_interpolate.hpp"
+#include "aero/cfd/amr_hanging.hpp"
 
 #include <algorithm>
 #include <cmath>
@@ -35,6 +36,39 @@ Real state_delta_l2(const ConservativeState& a, const ConservativeState& b) {
     Real d4 = a.rho_E - b.rho_E;
     Real d5 = a.rho_nu_tilde - b.rho_nu_tilde;
     return d0*d0 + d1*d1 + d2*d2 + d3*d3 + d4*d4 + d5*d5;
+}
+
+void compact_mesh_nodes(CfdMesh& mesh) {
+    int n_cells = static_cast<int>(mesh.cells.size());
+    int n_faces = static_cast<int>(mesh.faces.size());
+    if (n_cells == 0) return;
+    std::vector<int> old_to_new(mesh.nodes.size(), -1);
+    int new_count = 0;
+    for (int ci = 0; ci < n_cells; ++ci) {
+        const auto& cell = mesh.cells[ci];
+        int nn = (cell.type == ElementType::TET4) ? 4 : 8;
+        for (int i = 0; i < nn; ++i) {
+            int nid = cell.node[i];
+            if (nid >= 0 && nid < static_cast<int>(old_to_new.size()) && old_to_new[nid] < 0)
+                old_to_new[nid] = new_count++;
+        }
+    }
+    if (new_count == static_cast<int>(mesh.nodes.size())) return;
+    std::vector<CfdNode> compact(new_count);
+    for (std::size_t i = 0; i < mesh.nodes.size(); ++i)
+        if (old_to_new[i] >= 0) compact[old_to_new[i]] = mesh.nodes[i];
+    for (int ci = 0; ci < n_cells; ++ci) {
+        auto& cell = mesh.cells[ci];
+        int nn = (cell.type == ElementType::TET4) ? 4 : 8;
+        for (int i = 0; i < nn; ++i)
+            if (cell.node[i] >= 0) cell.node[i] = old_to_new[cell.node[i]];
+    }
+    for (int fi = 0; fi < n_faces; ++fi) {
+        auto& face = mesh.faces[fi];
+        for (int i = 0; i < face.node_count; ++i)
+            if (face.node[i] >= 0) face.node[i] = old_to_new[face.node[i]];
+    }
+    mesh.nodes.swap(compact);
 }
 
 void integrate_wall_forces(const CfdMesh& mesh, const std::vector<int>& wall_face_indices,
@@ -267,8 +301,7 @@ bool CfdSolver::load_mesh(const CfdMesh& mesh) {
         if (face.boundary == BoundaryKind::SlipWall || face.boundary == BoundaryKind::NoSlipWall)
             wall_face_indices_.push_back(static_cast<int>(i));
     }
-    auto report = compute_mesh_metrics(mesh_);
-    return report.valid;
+    return true;
 }
 
 CfdSolveSummary CfdSolver::solve(const FreestreamCondition& condition, const CfdConfig& config) {
@@ -425,6 +458,99 @@ CfdSolveSummary CfdSolver::solve_from_state(
             }
         }
 
+        // ----- Hanging face flux correction (AMR refinement boundaries) -----
+        if (!amr_records.empty() && need_gradients && !grads.empty()) {
+            auto hanging_faces = detect_hanging_faces(mesh_);
+            if (!hanging_faces.empty()) {
+                const auto& gsrc = apply_limiting ? limited : grads;
+                std::size_t nc = q.size();
+                std::vector<CellGradient3> grad_rho(nc), grad_rho_u(nc), grad_rho_v(nc), grad_rho_w(nc), grad_rho_E(nc), grad_rho_nu(nc);
+                for (std::size_t i = 0; i < nc; ++i) {
+                    const auto& pg = gsrc[i];
+                    const auto& wi = w[i];
+                    Real rho = q[i].rho;
+                    Real u = wi.u, v = wi.v, ww = wi.w;
+                    Real inv_rho = 1.0f / rho;
+                    Real nu_tilde = q[i].rho_nu_tilde * inv_rho;
+                    Real inv_gm1 = 1.0f / (config.gamma - 1.0f);
+                    Real ke = 0.5f * (u*u + v*v + ww*ww);
+                    Real p = wi.p;
+                    Real E = p * inv_rho * inv_gm1 + ke;
+                    grad_rho[i].gx = pg.drho_dx; grad_rho[i].gy = pg.drho_dy; grad_rho[i].gz = pg.drho_dz;
+                    grad_rho_u[i].gx = u * pg.drho_dx + rho * pg.du_dx;
+                    grad_rho_u[i].gy = u * pg.drho_dy + rho * pg.du_dy;
+                    grad_rho_u[i].gz = u * pg.drho_dz + rho * pg.du_dz;
+                    grad_rho_v[i].gx = v * pg.drho_dx + rho * pg.dv_dx;
+                    grad_rho_v[i].gy = v * pg.drho_dy + rho * pg.dv_dy;
+                    grad_rho_v[i].gz = v * pg.drho_dz + rho * pg.dv_dz;
+                    grad_rho_w[i].gx = ww * pg.drho_dx + rho * pg.dw_dx;
+                    grad_rho_w[i].gy = ww * pg.drho_dy + rho * pg.dw_dy;
+                    grad_rho_w[i].gz = ww * pg.drho_dz + rho * pg.dw_dz;
+                    Real dE_dx = pg.dp_dx * inv_rho * inv_gm1 - p * pg.drho_dx * inv_rho * inv_rho * inv_gm1 + u*pg.du_dx + v*pg.dv_dx + ww*pg.dw_dx;
+                    Real dE_dy = pg.dp_dy * inv_rho * inv_gm1 - p * pg.drho_dy * inv_rho * inv_rho * inv_gm1 + u*pg.du_dy + v*pg.dv_dy + ww*pg.dw_dy;
+                    Real dE_dz = pg.dp_dz * inv_rho * inv_gm1 - p * pg.drho_dz * inv_rho * inv_rho * inv_gm1 + u*pg.du_dz + v*pg.dv_dz + ww*pg.dw_dz;
+                    grad_rho_E[i].gx = E * pg.drho_dx + rho * dE_dx;
+                    grad_rho_E[i].gy = E * pg.drho_dy + rho * dE_dy;
+                    grad_rho_E[i].gz = E * pg.drho_dz + rho * dE_dz;
+                    grad_rho_nu[i].gx = nu_tilde * pg.drho_dx + rho * pg.dnu_tilde_dx;
+                    grad_rho_nu[i].gy = nu_tilde * pg.drho_dy + rho * pg.dnu_tilde_dy;
+                    grad_rho_nu[i].gz = nu_tilde * pg.drho_dz + rho * pg.dnu_tilde_dz;
+                }
+                std::vector<ConservativeState> qf_left(mesh_.faces.size());
+                std::vector<ConservativeState> qf_right(mesh_.faces.size());
+                for (std::size_t fi = 0; fi < mesh_.faces.size(); ++fi) {
+                    const CfdFace& f = mesh_.faces[fi];
+                    qf_left[fi] = q[f.left_cell];
+                    qf_right[fi] = (f.right_cell >= 0 && f.boundary == BoundaryKind::Interior)
+                        ? q[f.right_cell] : ConservativeState{};
+                }
+                apply_hanging_interpolation(mesh_, hanging_faces, q,
+                    grad_rho, grad_rho_u, grad_rho_v, grad_rho_w, grad_rho_E, grad_rho_nu,
+                    qf_left, qf_right);
+                for (const auto& hf : hanging_faces) {
+                    const CfdFace& face = mesh_.faces[hf.face_id];
+                    Real area = face.area;
+                    PrimitiveState wl_corrected, wr_corrected;
+                    if (!conservative_to_primitive(qf_left[hf.face_id], config.gamma, wl_corrected)) continue;
+                    if (!conservative_to_primitive(qf_right[hf.face_id], config.gamma, wr_corrected)) continue;
+                    if (wl_corrected.rho <= 0.0f || wl_corrected.p <= 0.0f) continue;
+                    if (wr_corrected.rho <= 0.0f || wr_corrected.p <= 0.0f) continue;
+                    EulerFlux flux_corrected = hllc_flux(wl_corrected, wr_corrected, config.gamma, face.nx, face.ny, face.nz);
+                    PrimitiveState wl_old, wr_old;
+                    if (config.reconstruction_order == 2) {
+                        const auto& g_l = gsrc[face.left_cell];
+                        wl_old = reconstruct_primitive(w[face.left_cell], g_l,
+                            face.cx - mesh_.cells[face.left_cell].cx,
+                            face.cy - mesh_.cells[face.left_cell].cy,
+                            face.cz - mesh_.cells[face.left_cell].cz);
+                        const auto& g_r = gsrc[face.right_cell];
+                        wr_old = reconstruct_primitive(w[face.right_cell], g_r,
+                            face.cx - mesh_.cells[face.right_cell].cx,
+                            face.cy - mesh_.cells[face.right_cell].cy,
+                            face.cz - mesh_.cells[face.right_cell].cz);
+                    } else {
+                        wl_old = w[face.left_cell];
+                        wr_old = w[face.right_cell];
+                    }
+                    if (wl_old.rho <= 0.0f || wl_old.p <= 0.0f) continue;
+                    if (wr_old.rho <= 0.0f || wr_old.p <= 0.0f) continue;
+                    EulerFlux flux_old = hllc_flux(wl_old, wr_old, config.gamma, face.nx, face.ny, face.nz);
+                    residual[face.left_cell].mass   += (flux_old.mass   - flux_corrected.mass)   * area;
+                    residual[face.left_cell].mom_x  += (flux_old.mom_x  - flux_corrected.mom_x)  * area;
+                    residual[face.left_cell].mom_y  += (flux_old.mom_y  - flux_corrected.mom_y)  * area;
+                    residual[face.left_cell].mom_z  += (flux_old.mom_z  - flux_corrected.mom_z)  * area;
+                    residual[face.left_cell].energy += (flux_old.energy - flux_corrected.energy) * area;
+                    residual[face.left_cell].turbulence += (flux_old.turbulence - flux_corrected.turbulence) * area;
+                    residual[face.right_cell].mass   -= (flux_old.mass   - flux_corrected.mass)   * area;
+                    residual[face.right_cell].mom_x  -= (flux_old.mom_x  - flux_corrected.mom_x)  * area;
+                    residual[face.right_cell].mom_y  -= (flux_old.mom_y  - flux_corrected.mom_y)  * area;
+                    residual[face.right_cell].mom_z  -= (flux_old.mom_z  - flux_corrected.mom_z)  * area;
+                    residual[face.right_cell].energy -= (flux_old.energy - flux_corrected.energy) * area;
+                    residual[face.right_cell].turbulence -= (flux_old.turbulence - flux_corrected.turbulence) * area;
+                }
+            }
+        }
+
         if (config.viscous) {
             const auto& visc_grads = apply_limiting ? limited : grads;
             if (!compute_viscous_flux_cpu(mesh_, q, visc_grads, config.gamma,
@@ -509,6 +635,33 @@ CfdSolveSummary CfdSolver::solve_from_state(
             std::vector<ConservativeState> q_old = q;
 
             auto requests = compute_gradient_sensor(mesh_, q, config.amr);
+
+            // Enforce 2:1 balance after coarsening: prevent coarsening a cell if
+            // a face neighbor at a higher refinement level is not also being coarsened.
+            // (Coarsening would drop the cell's level by 1, potentially creating
+            //  a level difference > 1 with neighbors that stay at their current level.)
+            {
+                std::vector<bool> is_coarsening_request(mesh_.cells.size(), false);
+                for (const auto& req : requests)
+                    if (req.flag == RefinementFlag::Coarsen)
+                        is_coarsening_request[req.cell_id] = true;
+                for (auto& req : requests) {
+                    if (req.flag != RefinementFlag::Coarsen) continue;
+                    int cl = mesh_.cells[req.cell_id].refinement_level;
+                    for (const auto& face : mesh_.faces) {
+                        int nbr = -1;
+                        if (face.left_cell == req.cell_id) nbr = face.right_cell;
+                        if (face.right_cell == req.cell_id) nbr = face.left_cell;
+                        if (nbr < 0) continue;
+                        int nl = mesh_.cells[nbr].refinement_level;
+                        if (nl > cl && !is_coarsening_request[nbr]) {
+                            req.flag = RefinementFlag::Unchanged;
+                            break;
+                        }
+                    }
+                }
+            }
+
             bool has_work = false;
             for (const auto& req : requests)
                 if (req.flag != RefinementFlag::Unchanged) { has_work = true; break; }
@@ -518,7 +671,7 @@ CfdSolveSummary CfdSolver::solve_from_state(
                 std::vector<CoarsenInfo> coarsen_info;
                 std::string err;
                 const std::vector<RefinementRecord>* prev = amr_records.empty() ? nullptr : &amr_records;
-                if (refine_cells(mesh_, requests, &new_records, &err, prev, &coarsen_info)) {
+                if (refine_cells(mesh_, requests, &new_records, &err, prev, &coarsen_info, config.amr.max_level)) {
                     prolongate_solution(q_old, mesh_old, mesh_, new_records, q);
                     for (const auto& ci : coarsen_info) {
                         Real vol_sum = 0.0f;
@@ -556,15 +709,15 @@ CfdSolveSummary CfdSolver::solve_from_state(
                                 }),
                             amr_records.end());
                     }
-                    rebuild_mesh_faces(mesh_);
                     compute_mesh_metrics(mesh_);
+                    compact_mesh_nodes(mesh_);
                     int n_new = static_cast<int>(mesh_.cells.size());
-                    q_next.resize(n_new);
-                    residual.resize(n_new);
-                    grads.resize(n_new);
-                    w.resize(n_new);
-                    if (!limited.empty()) limited.resize(n_new);
-                    if (!sources.empty()) sources.resize(n_new);
+                    q_next.assign(n_new, ConservativeState{});
+                    residual.assign(n_new, EulerFlux{});
+                    grads.assign(n_new, PrimitiveGradient{});
+                    w.assign(n_new, PrimitiveState{});
+                    if (!limited.empty()) limited.assign(n_new, PrimitiveGradient{});
+                    if (!sources.empty()) sources.assign(n_new, RansSource{});
                     wall_face_indices_.clear();
                     for (int fi = 0; fi < static_cast<int>(mesh_.faces.size()); ++fi) {
                         auto bc = mesh_.faces[fi].boundary;
@@ -572,6 +725,19 @@ CfdSolveSummary CfdSolver::solve_from_state(
                             wall_face_indices_.push_back(fi);
                     }
                     residual_l2 = config.convergence_tol;
+                    // Recompute w and gradients after AMR so wall-force integration
+                    // (which runs after the loop exit) uses valid, mesh-consistent data.
+                    for (int i = 0; i < n_new; ++i)
+                        conservative_to_primitive(q[i], config.gamma, w[i]);
+                    if (need_gradients) {
+                        grads = compute_green_gauss_gradients(mesh_, q, config.gamma, &w);
+                        if (apply_limiting) {
+                            auto amr_limiters = compute_barth_jespersen_limiters(mesh_, q, grads, config.gamma, &w);
+                            limited.resize(grads.size());
+                            for (std::size_t j = 0; j < grads.size(); ++j)
+                                limited[j] = apply_limiter(grads[j], amr_limiters[j]);
+                        }
+                    }
                 }
             }
         }

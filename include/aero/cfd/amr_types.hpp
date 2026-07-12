@@ -53,7 +53,8 @@ bool refine_cells(CfdMesh& mesh,
                   std::vector<RefinementRecord>* records_out = nullptr,
                   std::string* error = nullptr,
                   const std::vector<RefinementRecord>* prev_records = nullptr,
-                  std::vector<CoarsenInfo>* coarsen_info = nullptr);
+                  std::vector<CoarsenInfo>* coarsen_info = nullptr,
+                  int max_level = 5);
 
 } // namespace cfd
 } // namespace aero
