@@ -284,7 +284,13 @@ private:
 
     static bool ray_aabb_intersect(Vec3 origin, Vec3 dir, const AABB& box, Real t_min, Real t_max) {
         for (int a = 0; a < 3; ++a) {
-            Real inv_d = 1.0f / (&dir.x)[a];
+            Real dir_comp = (&dir.x)[a];
+            if (std::fabs(dir_comp) < Real(1e-30)) {
+                Real o = (&origin.x)[a];
+                if (o < (&box.bmin.x)[a] || o > (&box.bmax.x)[a]) return false;
+                continue;
+            }
+            Real inv_d = 1.0f / dir_comp;
             Real t0 = ((&box.bmin.x)[a] - (&origin.x)[a]) * inv_d;
             Real t1 = ((&box.bmax.x)[a] - (&origin.x)[a]) * inv_d;
             if (inv_d < 0) std::swap(t0, t1);
@@ -389,15 +395,22 @@ int detect_stl_format(const std::string& path, StlHeader& hdr_out) {
     f.read(reinterpret_cast<char*>(&hdr_out), sizeof(hdr_out));
     if (!f) return 1; // short file = probably ASCII
 
-    // Check for ASCII STL: starts with "solid"
+    // Check for ASCII STL: starts with "solid " (6 bytes including trailing space)
+    if (std::memcmp(hdr_out.header, "solid ", 6) == 0) {
+        return 1; // unequivocally ASCII
+    }
+    // Binary header may also start with "solid" (no trailing space) — check file size
     if (std::memcmp(hdr_out.header, "solid", 5) == 0) {
-        // Could still be binary with "solid" in header — check file size
         f.seekg(0, std::ios::end);
         std::streampos size = f.tellg();
         uint64_t expected = static_cast<uint64_t>(84) + static_cast<uint64_t>(hdr_out.num_triangles) * 50;
-        if (static_cast<uint64_t>(size) != expected)
+        uint64_t usz = static_cast<uint64_t>(size);
+        if (usz != expected)
             return 1; // size doesn't match binary formula — treat as ASCII
-        return 2;
+        // Size matches binary formula exactly; still verify num_triangles is sane
+        if (hdr_out.num_triangles > 0 && hdr_out.num_triangles < 100000000)
+            return 2; // binary
+        return 1; // treat as ASCII
     }
     return 2; // binary
 }
@@ -455,7 +468,11 @@ std::vector<Tri> parse_stl_ascii(const std::string& path, std::string* error) {
             ++vertex_count;
 
             if (vertex_count == 3) {
-                tris.push_back({v0, v1, v2, normalize(n)});
+                Vec3 geom_n = normalize(cross(v1 - v0, v2 - v0));
+                Real ndot = dot(n, geom_n);
+                // Use recomputed normal with sign check; flip if file normal is backward
+                if (ndot < 0) geom_n = geom_n * Real(-1);
+                tris.push_back({v0, v1, v2, geom_n});
                 vertex_count = 0;
             }
         } else if (line.compare(0, 5, "solid") == 0) {
