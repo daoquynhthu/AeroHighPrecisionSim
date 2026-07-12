@@ -16,6 +16,7 @@ struct CfdSolveSummary {
     CfdForceResult forces;
     CfdDiagnostics diagnostics;
     std::vector<Real> residual_history;
+    std::vector<ConservativeState> final_state;
     bool converged = false;
     bool failed = false;
 };

@@ -18,6 +18,7 @@ add_cpu_executable(TestCfdReconstruction cfd/test_cfd_reconstruction.cpp)
 add_cpu_executable(TestCfdViscous cfd/test_cfd_viscous.cpp)
 add_cpu_executable(TestCfdState cfd/test_cfd_state.cpp)
 add_cpu_executable(TestCfdRans cfd/test_cfd_rans.cpp)
+add_cpu_executable(TestMms cfd/test_mms.cpp)
 
 # These test targets need symbols from .cu files (GPU-only implementations).
 # Skip them in CPU-only builds.
@@ -44,6 +45,7 @@ add_test_with_cwd(CfdReconstructionTest TestCfdReconstruction)
 add_test_with_cwd(CfdViscousTest TestCfdViscous)
 add_test_with_cwd(CfdStateTest TestCfdState)
 add_test_with_cwd(CfdRansTest TestCfdRans)
+add_test_with_cwd(MmsTest TestMms)
 
 if(AEROSIM_USE_CUDA)
     add_test_with_cwd(AeroTest TestAero)

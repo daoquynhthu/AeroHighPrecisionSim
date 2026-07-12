@@ -2224,3 +2224,25 @@ Fixed: global `CMAKE_CUDA_SEPARABLE_COMPILATION ON` removed (part of PERF-H2); o
 | H. 构建—编译 | 4 (4 FIXED) | 2 (2 FIXED) | 0 | 0 | 6 |
 | I. 构建—CMake | 0 | 2 (2 FIXED) | 2 (2 FIXED) | 0 | 4 |
 | **总计** | **20 (19 FIXED, 1 N/A)** | **14 (14 FIXED)** | **9 (9 FIXED)** | **3 (2 FIXED, 1 NOT-ACTIONABLE)** | **46 (44 FIXED, 1 N/A, 1 NOT-ACTIONABLE)** |
+
+## MMS Blocking Issues (2026-07-12)
+
+### MMS-1: SA source consistency fails — semi-implicit RANS destruction not in compute_mms_source
+- **Severity**: HIGH (blocks SA MMS gate)
+- **Symptom**: compute_mms_source() returns `RANS_source * volume` but solver's
+  `apply_rans_implicit` in cfd_solver.cpp:454-469 adds additional semi-implicit destruction
+  correction that is not replicated in the source computation. Source consistency test:
+  residual=0.000612, L2_err=0.348 (should be 0).
+- **Fix options**: (a) align compute_mms_source with solver's implicit treatment by calling
+  the same RANS source function path, (b) add config flag to disable semi-implicit correction
+  in MMS mode.
+- **Status**: OPEN
+
+### MMS-2: Order-of-accuracy verification fails — forward Euler unstable on coarse meshes
+- **Severity**: MEDIUM (blocks order-accuracy gate)
+- **Symptom**: forward Euler diverges from uniform freestream initial condition on coarse
+  meshes (e.g. 4³) with large MMS source terms. Likely needs CFL ramp-up, RK2/implicit
+  timestepping, or continuation from interpolated coarse solution.
+- **Fix options**: (a) switch to RK2 or implicit timestepping for MMS runs, (b) start
+  from q_exact instead of freestream, (c) add CFL ramp 0.01→0.5 over first 100 iterations.
+- **Status**: OPEN

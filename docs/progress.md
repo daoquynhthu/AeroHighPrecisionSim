@@ -684,3 +684,17 @@
 - Coverage job runs on schedule too, serving as weekly regression detection with threshold gate (line≥45%, branch≥28%).
 - docs/CFD_TEST_UPGRADE.md Phase C 3.4: cron task marked [x].
 - Phase C fully closed.
+
+2026-07-12 — MMS V&V implementation (Phase 5/7/19 gates)
+- New files: include/aero/cfd/mms.hpp, src/aero/cfd/mms.cpp, tests/cfd/test_mms.cpp
+- Modified: cfd_config.hpp (mms_source field), cfd_solver.hpp (final_state in CfdSolveSummary),
+  cfd_solver.cpp (MMS source injection loop, final_state population),
+  src/aero/CMakeLists.txt, tests/CMakeLists.txt
+- NS source consistency PASS: q=q_exact → solver residual=0.0, L2_err=0.0 on 8³ mesh,
+  order-2 reconstruction, viscous. All 9 existing CFD suites still PASS.
+- SA source consistency FAILS: solver applies semi-implicit RANS destruction correction
+  (cfd_solver.cpp:454-469) not replicated in compute_mms_source() → residual=0.000612, L2_err=0.348.
+  Deferred — needs compute_mms_source to align with implicit treatment or MMS mode flag.
+- Order-of-accuracy verification FAILS: forward Euler diverges from uniform freestream
+  IC on coarse meshes with large MMS source terms. Needs RK2/implicit timestepping or
+  CFL ramp-up. Deferred.

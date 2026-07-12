@@ -1,6 +1,7 @@
 #pragma once
 
 #include "aero/cfd/real_fwd.hpp"
+#include "aero/cfd/cfd_state.hpp"
 #include "aero/cfd/diagnostics.hpp"
 
 namespace aerosp {
@@ -33,6 +34,9 @@ struct CfdConfig {
 
     // RANS SA turbulence
     bool turbulence = false;
+
+    // MMS source term (empty = disabled)
+    std::vector<EulerFlux> mms_source;
 
     // Implicit solver
     bool implicit = false;

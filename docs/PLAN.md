@@ -489,6 +489,9 @@ Gate:
 - [x] Wall heat flux Q_wall accumulated on CPU (`integrate_wall_faces`) and GPU (`wall_force_kernel`), non-dimensionalized as `mu·dT_dn/((γ-1)·Pr·Re)·area`.
 - [x] CPU/GPU wall forces and Q_wall consistent — Q_wall added to `assert_oracle_equivalent` ForcePair array; CPU solver passes final-iteration gradients.
 - [ ] [V&V] MMS for laminar NS: observed order ≥ 1.8 (2nd-order) on smooth manufactured solution.
+  - Source consistency: PASS (residual=0, L2_err=0 on 8³ mesh). Order-of-accuracy deferred:
+    forward Euler unstable on coarse meshes with large MMS source terms. Needs RK2/implicit
+    timestepping or CFL ramp-up.
 
 ---
 
@@ -583,6 +586,10 @@ Gate:
 - [x] Turbulent flat plate Cf > laminar reference at same Re.
 - [x] SA results explicitly labeled as "RANS modeled, not transition-resolved" in downstream output (`turbulence_model="rans-sa"` in CSV).
 - [ ] [V&V] SA MMS: observed order ≥ 1.8 on smooth manufactured solution with non-zero nu_tilde.
+  - BLOCKED: solver applies semi-implicit RANS destruction correction (cfd_solver.cpp:454-469)
+    not replicated in compute_mms_source() → residual=0.000612, L2_err=0.348. Options:
+    (a) align source computation with implicit treatment, (b) add MMS mode flag to disable
+    semi-implicit correction.
 
 ---
 

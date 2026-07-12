@@ -469,6 +469,17 @@ CfdSolveSummary CfdSolver::solve_from_state(
             }
         }
 
+        if (!config.mms_source.empty()) {
+            for (std::size_t i = 0; i < q.size(); ++i) {
+                residual[i].mass      -= config.mms_source[i].mass;
+                residual[i].mom_x     -= config.mms_source[i].mom_x;
+                residual[i].mom_y     -= config.mms_source[i].mom_y;
+                residual[i].mom_z     -= config.mms_source[i].mom_z;
+                residual[i].energy    -= config.mms_source[i].energy;
+                residual[i].turbulence -= config.mms_source[i].turbulence;
+            }
+        }
+
         Real l2 = 0.0f;
         for (std::size_t i = 0; i < q.size(); ++i) {
             Real scale = min_dt / mesh_.cells[i].volume;
@@ -500,6 +511,7 @@ CfdSolveSummary CfdSolver::solve_from_state(
     }
     summary.forces.iterations = static_cast<int>(summary.residual_history.size());
     summary.forces.residual = summary.residual_history.empty() ? 0.0f : summary.residual_history.back();
+    summary.final_state = q;
     summary.forces.turbulence_model = config.turbulence ? "rans-sa" : "laminar";
     summary.forces.fidelity = "cfd-cpu";
     return summary;
