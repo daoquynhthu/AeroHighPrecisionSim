@@ -195,6 +195,16 @@ __global__ void viscous_flux_kernel_atomic(
     Real mu_face = sutherland_mu(face_T, T_ref, sutherland_T, mu_ref);
     if (mu_face <= 0.0f) return;
 
+    if (!real_isfinite(grad_du_dx) || !real_isfinite(grad_du_dy) ||
+        !real_isfinite(grad_du_dz) || !real_isfinite(grad_dv_dx) ||
+        !real_isfinite(grad_dv_dy) || !real_isfinite(grad_dv_dz) ||
+        !real_isfinite(grad_dw_dx) || !real_isfinite(grad_dw_dy) ||
+        !real_isfinite(grad_dw_dz) || !real_isfinite(grad_dT_dx) ||
+        !real_isfinite(grad_dT_dy) || !real_isfinite(grad_dT_dz)) {
+        if (d_failed) atomicExch(d_failed, 1);
+        return;
+    }
+
     Real nx = d_nx[idx];
     Real ny = d_ny[idx];
     Real nz = d_nz[idx];
@@ -479,6 +489,16 @@ __global__ void viscous_flux_kernel_colored(
     if (face_T <= 0.0f) return;
     Real mu_face = sutherland_mu(face_T, T_ref, sutherland_T, mu_ref);
     if (mu_face <= 0.0f) return;
+
+    if (!real_isfinite(grad_du_dx) || !real_isfinite(grad_du_dy) ||
+        !real_isfinite(grad_du_dz) || !real_isfinite(grad_dv_dx) ||
+        !real_isfinite(grad_dv_dy) || !real_isfinite(grad_dv_dz) ||
+        !real_isfinite(grad_dw_dx) || !real_isfinite(grad_dw_dy) ||
+        !real_isfinite(grad_dw_dz) || !real_isfinite(grad_dT_dx) ||
+        !real_isfinite(grad_dT_dy) || !real_isfinite(grad_dT_dz)) {
+        if (d_failed) atomicExch(d_failed, 1);
+        return;
+    }
 
     Real nx = d_nx[idx];
     Real ny = d_ny[idx];

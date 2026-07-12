@@ -229,8 +229,8 @@ EulerFlux hllc_flux(const PrimitiveState& left, const PrimitiveState& right, Rea
     Real vn_r = right.u*nx + right.v*ny + right.w*nz;
     Real a_l = speed_of_sound(left, gamma);
     Real a_r = speed_of_sound(right, gamma);
-    Real s_l = std::min(vn_l - a_l, vn_r - a_r);
-    Real s_r = std::max(vn_l + a_l, vn_r + a_r);
+    Real s_l = std::min(Real(0), std::min(vn_l - a_l, vn_r - a_r));
+    Real s_r = std::max(Real(0), std::max(vn_l + a_l, vn_r + a_r));
 
     EulerFlux f_l = physical_flux(left, gamma, nx, ny, nz);
     EulerFlux f_r = physical_flux(right, gamma, nx, ny, nz);

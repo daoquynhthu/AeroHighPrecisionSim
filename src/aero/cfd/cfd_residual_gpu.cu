@@ -76,8 +76,8 @@ __device__ void d_hllc_flux(
     Real vn_r = uR*nx + vR*ny + wR*nz;
     Real a_l = d_speed_of_sound(rhoL, pL, gamma);
     Real a_r = d_speed_of_sound(rhoR, pR, gamma);
-    Real s_l = real_fmin(vn_l - a_l, vn_r - a_r);
-    Real s_r = real_fmax(vn_l + a_l, vn_r + a_r);
+    Real s_l = real_fmin(0.0f, real_fmin(vn_l - a_l, vn_r - a_r));
+    Real s_r = real_fmax(0.0f, real_fmax(vn_l + a_l, vn_r + a_r));
 
     Real fL_mass, fL_mx, fL_my, fL_mz, fL_en, fL_turb;
     Real fR_mass, fR_mx, fR_my, fR_mz, fR_en, fR_turb;

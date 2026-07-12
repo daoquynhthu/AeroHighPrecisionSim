@@ -2653,11 +2653,11 @@ GPU 残差组装中所有未知边界类型静默按远场处理。`else` 分支
 **PHYS-4** [FIXED] `src/aero/cfd/gpu_solver.cu:103`
 `d_dt_cell` 之前分配 `nvar_cells` 但仅需每单元一个值。分离出 `d_neg_r`（需要 `nvar_cells` 作残差暂存），`d_dt_cell` 改为 `n_cells`。现有隐式求解器测试覆盖此路径。
 
-**PHYS-5** [MEDIUM] `src/aero/cfd/cfd_residual_gpu.cu:70-153`
-GPU HLLC 通量缺乏熵修正/保号声速校正。波速 `s_l = fmin(vn_l - a_l, vn_r - a_r)` 和 `s_r = fmax(vn_l + a_l, vn_r + a_r)` 未使用 `min(0, ...)`/`max(0, ...)` 稳定化。CPU 版本（`cfd_solver.cpp:227`）也存在同样遗漏。
+**PHYS-5** [FIXED] `src/aero/cfd/cfd_residual_gpu.cu:70-153`
+GPU HLLC 通量缺乏熵修正/保号声速校正。波速 `s_l = fmin(vn_l - a_l, vn_r - a_r)` 和 `s_r = fmax(vn_l + a_l, vn_r + a_r)` 未使用 `min(0, ...)`/`max(0, ...)` 稳定化。CPU 版本（`cfd_solver.cpp:227`）也存在同样遗漏。修复：GPU/CPU 均添加 `real_fmin(0, ...)`/`real_fmax(0, ...)` 包装。
 
-**PHYS-6** [MEDIUM] `src/aero/cfd/gpu_viscous.cu:194-216`
-粘性应力计算使用面平均梯度，梯度 NaN 时无保护（如果单元梯度变为 NaN 未被核函数检测到），`div_u`, `tau_xx`, `dT_dn` 将静默传播 NaN。
+**PHYS-6** [FIXED] `src/aero/cfd/gpu_viscous.cu:194-216`
+粘性应力计算使用面平均梯度，梯度 NaN 时无保护（如果单元梯度变为 NaN 未被核函数检测到），`div_u`, `tau_xx`, `dT_dn` 将静默传播 NaN。修复：两处粘性核函数均添加 12 个梯度分量的 `real_isfinite` 检查。
 
 **PHYS-7** [FIXED] `src/aero/cfd/gpu_viscous.cu:26-29, gpu_rans.cu:19-21`
 `d_sutherland_mu` 检查 `T <= 0.0f` 但不检查 `T` 是否为 NaN。NaN 通过 `T <= 0.0f` 检查（返回 false），经 `t_ratio` 和 `real_sqrt(t_ratio)` 传播为 NaN 粘度。修复：两处均添加 `!real_isfinite(T)` 前置检查。

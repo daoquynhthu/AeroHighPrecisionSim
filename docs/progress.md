@@ -949,6 +949,11 @@
 - PHYS-10: Added boundary-face area-normal closure check in CfdSolver::load_mesh; >1e-4×total_area rejects mesh
 - Verification: TestCfdGpu 65/65, TestCfdRans 14/14, TestCfdEuler 9/9, TestCfdMesh 28/28 all PASS
 
+2026-07-12 — PHYS-5+PHYS-6: HLLC entropy fix + viscous NaN guard
+- PHYS-5: HLLC wave speeds bounded by min(0,...)/max(0,...) in both GPU (cfd_residual_gpu.cu) and CPU (cfd_solver.cpp)
+- PHYS-6: Added 12-component gradient finite check in viscous_flux_kernel_atomic and viscous_flux_kernel_colored (gpu_viscous.cu)
+- Verification: TestCfdGpu 65/65, TestCfdRans 14/14, TestCfdEuler 9/9 all PASS
+
 2026-07-12 — PHYS-4: Fix d_dt_cell over-allocation (nvar_cells → n_cells)
 - Fix: d_dt_cell now allocates n_cells (per-cell timestep); separated d_neg_r at nvar_cells for residual negation scratch
 - The alias `Real* d_neg_r = d_dt_cell` removed; d_neg_r has its own proper allocation
