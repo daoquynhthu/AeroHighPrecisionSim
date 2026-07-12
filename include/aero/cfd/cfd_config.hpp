@@ -23,7 +23,7 @@ struct CfdConfig {
     Real ref_length = 1.0f;
     Real ref_span = 1.0f;
     int reconstruction_order = 1;
-    bool use_gpu = false;
+    bool use_gpu = true;
     bool cpu_oracle = false;
     DiagnosticLevel diagnostic_level = DiagnosticLevel::Off;
 

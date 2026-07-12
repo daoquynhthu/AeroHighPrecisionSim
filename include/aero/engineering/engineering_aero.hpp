@@ -6,7 +6,7 @@
 
 namespace aerosp {
 namespace aero {
-namespace panel {
+namespace eng {
 
 struct EngineeringAeroCoeffs {
     double CX, CY, CZ;
@@ -15,7 +15,7 @@ struct EngineeringAeroCoeffs {
 };
 
 inline EngineeringAeroCoeffs compute_engineering_coeffs(
-    const AeroGeometry& geo,
+    const aerosp::aero::panel::AeroGeometry& geo,
     double mach, double alpha_rad, double beta_rad)
 {
     double ca = std::cos(alpha_rad);

@@ -5,7 +5,8 @@ set_source_files_properties(cfd/test_cfd_gpu.cpp PROPERTIES LANGUAGE CUDA)
 add_cuda_executable(TestAeroViscous test_aero_viscous.cu)
 add_cuda_executable(TestCfdGpu cfd/test_cfd_gpu.cpp)
 add_cuda_executable(TestGpuTopology cfd/test_gpu_topology.cpp)
-add_cuda_executable(TestCfdFuzz cfd/test_cfd_fuzz_gpu.cpp)
+    add_cuda_executable(TestCfdFuzz cfd/test_cfd_fuzz_gpu.cpp)
+    add_cuda_executable(TestGravity test_gravity.cu)
 
 # --- CPU-only test targets (link missile_cpu — no device link) ---
 add_cpu_executable(TestPropulsion test_propulsion.cpp)
@@ -58,6 +59,7 @@ if(AEROSIM_USE_CUDA)
     add_test_with_cwd(CfdGpuTest TestCfdGpu)
     add_test_with_cwd(GpuTopologyTest TestGpuTopology)
     add_test_with_cwd(CfdFuzzTest TestCfdFuzz)
+    add_test_with_cwd(GravityTest TestGravity)
     add_test_with_cwd(CompareAtmTest TestCompareAtm)
 endif()
 

@@ -10,9 +10,10 @@
 namespace aerosp {
 namespace aero {
 namespace panel {
+using namespace aerosp::aero::eng;
 
     // --- Single-point kernel ---
-    __global__ void compute_forces_moments_kernel(const Triangle* triangles, int num_triangles, 
+    __global__ void compute_forces_moments_kernel(const Triangle* triangles, int num_triangles,
                                           float mach, float alpha_rad, float beta_rad,
                                           float3 moment_ref_point, float gamma,
                                           float T_ref, float rho_ref, float mu_ref,
@@ -21,7 +22,7 @@ namespace panel {
         if (idx >= num_triangles) return;
 
         Triangle tri = triangles[idx];
-        
+
         float ca = cosf(alpha_rad);
         float sa = sinf(alpha_rad);
         float cb = cosf(beta_rad);
@@ -30,11 +31,11 @@ namespace panel {
         float3 flow_dir = make_float3(-ca * cb, -sb, -sa * cb);
         float cos_theta = dot(tri.normal, flow_dir);
         float gamma_eff = gamma_effective(mach);
-                        
+
         // 1. Newtonian pressure coefficient
         float Cp = 0.0f;
         float mach_sq = mach * mach;
-        
+
         if (cos_theta < 0.0f) {
             float Cp_max = (gamma_eff + 3.0f) / (gamma_eff + 1.0f);
             float Cp_stag = Cp_max * (1.0f - 1.0f / (gamma_eff * mach_sq));
@@ -42,7 +43,7 @@ namespace panel {
         } else {
             Cp = -2.0f / (gamma_eff * mach_sq);
         }
-        
+
         // 2. Viscous interaction + skin friction (same local conditions)
         float sin_theta = sqrtf(fmaxf(1.0f - cos_theta * cos_theta, 0.0f));
         float M_local = mach * sin_theta;
@@ -52,7 +53,7 @@ namespace panel {
         float Re_x = rho_ref * V_local * running_length / mu_ref;
         Cp = Cp + viscous_interaction_dCp(M_local, Re_x, gamma_eff);
         float Cf = van_driest_II_Cf_adiabatic(M_local, Re_x, gamma_eff);
-        
+
         // 3. Total force = pressure + friction
         float3 force_term = tri.normal * (-Cp * tri.area);
         if (Cf > 0.0f) {
@@ -60,7 +61,7 @@ namespace panel {
             force_term = force_term + tan_dir * (Cf * tri.area);
         }
         forces_out[idx] = force_term;
-        
+
         float3 r = make_float3(tri.center.x - moment_ref_point.x,
                                tri.center.y - moment_ref_point.y,
                                tri.center.z - moment_ref_point.z);
@@ -348,7 +349,7 @@ namespace panel {
 
         std::vector<float3> h_forces(num_triangles);
         std::vector<float3> h_moments(num_triangles);
-        
+
         cudaMemcpy(h_forces.data(), d_forces, num_triangles * sizeof(float3), cudaMemcpyDeviceToHost);
         cudaMemcpy(h_moments.data(), d_moments, num_triangles * sizeof(float3), cudaMemcpyDeviceToHost);
 
@@ -361,11 +362,11 @@ namespace panel {
         }
 
         AeroCoefficients coeffs;
-        
+
         coeffs.CX = total_force_term.x / ref_area;
         coeffs.CY = total_force_term.y / ref_area;
         coeffs.CZ = total_force_term.z / ref_area;
-        
+
         coeffs.Cl = total_moment_term.x / (ref_area * ref_span);
         coeffs.Cm = total_moment_term.y / (ref_area * ref_length);
         coeffs.Cn = total_moment_term.z / (ref_area * ref_span);
@@ -392,7 +393,7 @@ namespace panel {
 
         coeffs.CD = -Fsx;
         coeffs.CL = -Fsz;
-        
+
         if (std::abs(coeffs.CD) > 1e-6f)
             coeffs.L_D = coeffs.CL / coeffs.CD;
         else

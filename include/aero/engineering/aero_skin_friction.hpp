@@ -6,7 +6,7 @@
 
 namespace aerosp {
 namespace aero {
-namespace panel {
+namespace eng {
 
 // Vector math for float3 (in namespace for ODR safety)
 __device__ __host__ inline float3 operator+(const float3& a, const float3& b) {

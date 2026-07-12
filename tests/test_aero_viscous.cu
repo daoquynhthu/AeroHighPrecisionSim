@@ -5,6 +5,7 @@
 #include "aero/panel/aero_solver.hpp"
 
 using namespace aerosp::aero::panel;
+using namespace aerosp::aero::eng;
 
 // ─── Reference: White Table 7-6, adiabatic wall, gamma=1.4 ─────────────
 // M=0  Re=1e7  Cf=0.00288
