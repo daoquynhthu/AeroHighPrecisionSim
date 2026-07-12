@@ -917,3 +917,10 @@
 - Test coverage (COV): 23 findings (3 HIGH, 8 MEDIUM, 6 LOW, 6 INFO) — untested functions (compact_mesh_nodes, compute_rans_sources mesh-wrapper), no CGNS round-trip, no NS order-1 MMS
 - Performance (PERF2): 12 findings (3 HIGH, 5 MEDIUM, 3 LOW, 1 INFO) — implicit D2H syncs in Newton loop, viscous kernel no __launch_bounds__, LU-SGS O(N*F) scan, no multi-stream
 - Total: 68 findings written to ISSUES.md as `## Pre-Phase 13 Audit (2026-07-12)`
+
+2026-07-12 — PHYS-1: SA implicit kernel karman^2 fix
+- Fix: removed `karman * karman *` from d_dest denominator in both `apply_rans_implicit_kernel` and `apply_rans_implicit_per_cell_kernel` (gpu_rans.cu:161,195)
+- Cause: d_dest should be `2*cw1*nu_tilde/d^2`, was `2*cw1*nu_tilde/(karman^2*d^2)` — extra 1/karman^2 ≈ 5.95 factor made implicit correction 6x weaker
+- Test: CFD-RANS-IMPLICIT-KARMAN-1 — direct unit test on single-cell DeviceMesh with known nu_tilde=1, d=1, dt=0.1; verifies R_new ≈ -3.93 (not -7.94 from bug)
+- Verification: TestCfdGpu 64/64 PASS
+- Committed as part of PHYS-1

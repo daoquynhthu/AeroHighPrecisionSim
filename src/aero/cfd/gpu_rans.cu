@@ -156,9 +156,8 @@ __global__ void apply_rans_implicit_kernel(
     if (!real_isfinite(nu_tilde)) return;
 
     constexpr Real cw1 = 0.1355f / (0.41f * 0.41f) + (1.0f + 0.622f) / (2.0f / 3.0f); // ~3.239
-    constexpr Real karman = 0.41f;
 
-    Real d_dest = 2.0f * cw1 * nu_tilde / (karman * karman * wall_distance * wall_distance + 1e-30f);
+    Real d_dest = 2.0f * cw1 * nu_tilde / (wall_distance * wall_distance + 1e-30f);
     Real dt_over_V = min_dt / (d_volume[idx] + 1e-30f);
     Real implicit_factor = 1.0f / (1.0f + dt_over_V * d_dest + 1e-30f);
 
@@ -190,9 +189,8 @@ __global__ void apply_rans_implicit_per_cell_kernel(
     if (!real_isfinite(nu_tilde)) return;
 
     constexpr Real cw1 = 0.1355f / (0.41f * 0.41f) + (1.0f + 0.622f) / (2.0f / 3.0f); // ~3.239
-    constexpr Real karman = 0.41f;
 
-    Real d_dest = 2.0f * cw1 * nu_tilde / (karman * karman * wall_distance * wall_distance + 1e-30f);
+    Real d_dest = 2.0f * cw1 * nu_tilde / (wall_distance * wall_distance + 1e-30f);
     Real dt_over_V = d_dt_cell[idx] / (d_volume[idx] + 1e-30f);
     Real implicit_factor = 1.0f / (1.0f + dt_over_V * d_dest + 1e-30f);
 

@@ -2904,6 +2904,70 @@ static int test_cpu_viscous_turb_equivalence() {
     return 0;
 }
 
+static int test_rans_implicit_karman_fix() {
+    TEST("CFD-RANS-IMPLICIT-KARMAN-1 SA implicit karman^2 fix (PHYS-1)");
+    {
+        CfdMesh mesh = generate_structured_cube_mesh(5.0f, 13);
+        compute_mesh_metrics(mesh);
+        DeviceMesh d_mesh;
+        if (!d_mesh.upload_mesh(mesh)) FAIL("upload mesh failed");
+
+        int n = static_cast<int>(mesh.cells.size());
+
+        PrimitiveState w;
+        w.rho = 1.0f; w.u = 1.0f; w.v = 0.0f; w.w = 0.0f;
+        w.p = 1.0f / 1.4f; w.nu_tilde = 1.0f;
+        ConservativeState q = primitive_to_conservative(w, 1.4f);
+        std::vector<ConservativeState> h_q(n, q);
+        if (!d_mesh.upload_state(h_q)) FAIL("upload state failed");
+
+        if (!d_mesh.allocate_viscous()) FAIL("allocate_viscous failed");
+        if (!d_mesh.clear_residual()) FAIL("clear_residual failed");
+
+        Real wd = 1.0f;
+        if (!cuda_check(cudaMemcpy(d_mesh.cell_data().wall_distance, &wd, sizeof(Real), cudaMemcpyHostToDevice), "set wd"))
+            FAIL("set wall_distance failed");
+        Real vol = 1.0f;
+        if (!cuda_check(cudaMemcpy(d_mesh.cell_data().volume, &vol, sizeof(Real), cudaMemcpyHostToDevice), "set vol"))
+            FAIL("set volume failed");
+
+        Real* d_min_dt = nullptr;
+        if (!cuda_check(cudaMalloc(&d_min_dt, sizeof(Real)), "malloc d_min_dt"))
+            FAIL("malloc d_min_dt");
+        Real h_min_dt = 0.1f;
+        if (!cuda_check(cudaMemcpy(d_min_dt, &h_min_dt, sizeof(Real), cudaMemcpyHostToDevice), "set d_min_dt"))
+            FAIL("set d_min_dt");
+
+        std::string error;
+        if (!apply_rans_implicit_gpu(d_mesh, 1e6f, d_min_dt, &error))
+            FAIL("apply_rans_implicit_gpu failed: %s", error.c_str());
+
+        std::vector<EulerFlux> residual(n);
+        if (!d_mesh.download_residual(residual)) FAIL("download_residual failed");
+
+        // Expected with fix (no karman^2 in d_dest):
+        // d_dest = 2*cw1*nu_tilde/d^2 = 2*3.2391*1/1 = 6.4782
+        // f = 1/(1 + 0.1*6.4782) = 0.6069
+        // R_new = (1*(0.6069-1))/0.1 + 0 = -3.931
+        Real expected = (1.0f / (1.0f + h_min_dt * 2.0f * (
+            0.1355f / (0.41f * 0.41f) + (1.0f + 0.622f) / (2.0f / 3.0f))) - 1.0f) / h_min_dt;
+        Real actual = residual[0].turbulence;
+        Real tol = 1e-5f;
+        if (std::fabs(actual - expected) > tol)
+            FAIL("cell 0 R[5] = %g, expected %g (diff %g)", actual, expected, actual - expected);
+
+        // Verify fix is active: bug result (with karman^2) would be ~-7.94, not ~-3.93
+        Real bug = (1.0f / (1.0f + h_min_dt * 2.0f * (
+            0.1355f / (0.41f * 0.41f) + (1.0f + 0.622f) / (2.0f / 3.0f)) / (0.41f * 0.41f)) - 1.0f) / h_min_dt;
+        if (std::fabs(actual - bug) < tol)
+            FAIL("PHYS-1 fix NOT active: matches bug regime (%g)", actual);
+
+        cuda_check(cudaFree(d_min_dt), "free d_min_dt");
+        PASS;
+    }
+    return 0;
+}
+
 static int test_robust_inf_rho() {
     TEST("CFD-ROBUST-INF-RHO Inf rho injection triggers solver failure");
     {
@@ -3169,6 +3233,7 @@ result |= test_recon_order2_converged_forces();
     result |= test_cpu_order2_equivalence();
     result |= test_cpu_viscous_order2_equivalence();
     result |= test_cpu_viscous_turb_equivalence();
+    result |= test_rans_implicit_karman_fix();
     result |= test_robust_inf_rho();
     result |= test_robust_inf_p();
     result |= test_robust_nan_vel();
