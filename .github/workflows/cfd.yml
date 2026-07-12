@@ -1,0 +1,54 @@
+name: CFD
+
+on: [push, pull_request]
+
+jobs:
+  build:
+    name: Build + Test (Windows)
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Configure
+        run: cmake -B build -DAEROSIM_USE_CGNS=OFF -DAEROSIM_MPI=OFF
+      - name: Build libraries
+        run: cmake --build build --config Release --target missile_lib missile_cpu
+      - name: Build CFD tests
+        run: cmake --build build --config Release --target TestCfdGpu TestCfdMesh TestCfdEuler TestCfdDiagnostics TestCfdReconstruction TestCfdViscous TestCfdState TestCfdRans TestCfdFuzz
+      - name: Run CFD tests
+        run: ctest --test-dir build -C Release -R "Cfd" --output-on-failure
+
+  coverage:
+    name: Coverage (Linux)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install gcovr
+        run: pip install gcovr
+      - name: Configure (coverage)
+        run: cmake -B build -DAEROSIM_COVERAGE=ON -DAEROSIM_USE_CGNS=OFF -DAEROSIM_MPI=OFF
+      - name: Build
+        run: cmake --build build --config Debug -j$(nproc)
+      - name: Run tests
+        run: ctest --test-dir build -C Debug -R "Cfd(Mesh|Euler|Diagnostics|Reconstruction|Viscous|State|Rans)" --output-on-failure
+      - name: Generate coverage report
+        run: gcovr -r . --html --html-details -o build/coverage/index.html
+      - name: Coverage threshold gate
+        # Initial thresholds account for GPU code (~2000 lines) that gcov cannot measure.
+        # Raise these as CPU-side coverage improves.
+        run: gcovr -r . --fail-under-line=45 --fail-under-branch=28
+      - uses: actions/upload-artifact@v4
+        with:
+          name: coverage-report
+          path: build/coverage/
+
+  sanitize:
+    name: Sanitize (ASAN+UBSAN)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Configure (sanitize)
+        run: cmake -B build_san -DAEROSIM_SANITIZE=ON -DAEROSIM_USE_CGNS=OFF -DAEROSIM_MPI=OFF
+      - name: Build
+        run: cmake --build build_san --config Debug -j$(nproc)
+      - name: Run CPU CFD tests under sanitizers
+        run: ctest --test-dir build_san -C Debug -R "Cfd(Mesh|Euler|Diagnostics|Reconstruction|Viscous|State|Rans)" --output-on-failure

@@ -180,12 +180,152 @@ static int test_limiter() {
     return 0;
 }
 
+static int test_reconstruct_primitive() {
+    TEST("CFD-RECON-8 reconstruct_primitive zero gradient returns center");
+    {
+        PrimitiveState center;
+        center.rho = 1.0f; center.u = 2.0f; center.v = 3.0f; center.w = 4.0f; center.p = 5.0f; center.nu_tilde = 0.1f;
+        PrimitiveGradient g;
+        PrimitiveState r = reconstruct_primitive(center, g, 1.0f, 2.0f, 3.0f);
+        if (std::fabs(r.rho - center.rho) > 1e-6f) FAIL("rho=%g", r.rho);
+        if (std::fabs(r.u - center.u) > 1e-6f) FAIL("u=%g", r.u);
+        if (std::fabs(r.v - center.v) > 1e-6f) FAIL("v=%g", r.v);
+        if (std::fabs(r.w - center.w) > 1e-6f) FAIL("w=%g", r.w);
+        if (std::fabs(r.p - center.p) > 1e-6f) FAIL("p=%g", r.p);
+        if (std::fabs(r.nu_tilde - center.nu_tilde) > 1e-6f) FAIL("nu_tilde=%g", r.nu_tilde);
+        PASS;
+    }
+
+    TEST("CFD-RECON-9 reconstruct_primitive linear reconstruction with known gradient");
+    {
+        PrimitiveState center;
+        center.rho = 1.0f; center.u = 2.0f; center.v = 3.0f; center.w = 4.0f; center.p = 5.0f; center.nu_tilde = 0.1f;
+        PrimitiveGradient g;
+        g.drho_dx = 10.0f; g.du_dy = 20.0f; g.dv_dz = 30.0f; g.dw_dx = 1.0f; g.dp_dy = 2.0f; g.dnu_tilde_dz = 5.0f;
+        PrimitiveState r = reconstruct_primitive(center, g, 0.5f, 0.25f, 0.125f);
+        if (std::fabs(r.rho - (1.0f + 10.0f * 0.5f)) > 1e-6f) FAIL("rho=%g", r.rho);
+        if (std::fabs(r.u - (2.0f + 20.0f * 0.25f)) > 1e-6f) FAIL("u=%g", r.u);
+        if (std::fabs(r.v - (3.0f + 30.0f * 0.125f)) > 1e-6f) FAIL("v=%g", r.v);
+        if (std::fabs(r.w - (4.0f + 1.0f * 0.5f)) > 1e-6f) FAIL("w=%g", r.w);
+        if (std::fabs(r.p - (5.0f + 2.0f * 0.25f)) > 1e-6f) FAIL("p=%g", r.p);
+        if (std::fabs(r.nu_tilde - (0.1f + 5.0f * 0.125f)) > 1e-6f) FAIL("nu_tilde=%g", r.nu_tilde);
+        PASS;
+    }
+    return 0;
+}
+
+static int test_reconstruct_positive() {
+    TEST("CFD-RECON-10 reconstruct_primitive_positive clamps negative rho");
+    {
+        PrimitiveState center;
+        center.rho = 1.0f; center.u = 0.0f; center.p = 1.0f;
+        PrimitiveGradient g;
+        g.drho_dx = -100.0f;
+        PrimitiveState r = reconstruct_primitive_positive(center, g, 0.5f, 0.0f, 0.0f, 1e-3f, 1e-3f);
+        if (r.rho < 1e-3f - 1e-4f) FAIL("rho=%g should be >= floor", r.rho);
+        PASS;
+    }
+
+    TEST("CFD-RECON-11 reconstruct_primitive_positive clamps negative p");
+    {
+        PrimitiveState center;
+        center.rho = 1.0f; center.u = 0.0f; center.p = 1.0f;
+        PrimitiveGradient g;
+        g.dp_dx = -100.0f;
+        PrimitiveState r = reconstruct_primitive_positive(center, g, 0.5f, 0.0f, 0.0f, 1e-3f, 1e-3f);
+        // p_floor=1e-3 is chosen so that (center - floor) is distinguishable from center in float32
+        if (r.p < 1e-3f - 1e-4f) FAIL("p=%g should be >= floor", r.p);
+        PASS;
+    }
+
+    TEST("CFD-RECON-12 reconstruct_primitive_positive returns theta");
+    {
+        PrimitiveState center;
+        center.rho = 1.0f; center.u = 0.0f; center.p = 1.0f;
+        PrimitiveGradient g;
+        g.drho_dx = -100.0f;
+        Real theta = -1.0f;
+        reconstruct_primitive_positive(center, g, 0.5f, 0.0f, 0.0f, 1e-3f, 1e-3f, &theta);
+        if (theta < 0.0f || theta > 1.0f) FAIL("theta=%g not in [0,1]", theta);
+        if (theta >= 1.0f) FAIL("theta=%g should be < 1 for clamping case", theta);
+        PASS;
+    }
+
+    TEST("CFD-RECON-13 reconstruct_primitive_positive no clamping gives theta=1");
+    {
+        PrimitiveState center;
+        center.rho = 1.0f; center.u = 0.0f; center.p = 1.0f;
+        PrimitiveGradient g;
+        g.drho_dx = 0.5f; g.dp_dx = 0.5f;
+        Real theta = -1.0f;
+        reconstruct_primitive_positive(center, g, 0.5f, 0.0f, 0.0f, 1e-3f, 1e-3f, &theta);
+        if (std::fabs(theta - 1.0f) > 1e-6f) FAIL("theta=%g expected 1.0", theta);
+        PASS;
+    }
+    return 0;
+}
+
+static int test_apply_limiter() {
+    TEST("CFD-RECON-14 apply_limiter identity returns same gradient");
+    {
+        PrimitiveGradient g;
+        g.drho_dx = 1.0f; g.drho_dy = 2.0f; g.drho_dz = 3.0f;
+        g.du_dx = 4.0f; g.du_dy = 5.0f; g.du_dz = 6.0f;
+        g.dv_dx = 7.0f; g.dv_dy = 8.0f; g.dv_dz = 9.0f;
+        g.dw_dx = 10.0f; g.dw_dy = 11.0f; g.dw_dz = 12.0f;
+        g.dp_dx = 13.0f; g.dp_dy = 14.0f; g.dp_dz = 15.0f;
+        g.dnu_tilde_dx = 16.0f; g.dnu_tilde_dy = 17.0f; g.dnu_tilde_dz = 18.0f;
+        PrimitiveLimiter lim;
+        PrimitiveGradient l = apply_limiter(g, lim);
+        if (std::fabs(l.drho_dx - 1.0f) > 1e-6f) FAIL("drho_dx=%g", l.drho_dx);
+        if (std::fabs(l.dp_dy - 14.0f) > 1e-6f) FAIL("dp_dy=%g", l.dp_dy);
+        if (std::fabs(l.dnu_tilde_dz - 18.0f) > 1e-6f) FAIL("dnu_tilde_dz=%g", l.dnu_tilde_dz);
+        PASS;
+    }
+
+    TEST("CFD-RECON-15 apply_limiter zero returns zero gradient");
+    {
+        PrimitiveGradient g;
+        g.drho_dx = 1.0f; g.dv_dz = 9.0f; g.dw_dy = 11.0f; g.dp_dx = 13.0f; g.dnu_tilde_dx = 16.0f;
+        PrimitiveLimiter lim;
+        lim.rho = 0.0f; lim.u = 0.0f; lim.v = 0.0f; lim.w = 0.0f; lim.p = 0.0f; lim.nu_tilde = 0.0f;
+        PrimitiveGradient l = apply_limiter(g, lim);
+        if (l.drho_dx != 0.0f) FAIL("drho_dx=%g", l.drho_dx);
+        if (l.dv_dz != 0.0f) FAIL("dv_dz=%g", l.dv_dz);
+        if (l.dw_dy != 0.0f) FAIL("dw_dy=%g", l.dw_dy);
+        if (l.dp_dx != 0.0f) FAIL("dp_dx=%g", l.dp_dx);
+        if (l.dnu_tilde_dx != 0.0f) FAIL("dnu_tilde_dx=%g", l.dnu_tilde_dx);
+        PASS;
+    }
+
+    TEST("CFD-RECON-16 apply_limiter partial scale each component");
+    {
+        PrimitiveGradient g;
+        g.drho_dx = 10.0f; g.du_dy = 20.0f; g.dv_dz = 30.0f;
+        g.dw_dx = 40.0f; g.dp_dy = 50.0f; g.dnu_tilde_dz = 60.0f;
+        PrimitiveLimiter lim;
+        lim.rho = 0.5f; lim.u = 0.25f; lim.v = 0.75f; lim.w = 0.1f; lim.p = 0.9f; lim.nu_tilde = 0.5f;
+        PrimitiveGradient l = apply_limiter(g, lim);
+        if (std::fabs(l.drho_dx - 5.0f) > 2e-6f) FAIL("drho_dx=%g", l.drho_dx);
+        if (std::fabs(l.du_dy - 5.0f) > 2e-6f) FAIL("du_dy=%g", l.du_dy);
+        if (std::fabs(l.dv_dz - 22.5f) > 2e-6f) FAIL("dv_dz=%g", l.dv_dz);
+        if (std::fabs(l.dw_dx - 4.0f) > 2e-6f) FAIL("dw_dx=%g", l.dw_dx);
+        if (std::fabs(l.dp_dy - 45.0f) > 2e-6f) FAIL("dp_dy=%g", l.dp_dy);
+        if (std::fabs(l.dnu_tilde_dz - 30.0f) > 2e-6f) FAIL("dnu_tilde_dz=%g", l.dnu_tilde_dz);
+        PASS;
+    }
+    return 0;
+}
+
 int main() {
     int result = 0;
     result |= test_green_gauss();
     result |= test_least_squares();
     result |= test_positive_guard();
     result |= test_limiter();
+    result |= test_reconstruct_primitive();
+    result |= test_reconstruct_positive();
+    result |= test_apply_limiter();
     std::printf("\n%d / %d tests PASSED.\n", pass_count, test_count);
     return result == 0 && pass_count == test_count ? 0 : 1;
 }

@@ -20,6 +20,7 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdlib>
+#include <limits>
 
 using namespace aerosp;
 using namespace aerosp::aero::cfd;
@@ -2850,6 +2851,211 @@ static int test_cpu_viscous_turb_equivalence() {
     return 0;
 }
 
+static int test_robust_inf_rho() {
+    TEST("CFD-ROBUST-INF-RHO Inf rho injection triggers solver failure");
+    {
+        CfdMesh mesh = generate_structured_cube_mesh(5.0f, 9);
+        compute_mesh_metrics(mesh);
+        CfdSolver solver;
+        if (!solver.load_mesh(mesh)) FAIL("load_mesh failed");
+
+        FreestreamCondition cond;
+        cond.mach = 2.0f; cond.alpha_deg = 0.0f; cond.beta_deg = 0.0f;
+
+        CfdConfig cfg;
+        cfg.max_iter = 5;
+        cfg.use_gpu = true;
+        cfg.reconstruction_order = 1;
+        cfg.diagnostic_level = DiagnosticLevel::Off;
+
+        PrimitiveState w_inf;
+        w_inf.rho = 1.0f; w_inf.u = 2.0f; w_inf.p = 1.0f / 1.4f;
+        ConservativeState q = primitive_to_conservative(w_inf, 1.4f);
+        std::vector<ConservativeState> qv(mesh.cells.size(), q);
+        qv[0].rho = std::numeric_limits<Real>::infinity();
+
+        CfdSolveSummary summary = solver.solve_from_state(cond, cfg, qv);
+        if (!summary.failed) FAIL("solver did not detect Inf rho");
+        PASS;
+    }
+    return 0;
+}
+
+static int test_robust_inf_p() {
+    TEST("CFD-ROBUST-INF-P Inf rho_E injection triggers solver failure");
+    {
+        CfdMesh mesh = generate_structured_cube_mesh(5.0f, 9);
+        compute_mesh_metrics(mesh);
+        CfdSolver solver;
+        if (!solver.load_mesh(mesh)) FAIL("load_mesh failed");
+
+        FreestreamCondition cond;
+        cond.mach = 2.0f; cond.alpha_deg = 0.0f; cond.beta_deg = 0.0f;
+
+        CfdConfig cfg;
+        cfg.max_iter = 5;
+        cfg.use_gpu = true;
+        cfg.reconstruction_order = 1;
+        cfg.diagnostic_level = DiagnosticLevel::Off;
+
+        PrimitiveState w_inf;
+        w_inf.rho = 1.0f; w_inf.u = 2.0f; w_inf.p = 1.0f / 1.4f;
+        ConservativeState q = primitive_to_conservative(w_inf, 1.4f);
+        std::vector<ConservativeState> qv(mesh.cells.size(), q);
+        qv[0].rho_E = std::numeric_limits<Real>::infinity();
+
+        CfdSolveSummary summary = solver.solve_from_state(cond, cfg, qv);
+        if (!summary.failed) FAIL("solver did not detect Inf rho_E");
+        PASS;
+    }
+    return 0;
+}
+
+static int test_robust_nan_vel() {
+    TEST("CFD-ROBUST-NAN-VEL NaN velocity injection triggers solver failure");
+    {
+        CfdMesh mesh = generate_structured_cube_mesh(5.0f, 9);
+        compute_mesh_metrics(mesh);
+        CfdSolver solver;
+        if (!solver.load_mesh(mesh)) FAIL("load_mesh failed");
+
+        FreestreamCondition cond;
+        cond.mach = 2.0f; cond.alpha_deg = 0.0f; cond.beta_deg = 0.0f;
+
+        CfdConfig cfg;
+        cfg.max_iter = 5;
+        cfg.use_gpu = true;
+        cfg.reconstruction_order = 1;
+        cfg.diagnostic_level = DiagnosticLevel::Off;
+
+        PrimitiveState w_inf;
+        w_inf.rho = 1.0f; w_inf.u = 2.0f; w_inf.p = 1.0f / 1.4f;
+        ConservativeState q = primitive_to_conservative(w_inf, 1.4f);
+        std::vector<ConservativeState> qv(mesh.cells.size(), q);
+        qv[0].rho_u = std::numeric_limits<Real>::quiet_NaN();
+
+        CfdSolveSummary summary = solver.solve_from_state(cond, cfg, qv);
+        if (!summary.failed) FAIL("solver did not detect NaN velocity");
+        PASS;
+    }
+    return 0;
+}
+
+static int test_robust_zero_volume() {
+    TEST("CFD-ROBUST-ZERO-VOLUME zero cell volume produces finite residual");
+    {
+        CfdMesh mesh = generate_structured_cube_mesh(5.0f, 9);
+        compute_mesh_metrics(mesh);
+        DeviceMesh d_mesh;
+        if (!d_mesh.upload_mesh(mesh)) FAIL("upload mesh failed");
+
+        int n = static_cast<int>(mesh.cells.size());
+        int nvar = DeviceMesh::NVAR;
+        PrimitiveState w_inf;
+        w_inf.rho = 1.0f; w_inf.u = 2.0f; w_inf.v = 0.0f; w_inf.w = 0.0f;
+        w_inf.p = 1.0f / 1.4f; w_inf.nu_tilde = 0.0f;
+        ConservativeState q_inf = primitive_to_conservative(w_inf, 1.4f);
+        std::vector<ConservativeState> h_q(n, q_inf);
+        if (!d_mesh.upload_state(h_q)) FAIL("upload state failed");
+
+        // Zero out volume of cell 0
+        Real zero = 0.0f;
+        if (!cuda_check(cudaMemcpy(d_mesh.cell_data().volume, &zero, sizeof(Real), cudaMemcpyHostToDevice), "zero volume"))
+            FAIL("cudaMemcpy zero volume failed");
+
+        int* d_failed = nullptr;
+        if (!cuda_check(cudaMalloc(&d_failed, sizeof(int)), "malloc d_failed"))
+            FAIL("malloc d_failed");
+        if (!cuda_check(cudaMemset(d_failed, 0, sizeof(int)), "zero d_failed"))
+            FAIL("zero d_failed");
+
+        Real* d_min_dt = nullptr;
+        if (!cuda_check(cudaMalloc(&d_min_dt, sizeof(Real)), "malloc d_min_dt"))
+            FAIL("malloc d_min_dt");
+
+        // Run timestep + residual + update
+        Real cfl = 0.5f; Real gamma = 1.4f;
+        if (!compute_timestep_gpu(d_mesh, gamma, cfl, d_min_dt))
+            FAIL("compute_timestep_gpu failed");
+        std::string error;
+        if (!compute_euler_residual_gpu(d_mesh, w_inf, gamma, d_failed, &error, 1))
+            FAIL("compute_euler_residual_gpu failed");
+
+        Real* d_l2_sum = nullptr;
+        if (!cuda_check(cudaMalloc(&d_l2_sum, sizeof(Real)), "malloc d_l2_sum"))
+            FAIL("malloc d_l2_sum");
+
+        if (!compute_update_gpu(d_mesh, d_min_dt, gamma, d_l2_sum, d_failed))
+            FAIL("compute_update_gpu failed");
+
+        int host_failed = 0;
+        if (!cuda_check(cudaMemcpy(&host_failed, d_failed, sizeof(int), cudaMemcpyDeviceToHost), "read d_failed"))
+            FAIL("read d_failed failed");
+
+        // Residual must remain finite — download and check
+        std::vector<EulerFlux> residual(n);
+        if (!d_mesh.download_residual(residual)) FAIL("download_residual failed");
+
+        bool all_finite = true;
+        for (int i = 0; i < n && all_finite; ++i) {
+            if (!std::isfinite(residual[i].mass)) all_finite = false;
+            if (!std::isfinite(residual[i].mom_x)) all_finite = false;
+            if (!std::isfinite(residual[i].energy)) all_finite = false;
+        }
+        if (!all_finite) FAIL("residual contains NaN after zero-volume step");
+        // d_failed may be nonzero (update on zero volume triggers failure) or zero
+        // (if the solver didn't run update on cell 0 due to the residual kernel)
+        // Either is acceptable — the key check is that residual is finite.
+
+        cuda_check(cudaFree(d_failed), "free d_failed");
+        cuda_check(cudaFree(d_min_dt), "free d_min_dt");
+        cuda_check(cudaFree(d_l2_sum), "free d_l2_sum");
+        PASS;
+    }
+    return 0;
+}
+
+static int test_robust_negative_wall_distance() {
+    TEST("CFD-ROBUST-NEGATIVE-WALL-DIST negative wall distance handled gracefully");
+    {
+        CfdMesh mesh = generate_structured_cube_mesh(5.0f, 9);
+        compute_mesh_metrics(mesh);
+        DeviceMesh d_mesh;
+        if (!d_mesh.upload_mesh(mesh)) FAIL("upload mesh failed");
+
+        int n = static_cast<int>(mesh.cells.size());
+        PrimitiveState w_inf;
+        w_inf.rho = 1.0f; w_inf.u = 2.0f; w_inf.v = 0.0f; w_inf.w = 0.0f;
+        w_inf.p = 1.0f / 1.4f; w_inf.nu_tilde = 3.0f;
+        ConservativeState q_inf = primitive_to_conservative(w_inf, 1.4f);
+        std::vector<ConservativeState> h_q(n, q_inf);
+        if (!d_mesh.upload_state(h_q)) FAIL("upload state failed");
+
+        // Allocate viscous for wall_distance
+        if (!d_mesh.allocate_viscous()) FAIL("allocate_viscous failed");
+
+        // Inject negative wall distance for cell 0
+        Real neg_d = -1.0f;
+        if (!cuda_check(cudaMemcpy(d_mesh.cell_data().wall_distance, &neg_d, sizeof(Real), cudaMemcpyHostToDevice), "neg wall dist"))
+            FAIL("cudaMemcpy neg wall distance failed");
+
+        int* d_failed = nullptr;
+        if (!cuda_check(cudaMalloc(&d_failed, sizeof(int)), "malloc d_failed"))
+            FAIL("malloc d_failed");
+        if (!cuda_check(cudaMemset(d_failed, 0, sizeof(int)), "zero d_failed"))
+            FAIL("zero d_failed");
+
+        std::string error;
+        Real Re = 1e6f;
+        bool result = compute_rans_source_gpu(d_mesh, 1.4f, Re, 1.0f, 288.15f, 110.4f, d_failed, &error);
+        if (!result) FAIL("compute_rans_source_gpu returned false: %s", error.c_str());
+
+        cuda_check(cudaFree(d_failed), "free d_failed");
+        PASS;
+    }
+    return 0;
+}
+
 int main() {
     int result = 0;
     result |= test_residual_equivalence_single_face();
@@ -2909,6 +3115,11 @@ result |= test_recon_order2_converged_forces();
     result |= test_cpu_order2_equivalence();
     result |= test_cpu_viscous_order2_equivalence();
     result |= test_cpu_viscous_turb_equivalence();
+    result |= test_robust_inf_rho();
+    result |= test_robust_inf_p();
+    result |= test_robust_nan_vel();
+    result |= test_robust_zero_volume();
+    result |= test_robust_negative_wall_distance();
     std::printf("\n%d / %d tests PASSED.\n", pass_count, test_count);
     return result == 0 && pass_count == test_count ? 0 : 1;
 }

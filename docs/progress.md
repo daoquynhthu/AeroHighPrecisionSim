@@ -643,3 +643,37 @@
 - 审计已知损坏的测试目标 (TestPropulsion/TestAero/TestIntegrator/TestLaunch/TestAeroTableGen/TestCompareAtm/TestGuidance/TestAutopilot — Eigen include/link errors)
 - 确认梯度kernel崩溃根因: stale missile_lib.lib in Ninja cache, 非代码bug
 - 验证: 所有ci.ps1子命令正常工作, 57/57 tests PASS
+
+2026-07-12
+- Phase A (测试基础设施升级) 实施:
+  - CMakeLists.txt: 添加 `AEROSIM_COVERAGE` (gcov, GCC/Clang) + `AEROSIM_SANITIZE` (ASAN+UBSAN, GCC/Clang; MSVC /RTC1 fallback) 选项
+  - `.github/workflows/cfd.yml`: 3-job CI pipeline (build Windows + coverage Linux + sanitize Linux)
+  - `scripts/ci.ps1`: 新增 `coverage` / `sanitize` 子命令; 修复 `install-hooks` 生成双钩子 (sh wrapper + pre-commit.ps1)
+  - `.git/hooks/pre-commit`: POSIX sh wrapper (resolve pwsh) + `.git/hooks/pre-commit.ps1` (实际逻辑)
+   - 验证: cmake -DAEROSIM_COVERAGE=ON / -DAEROSIM_SANITIZE=ON 均正确配置; ci.ps1 check/test-cfd-gpu PASS
+   - GCC coverage build (build_cov): cmake -DAEROSIM_COVERAGE=ON -DAEROSIM_USE_CUDA=OFF -G "MinGW Makefiles" → cmake --build build_cov → ctest -R "Cfd|Propulsion|Autopilot|Integrator|Oracle" → 8/8 PASS + test_oracle_fp64 3/3 PASS; HTML report at build_cov/coverage/index.html
+   - GCC sanitize build: cmake -DAEROSIM_SANITIZE=ON -DAEROSIM_USE_CUDA=OFF -G "MinGW Makefiles" → auto-detect no libasan → degrades gracefully with WARNING
+   - MSVC+CUDA Release build: missile_cpu + missile_lib compile and link clean
+   - Phase A gate: all 6 conditions met. Phase A complete.
+
+2026-07-12 — Phase C (Coverage Hardening & CI Enforcement) completed.
+- Created docs/COVERAGE_GAPS.md with initial gap analysis (9 files, 3564 lines).
+- Wrote tests/cfd/test_cfd_rans.cpp: 12 tests (sa_vorticity, compute_rans_source positive/negative chi, zero/NaN wall_distance). rans.cpp 0% → 38% coverage.
+- Extended tests/cfd/test_cfd_reconstruction.cpp: 9 tests (reconstruct_primitive, reconstruct_primitive_positive clamp/theta, apply_limiter identity/zero/partial). 16/16 total.
+- Extended tests/cfd/test_cfd_state.cpp: 8 tests (make_freestream at various Mach/alpha/beta, farfield_ghost_state supersonic/subsonic). 34/34 total.
+- Added TestCfdRans target to tests/CMakeLists.txt (add_cpu_executable + add_test_with_cwd).
+- Updated .github/workflows/cfd.yml: added TestCfdRans to build targets, coverage regex, sanitize regex; added coverage threshold gate (--fail-under-line=45 --fail-under-branch=28).
+- Updated scripts/ci.ps1 coverage/sanitize subcommands with TestCfdRans and threshold gate.
+- Verification: ctest -R "Cfd" reports 9/9 PASS (CfdMesh 11, CfdEuler 8, CfdDiagnostics 4, CfdReconstruction 16, CfdViscous 11, CfdState 34, CfdRans 12, CfdGpu 62, CfdFuzz 6). Total 15.86 sec.
+- GCC coverage report: 45% line, 28% branch overall (GPU-unmeasurable code excluded).
+- Note: GCC 15.2 inlines small functions at -O0, causing gcov undercount for reconstruct_primitive, make_freestream, farfield_ghost_state — all verified PASSing via explicit exe runs.
+- Phase C gate: coverage report + gap doc + CI gates + targeted tests for top-3 gaps. Complete.
+
+2026-07-12 — Phase B (Unit & Regression Test Expansion) completed.
+- Created tests/cfd/test_cfd_state.cpp: 26 tests (9 is_valid_primitive, 8 speed_of_sound, 3 conservative_to_primitive, 6 hllc_flux). 26/26 PASS.
+- Registered TestCfdState in tests/CMakeLists.txt (links missile_cpu, no CUDA).
+- Added 5 robustness injection tests (CFD-ROBUST-*) to test_cfd_gpu.cpp: INF-RHO, INF-P, NAN-VEL (solve_from_state with injected state → summary.failed), ZERO-VOLUME (DeviceMesh + cudaMemcpy → finite residual), NEGATIVE-WALL-DIST (DeviceMesh + cudaMemcpy → compute_rans_source_gpu succeeds). 62/62 GPU tests PASS.
+- Created tests/cfd/test_cfd_fuzz_gpu.cpp: 6 randomized parameter sweeps (CFL log 0.01–10, Re log 1e3–1e8, gamma 1.05–1.67, alpha -30°–+30°, nu_tilde_ratio 0.001–10, wall_temperature 0.5–5.0). All produce finite forces. 6/6 PASS.
+- Registered TestCfdFuzz in tests/CMakeLists.txt (CUDA target, links missile_lib).
+- Created scripts/run_cuda_memcheck.ps1 helper.
+- Verification: `ctest -R Cfd` reports 8/8 PASS (CfdMesh 11/11, CfdEuler 8/8, CfdDiagnostics 4/4, CfdReconstruction 7/7, CfdViscous 11/11, CfdState 26/26, CfdGpu 62/62, CfdFuzz 6/6). Phase B gate: all 7 tasks complete.
