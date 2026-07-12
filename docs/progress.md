@@ -938,6 +938,12 @@
 - New test: CFD-PHYS3 — corrupt one face to unknown BoundaryKind(99), verify GPU residual fails
 - Verification: TestCfdGpu 65/65 PASS
 
+2026-07-12 — PHYS-7+PHYS-11: NaN guard batch fix
+- PHYS-7: Added `!real_isfinite(T)` guard to `sutherland_mu` in both gpu_viscous.cu and gpu_rans.cu
+- PHYS-11: Changed `numeric_limits<Real>::min()` to `Real(1e-30)` in timestep denominator clamp (avoids FTZ explosion)
+- PHYS-12: Marked VERIFIED (formula confirmed correct)
+- Verification: TestCfdGpu 65/65 PASS
+
 2026-07-12 — PHYS-4: Fix d_dt_cell over-allocation (nvar_cells → n_cells)
 - Fix: d_dt_cell now allocates n_cells (per-cell timestep); separated d_neg_r at nvar_cells for residual negation scratch
 - The alias `Real* d_neg_r = d_dt_cell` removed; d_neg_r has its own proper allocation

@@ -24,7 +24,7 @@ __device__ void primitive_from_q(const Real* d_q, int idx, int nvar, Real gamma,
 }
 
 __device__ Real sutherland_mu(Real T, Real T_ref, Real S, Real mu_ref) {
-    if (T <= 0.0f) return mu_ref;
+    if (!real_isfinite(T) || T <= 0.0f) return mu_ref;
     Real t_ratio = T / T_ref;
     return mu_ref * t_ratio * real_sqrt(t_ratio) * (T_ref + S) / (T + S);
 }

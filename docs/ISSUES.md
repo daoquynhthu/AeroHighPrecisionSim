@@ -2659,8 +2659,8 @@ GPU HLLC 通量缺乏熵修正/保号声速校正。波速 `s_l = fmin(vn_l - a_
 **PHYS-6** [MEDIUM] `src/aero/cfd/gpu_viscous.cu:194-216`
 粘性应力计算使用面平均梯度，梯度 NaN 时无保护（如果单元梯度变为 NaN 未被核函数检测到），`div_u`, `tau_xx`, `dT_dn` 将静默传播 NaN。
 
-**PHYS-7** [MEDIUM] `src/aero/cfd/gpu_viscous.cu:26-29, gpu_rans.cu:19-21`
-`d_sutherland_mu` 检查 `T <= 0.0f` 但不检查 `T` 是否为 NaN。NaN 通过 `T <= 0.0f` 检查（返回 false），经 `t_ratio` 和 `real_sqrt(t_ratio)` 传播为 NaN 粘度。
+**PHYS-7** [FIXED] `src/aero/cfd/gpu_viscous.cu:26-29, gpu_rans.cu:19-21`
+`d_sutherland_mu` 检查 `T <= 0.0f` 但不检查 `T` 是否为 NaN。NaN 通过 `T <= 0.0f` 检查（返回 false），经 `t_ratio` 和 `real_sqrt(t_ratio)` 传播为 NaN 粘度。修复：两处均添加 `!real_isfinite(T)` 前置检查。
 
 **PHYS-8** [MEDIUM] `src/aero/cfd/gpu_rans.cu:86`
 SA chi 公式：`chi = Re * rho * nu_tilde / (mu + 1e-30f) + 1e-30f`。加法项使 chi 偏移 ~1e-30，阻止 chi 在壁面处精确为零。CPU 版本（`rans.cpp:43`）也存在同样模式。
@@ -2671,11 +2671,11 @@ SA chi 公式：`chi = Re * rho * nu_tilde / (mu + 1e-30f) + 1e-30f`。加法项
 **PHYS-10** [MEDIUM] `src/aero/cfd/mesh_validator.cpp:211-228`
 `compute_mesh_quality_detail` 计算 `closed_surface_error` 并存储于 `MeshQualityReport` 中，但求解器启动前不检查此值。非水密网格上的守恒误差不被检测。
 
-**PHYS-11** [MEDIUM] `src/aero/cfd/gpu_timestep.cu:54, 113`
-CFL 时间步长使用 `numeric_limits<Real>::min()` (~1.175e-38) 作为 `denom = vmag + a` 的底线。FTZ 模式下真正的零或次正规数被刷新为 0，`> :min()` 检查失败，使用底线值，产生极大 dt（~1e38），可导致求解器爆炸。
+**PHYS-11** [FIXED] `src/aero/cfd/gpu_timestep.cu:54, 113`
+CFL 时间步长使用 `numeric_limits<Real>::min()` (~1.175e-38) 作为 `denom = vmag + a` 的底线。FTZ 模式下真正的零或次正规数被刷新为 0，`> :min()` 检查失败，使用底线值，产生极大 dt（~1e38），可导致求解器爆炸。修复：改为 `Real(1e-30)`。
 
-**PHYS-12** [MEDIUM] `src/aero/cfd/gpu_timestep.cu:61`
-粘性时间步长公式已验证正确：`dt_visc = CFL * rho * h^2 * Re / mu`。无量纲化分析确认无误。
+**PHYS-12** [VERIFIED] `src/aero/cfd/gpu_timestep.cu:61`
+粘性时间步长公式已验证正确：`dt_visc = CFL * rho * h^2 * Re / mu`。无量纲化分析确认无误。无需修改。
 
 **PHYS-13** [LOW] `include/aero/cfd/cfd_state.hpp:38-42` vs `cfd_residual_gpu.cu:12-24`
 `is_valid_primitive`（CPU）已定义但未在 GPU 上使用。GPU 内联等价检查。功能一致但存在维护缺口（对 CPU 的修改可能不同步到 GPU）。

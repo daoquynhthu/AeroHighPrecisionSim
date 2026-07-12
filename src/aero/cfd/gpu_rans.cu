@@ -17,6 +17,7 @@ __device__ Real d_sa_vorticity(const PrimitiveGradient& g) {
 }
 
 __device__ Real d_sutherland_mu(Real T, Real T_ref, Real S) {
+    if (!real_isfinite(T) || T <= 0.0f) return 0.0f;
     Real t_ratio = T / T_ref;
     return t_ratio * real_sqrt(t_ratio) * (T_ref + S) / (T + S);
 }

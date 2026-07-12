@@ -51,7 +51,7 @@ __global__ void timestep_kernel(
                 Real vmag = real_sqrt(u*u + v*v + w*w);
                 Real a = real_sqrt(gamma * p / rho);
                 Real denom = vmag + a;
-                dt = cfl * h / (denom > std::numeric_limits<Real>::min() ? denom : std::numeric_limits<Real>::min());
+                dt = cfl * h / (denom > Real(1e-30) ? denom : Real(1e-30));
                 if (viscous) {
                     Real T = p / rho;
                     if (T > 0.0f) {
