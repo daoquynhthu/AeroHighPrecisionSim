@@ -746,3 +746,12 @@
   - 8/8 implicit tests PASS; 63/63 GPU tests PASS; 114/114 total PASS.
   - Phase 11 single-GPU core [x]; multi-GPU distributed FGMRES deferred (no env).
   - Committed as 96f604d ("Phase 11 closure: adaptive JFV epsilon, CFL retry, ...").
+- 2026-07-12: CPU Oracle Symmetry BC gap closed + Real precision reversion.
+  - Symmetry BC on CPU: added `|| face.boundary == BoundaryKind::Symmetry` to slip_wall flux
+    branch in `compute_euler_residual_cpu` and both `_order2` overloads (cfd_residual.cpp:41,127,203).
+  - `real_fwd.hpp` reverted from global `Real=double` back to `Real=float` default with
+    `AEROSP_REAL_DOUBLE` guarded path. Global double broke GPU atomicAdd throughput ~32x.
+  - Existing `AEROSIM_REAL_DOUBLE` cmake option preserved for full-double builds.
+  - Retained cudaEventElapsedTime float fix and std::max type-hygiene fixes from prior work.
+  - Verification: 63/63 GPU, 8/8 Euler, 12/12 RANS, 11/11 Viscous, 9/9 MMS, 11/11 Mesh.
+    Total: 114/114 tests PASS.

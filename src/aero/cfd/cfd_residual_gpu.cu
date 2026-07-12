@@ -449,10 +449,12 @@ bool compute_euler_residual_gpu_timed(
         return false;
     }
     if (elapsed_ms) {
-        if (!cuda_check(cudaEventElapsedTime(elapsed_ms, s_start, s_stop), "cudaEventElapsedTime", error)) {
+        float ms = 0.0f;
+        if (!cuda_check(cudaEventElapsedTime(&ms, s_start, s_stop), "cudaEventElapsedTime", error)) {
             cuda_free_safe(d_failed);
             return false;
         }
+        *elapsed_ms = static_cast<Real>(ms);
     }
     bool ok = read_kernel_failed_flag(d_failed, error);
     cuda_free_safe(d_failed);

@@ -38,7 +38,7 @@ bool compute_euler_residual_cpu(
                 return false;
             }
             flux = hllc_flux(wl, wr, gamma, face.nx, face.ny, face.nz);
-        } else if (face.boundary == BoundaryKind::SlipWall || face.boundary == BoundaryKind::NoSlipWall) {
+        } else if (face.boundary == BoundaryKind::SlipWall || face.boundary == BoundaryKind::NoSlipWall || face.boundary == BoundaryKind::Symmetry) {
             flux = slip_wall_flux(wl, face.nx, face.ny, face.nz);
         } else {
             PrimitiveState wr;
@@ -124,7 +124,7 @@ bool compute_euler_residual_cpu_order2(
             if (wr.rho <= 0.0f || wr.p <= 0.0f) return false;
 
             flux = hllc_flux(wl, wr, gamma, face.nx, face.ny, face.nz);
-        } else if (face.boundary == BoundaryKind::SlipWall || face.boundary == BoundaryKind::NoSlipWall) {
+        } else if (face.boundary == BoundaryKind::SlipWall || face.boundary == BoundaryKind::NoSlipWall || face.boundary == BoundaryKind::Symmetry) {
             flux = slip_wall_flux(wl, face.nx, face.ny, face.nz);
         } else {
             PrimitiveState wr;
@@ -200,7 +200,7 @@ bool compute_euler_residual_cpu_order2(
             if (wr.rho <= 0.0f || wr.p <= 0.0f) return false;
 
             flux = hllc_flux(wl, wr, gamma, face.nx, face.ny, face.nz);
-        } else if (face.boundary == BoundaryKind::SlipWall || face.boundary == BoundaryKind::NoSlipWall) {
+        } else if (face.boundary == BoundaryKind::SlipWall || face.boundary == BoundaryKind::NoSlipWall || face.boundary == BoundaryKind::Symmetry) {
             flux = slip_wall_flux(wl, face.nx, face.ny, face.nz);
         } else {
             PrimitiveState wr;

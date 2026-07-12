@@ -1566,7 +1566,7 @@ static int test_rans_cpu_gpu_source_match() {
             PrimitiveState wc;
             conservative_to_primitive(q[i], 1.4f, wc);
             Real wall_d = mesh.cells[i].wall_distance;
-            Real T = wc.p / std::max(wc.rho, 1e-30f);
+            Real T = wc.p / std::max(wc.rho, Real(1e-30));
             Real mu = sutherland_viscosity(T, T_ref, S);
             if (mu <= 0.0f) mu = 1.0f;
             RansSource rs = compute_rans_source(wc, limited[i], wall_d, mu, q[i].rho, 1e5f);
@@ -1745,7 +1745,7 @@ static int test_large_dof_krylov_ops() {
         if (!cuda_check(cudaMemcpy(&dot_val, d_result, sizeof(Real), cudaMemcpyDeviceToHost), "copy dot")) FAIL("copy dot");
         Real dot_expected = 0;
         for (int i = 0; i < n; ++i) dot_expected += h_x[i] * h_x[i];
-        if (std::fabs(dot_val - dot_expected) > 1e-3f * std::max(1.0f, dot_expected))
+        if (std::fabs(dot_val - dot_expected) > 1e-3f * std::max(Real(1), dot_expected))
             FAIL("ddot = %g, expected %g (diff=%g)", dot_val, dot_expected, std::fabs(dot_val - dot_expected));
 
         // dnrm2: sum(x_i^2) (raw sum, not sqrt — used by implicit solver L2)
@@ -1753,7 +1753,7 @@ static int test_large_dof_krylov_ops() {
         if (!dnrm2_gpu(d_x, n, d_result)) FAIL("dnrm2_gpu failed");
         Real nrm_val = 0;
         if (!cuda_check(cudaMemcpy(&nrm_val, d_result, sizeof(Real), cudaMemcpyDeviceToHost), "copy nrm")) FAIL("copy nrm");
-        if (std::fabs(nrm_val - dot_expected) > 1e-3f * std::max(1.0f, dot_expected))
+        if (std::fabs(nrm_val - dot_expected) > 1e-3f * std::max(Real(1), dot_expected))
             FAIL("dnrm2 = %g, expected raw sum %g (diff=%g)", nrm_val, dot_expected, std::fabs(nrm_val - dot_expected));
 
         // dcopy: copy x to y, verify
@@ -1824,7 +1824,7 @@ static int test_implicit_l2_normalization() {
 
         // Step 3: the solver chain is dnrm2(S) -> check_status_kernel(sqrt(S/N))
         Real solver_l2 = std::sqrt(S / static_cast<Real>(nvar_n));
-        Real tol = 1e-3f * std::max(1.0f, expected_l2);
+        Real tol = 1e-3 * std::max(Real(1), expected_l2);
         if (std::fabs(solver_l2 - expected_l2) > tol)
             FAIL("solver L2=%g, expected %g from host data (tol=%g)",
                  solver_l2, expected_l2, tol);
