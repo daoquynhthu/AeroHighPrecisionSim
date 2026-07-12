@@ -35,6 +35,8 @@ struct CfdCell {
     Real cz = 0.0f;
     Real h_min = 0.0f;
     Real wall_distance = 0.0f;
+    int refinement_level = 0;
+    int parent_id = -1;
 };
 
 struct CfdFace {

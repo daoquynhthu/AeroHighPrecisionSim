@@ -1,5 +1,6 @@
 #pragma once
 
+#include "aero/cfd/amr_types.hpp"
 #include "aero/cfd/real_fwd.hpp"
 #include "aero/cfd/cfd_state.hpp"
 #include "aero/cfd/diagnostics.hpp"
@@ -44,6 +45,9 @@ struct CfdConfig {
     // MMS-compatible farfield BC (null = use characteristic BC for production)
     // When non-null, farfield boundaries impose q_exact at the face center.
     const MmsSolutionEulerBC* mms_solution = nullptr;
+
+    // AMR (h-refinement)
+    AmrConfig amr;
 
     // Implicit solver
     bool implicit = false;

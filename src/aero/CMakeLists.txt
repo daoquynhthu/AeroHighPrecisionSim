@@ -1,6 +1,10 @@
 # CPU sources (plain C++17 — no CUDA device code)
 target_sources(missile_cpu PRIVATE
     panel/aero_table_gen.cpp
+    cfd/amr_refine.cpp
+    cfd/amr_hanging.cpp
+    cfd/amr_interpolate.cpp
+    cfd/amr_sensor.cpp
     cfd/cfd_residual.cpp
     cfd/cfd_solver.cpp
     cfd/diagnostics.cpp

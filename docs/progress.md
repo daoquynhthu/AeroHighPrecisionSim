@@ -755,3 +755,14 @@
   - Retained cudaEventElapsedTime float fix and std::max type-hygiene fixes from prior work.
   - Verification: 63/63 GPU, 8/8 Euler, 12/12 RANS, 11/11 Viscous, 9/9 MMS, 11/11 Mesh.
     Total: 114/114 tests PASS.
+
+2026-07-12 — Phase 12 AMR: Euler-focused h-refinement foundation + coarsening
+- Phase 12.1 (h-refinement): TET4 1→8 all-similar (Bey 1995), HEX8 1→8 bisection
+- Phase 12.2 (sensor): face-based density jump indicator `e_i = max(|ρ_L-ρ_R|/avg_ρ)`
+- Phase 12.3a/b (prolongation+restriction): injection for prolongation, volume-weighted avg for restriction
+- Phase 12.3c (hanging node): detect_hanging_faces() + gradient-based linear extrapolation via apply_hanging_interpolation()
+- Phase 12.4 (solver loop): AmrConfig in CfdConfig, AMR step every amr.interval iterations
+- Coarsening: parent tracking in RefinementRecord, prev_records param, 8→1 sibling merge roundtrip
+- New files: amr_types.hpp, amr_refine.cpp, amr_interpolate.hpp/.cpp, amr_hanging.hpp/.cpp, amr_sensor.hpp/.cpp
+- Tests: TestCfdMesh 22/22 PASS (AMR-1 through AMR-11), TestCfdEuler 9/9 PASS (EULER-9 AMR solver loop)
+- Includes: density-jump gradient sensor amr_sensor.hpp/.cpp with compute_gradient_sensor()

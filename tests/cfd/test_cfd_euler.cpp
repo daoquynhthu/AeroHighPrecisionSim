@@ -173,6 +173,47 @@ static int test_wall_forces() {
     return 0;
 }
 
+static int test_amr_solver_loop() {
+    TEST("CFD-EULER-9 AMR solver loop refines cells near shock");
+    {
+        // Cube with embedded body — supersonic flow creates a shock
+        CfdMesh mesh = generate_structured_cube_mesh(5.0f, 9);
+        compute_mesh_metrics(mesh);
+        int cells_before = static_cast<int>(mesh.cells.size());
+
+        CfdSolver solver;
+        std::printf("  (cells=%zu, faces=%zu)\n", mesh.cells.size(), mesh.faces.size());
+        if (!solver.load_mesh(mesh)) {
+            auto rpt = compute_mesh_metrics(mesh);
+            FAIL("load_mesh failed: %s", rpt.message.c_str());
+        }
+
+        CfdConfig cfg;
+        cfg.max_iter = 11;
+        cfg.cfl = 0.1f;
+        cfg.convergence_tol = 1e-12f;
+        cfg.amr.enabled = true;
+        cfg.amr.interval = 10;
+        cfg.amr.refine_tol = 0.03f;
+
+        auto summary = solver.solve({2.0f, 0.0f, 0.0f}, cfg);
+        if (summary.failed) {
+            std::printf("  (solver failed: iter=%d, cell=%d, reason=%s)\n",
+                summary.diagnostics.failure.iteration,
+                summary.diagnostics.failure.cell,
+                summary.diagnostics.failure.reason.c_str());
+            FAIL("solver failed");
+        }
+
+        int cells_after = static_cast<int>(summary.final_state.size());
+        std::printf("  (before=%d after=%d res=%.2e)\n", cells_before, cells_after,
+            summary.residual_history.empty() ? -1.0 : summary.residual_history.back());
+        if (cells_after <= cells_before) FAIL("AMR did not refine");
+        PASS;
+    }
+    return 0;
+}
+
 int main() {
     int result = 0;
     result |= test_state_roundtrip();
@@ -180,6 +221,7 @@ int main() {
     result |= test_solver_uniform();
     result |= test_farfield_boundary();
     result |= test_wall_forces();
+    result |= test_amr_solver_loop();
     std::printf("\n%d / %d tests PASSED.\n", pass_count, test_count);
     return result == 0 && pass_count == test_count ? 0 : 1;
 }

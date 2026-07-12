@@ -3,6 +3,8 @@
 #include "aero/cfd/rans.hpp"
 #include "aero/cfd/reconstruction.hpp"
 #include "aero/cfd/viscous.hpp"
+#include "aero/cfd/amr_sensor.hpp"
+#include "aero/cfd/amr_interpolate.hpp"
 
 #include <algorithm>
 #include <cmath>
@@ -306,6 +308,7 @@ CfdSolveSummary CfdSolver::solve_from_state(
     std::vector<PrimitiveGradient> grads, limited;
     std::vector<RansSource> sources;
     std::vector<PrimitiveState> w(mesh_.cells.size());
+    std::vector<RefinementRecord> amr_records;
     bool diagnostics_enabled = config.diagnostic_level != DiagnosticLevel::Off;
 
     for (int iter = 0; iter < config.max_iter; ++iter) {
@@ -500,6 +503,41 @@ CfdSolveSummary CfdSolver::solve_from_state(
         Real residual_l2 = std::sqrt(l2 / (static_cast<Real>(CFD_NVAR) * static_cast<Real>(q.size())));
         summary.residual_history.push_back(residual_l2);
         q.swap(q_next);
+
+        if (config.amr.enabled && iter > 0 && (iter % config.amr.interval) == 0) {
+            CfdMesh mesh_old = mesh_;
+            std::vector<ConservativeState> q_old = q;
+
+            auto requests = compute_gradient_sensor(mesh_, q, config.amr);
+            bool has_work = false;
+            for (const auto& req : requests)
+                if (req.flag != RefinementFlag::Unchanged) { has_work = true; break; }
+
+            if (has_work) {
+                std::vector<RefinementRecord> new_records;
+                std::string err;
+                const std::vector<RefinementRecord>* prev = amr_records.empty() ? nullptr : &amr_records;
+                if (refine_cells(mesh_, requests, &new_records, &err, prev)) {
+                    prolongate_solution(q_old, mesh_old, mesh_, new_records, q);
+                    amr_records = std::move(new_records);
+                    rebuild_mesh_faces(mesh_);
+                    compute_mesh_metrics(mesh_);
+                    int n_new = static_cast<int>(mesh_.cells.size());
+                    q_next.resize(n_new);
+                    residual.resize(n_new);
+                    grads.resize(n_new);
+                    w.resize(n_new);
+                    if (!limited.empty()) limited.resize(n_new);
+                    if (!sources.empty()) sources.resize(n_new);
+                    wall_face_indices_.clear();
+                    for (int fi = 0; fi < static_cast<int>(mesh_.faces.size()); ++fi) {
+                        auto bc = mesh_.faces[fi].boundary;
+                        if (bc == BoundaryKind::SlipWall || bc == BoundaryKind::NoSlipWall)
+                            wall_face_indices_.push_back(fi);
+                    }
+                }
+            }
+        }
 
         if (residual_l2 < config.convergence_tol) {
             summary.converged = true;
