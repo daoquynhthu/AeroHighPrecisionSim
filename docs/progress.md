@@ -722,3 +722,13 @@
 - 7 MMS tests total: 5 source consistency + 2 truncation error order — all PASS.
 - Removed orphaned diagnostic test code (leftover from previous edit).
 - Committed as 23af867 / 370fd2d (MMS V&V framework).
+- 2026-07-12: MMS-2 fix — MMS-compatible farfield BC implemented.
+  - Added `mms_solution` pointer to `CfdConfig` (forward-declared `MmsSolutionEulerBC`).
+  - Modified `compute_euler_residual_cpu` / `_order2` farfield BC branch: when
+    `mms_solution` non-null, impose `q_exact(face_center)` as ghost state instead
+    of characteristic BC.
+  - Threaded `mms_solution` through `compute_mms_source` and `CfdSolver::solve_from_state`.
+  - Added fixed-point stability test: 8/8 tests pass (8 new = order-2 MMS fixed point).
+  - All CFD suites: 93/93 tests PASS, zero regression.
+  - `.gitignore: build/ -> build*/` to exclude build_cov/; commit amended.
+  - Committed as ecec453 ("Cleanup: remove orphaned test_analytic_vs_discrete ...").

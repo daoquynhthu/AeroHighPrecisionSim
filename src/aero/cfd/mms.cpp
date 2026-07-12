@@ -115,7 +115,7 @@ bool compute_mms_source(const CfdMesh& mesh,
             for (std::size_t i = 0; i < grads.size(); ++i)
                 limited[i] = apply_limiter(grads[i], limiters[i]);
 
-            if (!compute_euler_residual_cpu_order2(mesh, q_exact, freestream, config.gamma, limited, source, &w_exact))
+            if (!compute_euler_residual_cpu_order2(mesh, q_exact, freestream, config.gamma, limited, source, &w_exact, config.mms_solution))
                 return false;
 
             if (config.viscous) {
@@ -131,7 +131,7 @@ bool compute_mms_source(const CfdMesh& mesh,
                     source[i].turbulence += rans[i].total_source * mesh.cells[i].volume;
             }
         } else {
-            if (!compute_euler_residual_cpu(mesh, q_exact, freestream, config.gamma, source, &w_exact))
+            if (!compute_euler_residual_cpu(mesh, q_exact, freestream, config.gamma, source, &w_exact, config.mms_solution))
                 return false;
             if (config.viscous) {
                 if (!compute_viscous_flux_cpu(mesh, q_exact, grads, config.gamma,
@@ -147,7 +147,7 @@ bool compute_mms_source(const CfdMesh& mesh,
             }
         }
     } else {
-        if (!compute_euler_residual_cpu(mesh, q_exact, freestream, config.gamma, source, &w_exact))
+        if (!compute_euler_residual_cpu(mesh, q_exact, freestream, config.gamma, source, &w_exact, config.mms_solution))
             return false;
     }
     return true;

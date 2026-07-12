@@ -10,6 +10,9 @@ namespace cfd {
 
 constexpr int CFD_NVAR = 6;
 
+// Forward decl for MMS-compatible farfield BC.
+struct MmsSolutionEulerBC;
+
 struct CfdConfig {
     Real cfl = 0.5f;
     int max_iter = 1000;
@@ -37,6 +40,10 @@ struct CfdConfig {
 
     // MMS source term (empty = disabled)
     std::vector<EulerFlux> mms_source;
+
+    // MMS-compatible farfield BC (null = use characteristic BC for production)
+    // When non-null, farfield boundaries impose q_exact at the face center.
+    const MmsSolutionEulerBC* mms_solution = nullptr;
 
     // Implicit solver
     bool implicit = false;

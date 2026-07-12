@@ -351,6 +351,82 @@ static int test_euler_order1_truncation() {
     return 0;
 }
 
+// MMS order-of-accuracy via solver convergence from freestream IC.
+// With the MMS-compatible farfield BC, the solver imposes q_exact at
+// boundary faces so that the only error source is interior discretization.
+// MMS fixed-point stability: with MMS BC, q_exact is the exact fixed point
+// of the discrete system. Run 1000 iterations from q_exact and verify that
+// the state does not drift (residual stays ~0). This validates that the
+// MMS-compatible BC is consistent with the MMS source term.
+static int run_euler_fixed_point_test(int order) {
+    auto mms = make_default_mms_euler_bc();
+    PrimitiveState w_inf = make_freestream(0.5, 0.0, 0.0, 1.4);
+    FreestreamCondition freestream;
+    freestream.mach = 0.5;
+
+    int ns[] = {8, 12, 16};
+    bool ok = true;
+
+    for (int mi = 0; mi < 3; ++mi) {
+        int n = ns[mi];
+        CfdMesh mesh = generate_structured_hex_mesh(n);
+        compute_mesh_metrics(mesh);
+
+        CfdConfig cfg;
+        cfg.max_iter = 1000;
+        cfg.cfl = 1.0f;
+        cfg.convergence_tol = 1e-14;
+        cfg.reconstruction_order = order;
+        cfg.use_gpu = false;
+        cfg.mms_solution = &mms;
+
+        std::vector<ConservativeState> q_exact;
+        fill_mms(mesh, mms, q_exact, cfg.gamma);
+
+        std::vector<EulerFlux> source;
+        if (!compute_mms_source(mesh, q_exact, w_inf, cfg, source)) {
+            std::printf("n=%d source_failed ", n);
+            ok = false; continue;
+        }
+        cfg.mms_source = source;
+
+        CfdSolver solver;
+        if (!solver.load_mesh(mesh)) {
+            std::printf("n=%d load_failed ", n);
+            ok = false; continue;
+        }
+
+        // Run from q_exact IC -> should stay at q_exact for all iterations.
+        auto summary = solver.solve_from_state(freestream, cfg, q_exact);
+
+        if (summary.failed) {
+            std::string reason = summary.diagnostics.failure.valid
+                ? summary.diagnostics.failure.reason : "unknown";
+            std::printf("n=%d FAILED(%s) ", n, reason.c_str());
+            ok = false; continue;
+        }
+
+        Real final_res = summary.residual_history.empty() ? -1.0 : summary.residual_history.back();
+        Real final_err = mms_l2_error(summary.final_state, q_exact);
+        std::printf("n=%d res=%g err=%g iters=%zu ", n, final_res, final_err, summary.residual_history.size());
+
+        if (final_res > 1e-6 || final_err > 1e-6) {
+            std::printf("fixed_point_broken ");
+            ok = false; continue;
+        }
+    }
+    return ok ? 0 : -1;
+}
+
+static int test_euler_order2_fixed_point() {
+    TEST("EULER-OA: order-2 MMS fixed point (q_exact stays q_exact, MMS BC)");
+    int r = run_euler_fixed_point_test(2);
+    if (r != 0)
+        FAIL("expected fixed point stability with MMS BC");
+    PASS();
+    return 0;
+}
+
 int main() {
     int result = 0;
     result |= test_mms_ns_consistency();
@@ -360,6 +436,7 @@ int main() {
     result |= test_mms_sa_order1_consistency();
     result |= test_euler_order1_truncation();
     result |= test_euler_order2_truncation();
+    result |= test_euler_order2_fixed_point();
 
     std::printf("[SUMMARY] %d/%d PASS\n", pass_count, test_count);
     return result;

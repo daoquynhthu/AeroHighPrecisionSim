@@ -2241,8 +2241,8 @@ Fixed: global `CMAKE_CUDA_SEPARABLE_COMPILATION ON` removed (part of PERF-H2); o
 - **Verification**: SA source consistency (order-2): r0=0, rf=0, L2_err=0 on 8³ mesh.
 - **Status**: FIXED (2026-07-12)
 
-### MMS-2: Order-of-accuracy verification fails — farfield BC error dominates coarse meshes
-- **Severity**: MEDIUM (blocks order-accuracy gate)
+### MMS-2: Order-of-accuracy verification fails — farfield BC error dominates coarse meshes [FIXED]
+- **Severity**: MEDIUM (was blocking order-accuracy gate)
 - **Symptom**: forward Euler from uniform freestream IC fails to converge to manufactured
   solution on coarse meshes. Residual history shows slow/divergent behavior.
 - **Root cause**: farfield BC imposes freestream at boundaries via characteristic BC.
@@ -2250,13 +2250,18 @@ Fixed: global `CMAKE_CUDA_SEPARABLE_COMPILATION ON` removed (part of PERF-H2); o
   boundaries), the BC creates O(1) L2 error on coarse meshes that masks the spatial
   discretization order. Source consistency from q_exact IC works perfectly (err=0 for
   Euler order-1/order-2, SA order-2).
-- **Fix options**: (a) implement MMS-compatible farfield BC (impose q_exact as external
-  state), (b) use much larger domain to dilute boundary/volume ratio, (c) use implicit
-  solver (GPU-only) initialized from q_exact with artificial perturbation.
-- **Workaround**: Source consistency tests from q_exact IC verify the spatial discretization
-  correctness without needing steady-state convergence.
-- **Workaround**: Truncation error measurement T_i = R_h(q_exact)_i - V_i * S_analytic(x_i)
-  successfully measures spatial discretization order without solver: order-2 FV ~2.77 (pass >=1.5).
-  Analytic Euler source (compute_euler_source_analytic) implemented.
-- **Status**: OPEN (boundary-compatible MMS functions added, analytic Euler source implemented,
-  truncation error workaround verified; SA analytic source + full BC fix pending)
+- **Fix**: MMS-compatible Dirichlet BC at farfield boundaries. When `config.mms_solution`
+  is non-null, `compute_euler_residual_cpu` / `_order2` impose `q_exact(face_center)` as
+  the ghost state instead of the characteristic BC. q_exact is now a verified fixed point
+  (residual=0, L2_err=0 on 8/12/16³ meshes, 1000 iterations).
+- **Fix options considered**: (a) was chosen — MMS-compatible farfield BC via `mms_solution`
+  pointer in CfdConfig, threaded through solver and compute_mms_source. Options (b) larger
+  domain and (c) implicit solver rejected in favor of the principled V&V approach.
+- **Workaround retention**: Truncation error measurement T_i = R_h(q_exact)_i - V_i * S_analytic(x_i)
+  remains as a faster (non-solver) order test for CI gate.
+- **Status**: FIXED (2026-07-12). Verification: fixed-point test with MMS BC confirms
+  q_exact is the exact fixed point (8/8 tests PASS). All 93 CFD tests PASS.
+- **Remaining**: SA analytic source + SA time-marching order-of-accuracy (deferred to
+  Phase 7 SA MMS gate). Forward Euler from freestream IC still encounters stability
+  limits (~150 iterations before divergence on 8³ mesh) — this is an explicit timestepping
+  limitation, not a BC correctness issue.

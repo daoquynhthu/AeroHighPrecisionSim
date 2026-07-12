@@ -1,4 +1,5 @@
 #include "aero/cfd/cfd_residual.hpp"
+#include "aero/cfd/mms.hpp"
 #include "aero/cfd/reconstruction.hpp"
 #include "aero/cfd/viscous.hpp"
 
@@ -14,7 +15,8 @@ bool compute_euler_residual_cpu(
     const PrimitiveState& freestream,
     Real gamma,
     std::vector<EulerFlux>& residual,
-    const std::vector<PrimitiveState>* primitive_override) {
+    const std::vector<PrimitiveState>* primitive_override,
+    const MmsSolutionEulerBC* mms_solution) {
     if (q.size() != mesh.cells.size()) return false;
     residual.resize(q.size());
     std::fill(residual.begin(), residual.end(), EulerFlux{});
@@ -39,7 +41,12 @@ bool compute_euler_residual_cpu(
         } else if (face.boundary == BoundaryKind::SlipWall || face.boundary == BoundaryKind::NoSlipWall) {
             flux = slip_wall_flux(wl, face.nx, face.ny, face.nz);
         } else {
-            PrimitiveState wr = farfield_ghost_state(wl, freestream, gamma, face.nx, face.ny, face.nz);
+            PrimitiveState wr;
+            if (mms_solution) {
+                wr = mms_solution->eval(face.cx, face.cy, face.cz);
+            } else {
+                wr = farfield_ghost_state(wl, freestream, gamma, face.nx, face.ny, face.nz);
+            }
             flux = hllc_flux(wl, wr, gamma, face.nx, face.ny, face.nz);
         }
 
@@ -70,7 +77,8 @@ bool compute_euler_residual_cpu_order2(
     const PrimitiveState& freestream,
     Real gamma,
     std::vector<EulerFlux>& residual,
-    const std::vector<PrimitiveState>* primitive_override) {
+    const std::vector<PrimitiveState>* primitive_override,
+    const MmsSolutionEulerBC* mms_solution) {
     if (q.size() != mesh.cells.size()) return false;
     residual.resize(q.size());
     std::fill(residual.begin(), residual.end(), EulerFlux{});
@@ -119,7 +127,12 @@ bool compute_euler_residual_cpu_order2(
         } else if (face.boundary == BoundaryKind::SlipWall || face.boundary == BoundaryKind::NoSlipWall) {
             flux = slip_wall_flux(wl, face.nx, face.ny, face.nz);
         } else {
-            PrimitiveState wr = farfield_ghost_state(wl, freestream, gamma, face.nx, face.ny, face.nz);
+            PrimitiveState wr;
+            if (mms_solution) {
+                wr = mms_solution->eval(face.cx, face.cy, face.cz);
+            } else {
+                wr = farfield_ghost_state(wl, freestream, gamma, face.nx, face.ny, face.nz);
+            }
             flux = hllc_flux(wl, wr, gamma, face.nx, face.ny, face.nz);
         }
 
@@ -151,7 +164,8 @@ bool compute_euler_residual_cpu_order2(
     Real gamma,
     const std::vector<PrimitiveGradient>& limited_gradients,
     std::vector<EulerFlux>& residual,
-    const std::vector<PrimitiveState>* primitive_override) {
+    const std::vector<PrimitiveState>* primitive_override,
+    const MmsSolutionEulerBC* mms_solution) {
     if (q.size() != mesh.cells.size()) return false;
     if (limited_gradients.size() != mesh.cells.size()) return false;
     residual.assign(q.size(), EulerFlux{});
@@ -189,7 +203,12 @@ bool compute_euler_residual_cpu_order2(
         } else if (face.boundary == BoundaryKind::SlipWall || face.boundary == BoundaryKind::NoSlipWall) {
             flux = slip_wall_flux(wl, face.nx, face.ny, face.nz);
         } else {
-            PrimitiveState wr = farfield_ghost_state(wl, freestream, gamma, face.nx, face.ny, face.nz);
+            PrimitiveState wr;
+            if (mms_solution) {
+                wr = mms_solution->eval(face.cx, face.cy, face.cz);
+            } else {
+                wr = farfield_ghost_state(wl, freestream, gamma, face.nx, face.ny, face.nz);
+            }
             flux = hllc_flux(wl, wr, gamma, face.nx, face.ny, face.nz);
         }
 

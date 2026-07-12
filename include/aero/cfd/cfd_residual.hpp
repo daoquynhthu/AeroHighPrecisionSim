@@ -22,13 +22,17 @@ namespace aerosp {
 namespace aero {
 namespace cfd {
 
+// Forward decl for MMS-compatible farfield BC.
+struct MmsSolutionEulerBC;
+
 bool compute_euler_residual_cpu(
     const CfdMesh& mesh,
     const std::vector<ConservativeState>& q,
     const PrimitiveState& freestream,
     Real gamma,
     std::vector<EulerFlux>& residual,
-    const std::vector<PrimitiveState>* primitive_override = nullptr);
+    const std::vector<PrimitiveState>* primitive_override = nullptr,
+    const MmsSolutionEulerBC* mms_solution = nullptr);
 
 bool compute_euler_residual_cpu_order2(
     const CfdMesh& mesh,
@@ -36,7 +40,8 @@ bool compute_euler_residual_cpu_order2(
     const PrimitiveState& freestream,
     Real gamma,
     std::vector<EulerFlux>& residual,
-    const std::vector<PrimitiveState>* primitive_override = nullptr);
+    const std::vector<PrimitiveState>* primitive_override = nullptr,
+    const MmsSolutionEulerBC* mms_solution = nullptr);
 
 bool compute_euler_residual_cpu_order2(
     const CfdMesh& mesh,
@@ -45,7 +50,8 @@ bool compute_euler_residual_cpu_order2(
     Real gamma,
     const std::vector<PrimitiveGradient>& limited_gradients,
     std::vector<EulerFlux>& residual,
-    const std::vector<PrimitiveState>* primitive_override = nullptr);
+    const std::vector<PrimitiveState>* primitive_override = nullptr,
+    const MmsSolutionEulerBC* mms_solution = nullptr);
 
 bool launch_euler_residual_kernel(
     DeviceMesh& mesh,

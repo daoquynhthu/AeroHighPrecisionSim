@@ -401,7 +401,7 @@ CfdSolveSummary CfdSolver::solve_from_state(
         }
 
         if (config.reconstruction_order == 2) {
-            if (!compute_euler_residual_cpu_order2(mesh_, q, w_inf, config.gamma, limited, residual, &w)) {
+            if (!compute_euler_residual_cpu_order2(mesh_, q, w_inf, config.gamma, limited, residual, &w, config.mms_solution)) {
                 summary.failed = true;
                 if (diagnostics_enabled) {
                     summary.diagnostics.failure.reason = "order2 residual assembly failed";
@@ -411,7 +411,7 @@ CfdSolveSummary CfdSolver::solve_from_state(
                 return summary;
             }
         } else {
-            if (!compute_euler_residual_cpu(mesh_, q, w_inf, config.gamma, residual, &w)) {
+            if (!compute_euler_residual_cpu(mesh_, q, w_inf, config.gamma, residual, &w, config.mms_solution)) {
                 summary.failed = true;
                 if (diagnostics_enabled) {
                     summary.diagnostics.failure.reason = "residual assembly failed";
