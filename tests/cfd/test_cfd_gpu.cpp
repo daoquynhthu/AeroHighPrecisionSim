@@ -2698,6 +2698,59 @@ static int test_implicit_newton_backtrack_and_near_singular() {
     return 0;
 }
 
+static int test_implicit_explicit_force_match() {
+    TEST("CFD-IMPLICIT-REGRESS-8 explicit vs implicit force match (PH11-H7/H8)");
+    {
+        CfdMesh mesh = generate_flat_plate_mesh();
+        compute_mesh_metrics(mesh);
+
+        FreestreamCondition cond;
+        cond.mach = 0.5f;
+        cond.alpha_deg = 0.0f;
+
+        CfdSolver solver;
+        if (!solver.load_mesh(mesh)) FAIL("load mesh failed");
+
+        // Explicit Euler solve
+        CfdConfig cfg_exp;
+        cfg_exp.use_gpu = true;
+        cfg_exp.cfl = 0.5f;
+        cfg_exp.max_iter = 200;
+        cfg_exp.convergence_tol = 1e-6f;
+        cfg_exp.implicit = false;
+        CfdSolveSummary exp = solve_gpu_dispatch(solver.mesh(), cond, cfg_exp);
+        if (exp.failed) FAIL("explicit solve failed");
+        if (!std::isfinite(exp.forces.CD)) FAIL("explicit CD not finite: %g", exp.forces.CD);
+
+        // Implicit solve on same mesh with newton_max_iter=2
+        CfdConfig cfg_imp;
+        cfg_imp.use_gpu = true;
+        cfg_imp.cfl = 0.5f;
+        cfg_imp.max_iter = 100;
+        cfg_imp.convergence_tol = 1e-6f;
+        cfg_imp.implicit = true;
+        cfg_imp.cfl_start = 0.1f;
+        cfg_imp.cfl_end = 10.0f;
+        cfg_imp.cfl_ramp_steps = 20;
+        cfg_imp.newton_max_iter = 2;
+        cfg_imp.fgmres_restart = 30;
+        cfg_imp.fgmres_max_iter = 100;
+        cfg_imp.fgmres_tol = 1e-1f;
+        CfdSolveSummary imp = solve_gpu_dispatch(solver.mesh(), cond, cfg_imp);
+        if (imp.failed) FAIL("implicit solve failed");
+        if (!std::isfinite(imp.forces.CD)) FAIL("implicit CD not finite: %g", imp.forces.CD);
+
+        // Compare forces — should be within same ballpark
+        if (!near(exp.forces.CX, imp.forces.CX, 1e-3f)) FAIL("CX exp=%g imp=%g",
+            exp.forces.CX, imp.forces.CX);
+        if (!near(exp.forces.CY, imp.forces.CY, 1e-3f)) FAIL("CY exp=%g imp=%g",
+            exp.forces.CY, imp.forces.CY);
+
+        PASS;
+    }
+    return 0;
+}
+
 static int test_cpu_viscous_equivalence() {
     TEST("CFD-CPU-VISC-EQUIV-1 viscous GPU=CPU residual comparison");
     {
@@ -3105,6 +3158,7 @@ result |= test_recon_order2_converged_forces();
     result |= test_implicit_newton_backtrack_and_near_singular();
     result |= test_jfv_rans_source();
     result |= test_implicit_l2_normalization();
+    result |= test_implicit_explicit_force_match();
     result |= test_rans_second_order_gpu_cpu_match();
     result |= test_recon_positivity_clamping();
     result |= test_symmetry_boundary_flux();

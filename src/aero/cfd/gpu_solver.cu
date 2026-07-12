@@ -17,6 +17,7 @@
 #include "aero/cfd/diagnostics.hpp"
 #include <cfloat>
 #include <cmath>
+#include <limits>
 #include <cstdio>
 #include <cuda_runtime.h>
 namespace aerosp {
@@ -69,6 +70,7 @@ static CfdSolveSummary solve_gpu_impl(
     std::vector<Real> host_residual_history;
     int host_failed = 0;
     bool diagnostics_enabled = config.diagnostic_level != DiagnosticLevel::Off;
+    Real cfl_multiplier = 1.0f;
 
     PrimitiveState w_inf = make_freestream(condition.mach, condition.alpha_deg, condition.beta_deg, config.gamma);
     w_inf.nu_tilde = condition.nu_tilde;
@@ -178,6 +180,7 @@ if (config.viscous) {
             Real cfl_ramp = config.cfl_start * real_pow(config.cfl_end / config.cfl_start,
                 static_cast<Real>(iter) / static_cast<Real>(config.cfl_ramp_steps > 0 ? config.cfl_ramp_steps : 1));
             cfl_ramp = real_fmin(cfl_ramp, config.cfl_end);
+            cfl_ramp *= cfl_multiplier;
 
             if (!compute_local_timestep_gpu(d_mesh, config.gamma, cfl_ramp, d_dt_cell,
                     config.viscous, config.mu_ref, config.T_ref, config.sutherland_T, config.Re, error, stream)) {
@@ -208,7 +211,29 @@ if (config.viscous) {
             if (!cuda_check(cudaMemcpy(&l2_old, d_l2_sum, sizeof(Real), cudaMemcpyDeviceToHost), "read L2", error)) goto fail;
             l2_old = real_sqrt(l2_old / static_cast<Real>(nvar_ncells > 0 ? nvar_ncells : 1));
 
-            Real eps_jfv = Real(1e-7);
+            // Adaptive JFV epsilon: eps = sqrt(machine_eps) * max(1, ||q||_RMS)
+            // Krylov vectors are L2-unit-normalized by FGMRES, so ||v||_2 ≈ 1,
+            // making the standard FD-optimal epsilon = sqrt(eps_mach) * scale.
+            // The state-RMS scaling ensures proper perturbation magnitudes across
+            // different flow regimes (e.g., low-density vs high-enthalpy).
+            Real eps_jfv = real_sqrt(std::numeric_limits<Real>::epsilon());
+            {
+                if (!dnrm2_gpu(d_mesh.state_device(), nvar_cells, d_l2_sum, stream)) {
+                    if (error) *error = "JFV norm_q failed"; goto fail;
+                }
+                Real state_norm_sq = 0;
+                if (!cuda_check(cudaMemcpy(&state_norm_sq, d_l2_sum, sizeof(Real),
+                        cudaMemcpyDeviceToHost), "read state_norm_sq", error)) goto fail;
+                Real state_rms = real_sqrt(state_norm_sq / static_cast<Real>(nvar_cells > 0 ? nvar_cells : 1));
+                eps_jfv *= real_fmax(Real(1.0), state_rms);
+            }
+
+            // Save pre-Newton state for CFL retry on Newton failure.
+            Real* d_q_before_newton = d_scratch + 3 * nvar_cells;
+            if (!dcopy_gpu(d_mesh.state_device(), d_q_before_newton, nvar_cells, stream)) {
+                if (error) *error = "save Q before Newton failed"; goto fail;
+            }
+
             bool newt_converged = false;
 
             for (int newt = 0; newt < config.newton_max_iter; ++newt) {
@@ -300,33 +325,14 @@ newton_accepted:
             ;
 
             if (!newt_converged) {
-                if (!daxpy_gpu(1, d_dq, d_mesh.state_device(), nvar_cells, stream)) {
-                    if (error) *error = "Newton fallback Q += dq failed"; goto fail;
+                // Newton failed (backtracking exhausted). Restore pre-Newton state and
+                // reduce CFL for the next outer iteration. The pre-Newton residual is
+                // already in d_r_saved, so the L2 check below will show no progress
+                // (but also no divergence). Future iterations try again at lower CFL.
+                if (!dcopy_gpu(d_q_before_newton, d_mesh.state_device(), nvar_cells, stream)) {
+                    if (error) *error = "Newton restore Q failed"; goto fail;
                 }
-                d_mesh.clear_residual(error);
-                if (!launch_euler_residual_kernel(d_mesh, w_inf, config.gamma, d_failed,
-                        nullptr, error, config.reconstruction_order, stream)) {
-                    goto fail;
-                }
-                if (config.viscous) {
-                    if (!compute_viscous_flux_gpu(d_mesh, config.gamma, config.prandtl,
-                            config.mu_ref, config.T_ref, config.sutherland_T,
-                            config.Re, config.wall_temperature, config.turbulence ? 1 : 0, d_failed, stream)) {
-                        if (error) *error = "Newton fallback viscous flux failed";
-                        goto fail;
-                    }
-                }
-                if (config.turbulence) {
-                    if (!compute_rans_source_gpu(d_mesh, config.gamma, config.Re,
-                            config.mu_ref, config.T_ref, config.sutherland_T,
-                            d_failed, error, stream)) {
-                        if (error) *error = "Newton fallback RANS source failed";
-                        goto fail;
-                    }
-                }
-                if (!dcopy_gpu(d_mesh.residual_device(), d_r_saved, nvar_cells, stream)) {
-                    if (error) *error = "Newton fallback save R failed"; goto fail;
-                }
+                cfl_multiplier *= 0.5f;
             }
 
             if (!dnrm2_gpu(d_r_saved, nvar_cells, d_l2_sum, stream)) {

@@ -739,3 +739,10 @@
   - 9/9 TestMms PASS; all 94+ CFD tests PASS.
   - Phase 7 SA MMS gate [x] — last remaining gate closed. Phase 7 now fully complete.
   - Committed as b59b2f1 ("MMS-2: MMS-compatible farfield BC for order-of-accuracy ...").
+- 2026-07-12: Phase 11 closure — adaptive JFV epsilon, CFL retry, force-match test.
+  - JFV epsilon: replaced hardcoded 1e-7 with `sqrt(eps_mach) * max(1, ||q||_RMS)`.
+  - CFL retry: Newton failure restores Q from pre-Newton save, halves cfl_multiplier.
+  - Added CFD-IMPLICIT-REGRESS-8: explicit vs implicit force match (flat plate, Mach 0.5).
+  - 8/8 implicit tests PASS; 63/63 GPU tests PASS; 114/114 total PASS.
+  - Phase 11 single-GPU core [x]; multi-GPU distributed FGMRES deferred (no env).
+  - Committed as 96f604d ("Phase 11 closure: adaptive JFV epsilon, CFL retry, ...").
