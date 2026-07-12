@@ -2227,22 +2227,32 @@ Fixed: global `CMAKE_CUDA_SEPARABLE_COMPILATION ON` removed (part of PERF-H2); o
 
 ## MMS Blocking Issues (2026-07-12)
 
-### MMS-1: SA source consistency fails — semi-implicit RANS destruction not in compute_mms_source
-- **Severity**: HIGH (blocks SA MMS gate)
-- **Symptom**: compute_mms_source() returns `RANS_source * volume` but solver's
-  `apply_rans_implicit` in cfd_solver.cpp:454-469 adds additional semi-implicit destruction
-  correction that is not replicated in the source computation. Source consistency test:
-  residual=0.000612, L2_err=0.348 (should be 0).
-- **Fix options**: (a) align compute_mms_source with solver's implicit treatment by calling
-  the same RANS source function path, (b) add config flag to disable semi-implicit correction
-  in MMS mode.
-- **Status**: OPEN
+### MMS-1: SA source consistency fails — semi-implicit RANS destruction not in compute_mms_source [FIXED]
+- **Severity**: HIGH (was blocking SA MMS gate)
+- **Symptom**: semi-implicit destruction correction transforms residual as
+  R' = q*(f-1)/dtv + R*f, making exact MMS cancellation impossible.
+- **Root cause 1**: MMS injection was after semi-implicit correction. Fix: MMS injection
+  moved before semi-implicit correction (cfd_solver.cpp).
+- **Root cause 2**: Semi-implicit correction is a convergence acceleration technique, not
+  part of spatial discretization. Fix: skip when `!config.mms_source.empty()`.
+- **Root cause 3**: `w_inf.nu_tilde` not propagated from `FreestreamCondition.nu_tilde`.
+  Caused farfield BC mismatch between MMS source computation and solver.
+  Fix: added `w_inf.nu_tilde = condition.nu_tilde` in cfd_solver.cpp:301.
+- **Verification**: SA source consistency (order-2): r0=0, rf=0, L2_err=0 on 8³ mesh.
+- **Status**: FIXED (2026-07-12)
 
-### MMS-2: Order-of-accuracy verification fails — forward Euler unstable on coarse meshes
+### MMS-2: Order-of-accuracy verification fails — farfield BC error dominates coarse meshes
 - **Severity**: MEDIUM (blocks order-accuracy gate)
-- **Symptom**: forward Euler diverges from uniform freestream initial condition on coarse
-  meshes (e.g. 4³) with large MMS source terms. Likely needs CFL ramp-up, RK2/implicit
-  timestepping, or continuation from interpolated coarse solution.
-- **Fix options**: (a) switch to RK2 or implicit timestepping for MMS runs, (b) start
-  from q_exact instead of freestream, (c) add CFL ramp 0.01→0.5 over first 100 iterations.
-- **Status**: OPEN
+- **Symptom**: forward Euler from uniform freestream IC fails to converge to manufactured
+  solution on coarse meshes. Residual history shows slow/divergent behavior.
+- **Root cause**: farfield BC imposes freestream at boundaries via characteristic BC.
+  Even with boundary-compatible MMS (cos(πx)cos(πy)cos(πz) modes, q_exact=freestream at
+  boundaries), the BC creates O(1) L2 error on coarse meshes that masks the spatial
+  discretization order. Source consistency from q_exact IC works perfectly (err=0 for
+  Euler order-1/order-2, SA order-2).
+- **Fix options**: (a) implement MMS-compatible farfield BC (impose q_exact as external
+  state), (b) use much larger domain to dilute boundary/volume ratio, (c) use implicit
+  solver (GPU-only) initialized from q_exact with artificial perturbation.
+- **Workaround**: Source consistency tests from q_exact IC verify the spatial discretization
+  correctness without needing steady-state convergence.
+- **Status**: OPEN (boundary-compatible MMS functions added, pending BC fix)

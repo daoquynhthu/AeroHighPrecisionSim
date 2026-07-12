@@ -190,6 +190,104 @@ Real mms_observed_order(Real err_coarse, int n_coarse,
     return 0.5 * (p1 + p2);
 }
 
+// --- Boundary-compatible MMS (cos modes, vanish at domain boundaries) ---
+
+PrimitiveState MmsSolutionEulerBC::eval(Real x, Real y, Real z) const {
+    PrimitiveState w;
+    Real p = cos_pi(freq * x) * cos_pi(freq * y) * cos_pi(freq * z);
+    w.rho = rho0 + rho_amp * p;
+    w.u   = u0   + u_amp   * p;
+    w.v   = v0   + v_amp   * p;
+    w.w   = w0   + w_amp   * p;
+    w.p   = p0   + p_amp   * p;
+    return w;
+}
+
+PrimitiveGradient MmsSolutionEulerBC::eval_gradient(Real x, Real y, Real z) const {
+    PrimitiveGradient g;
+    Real fx = freq * kPi;
+    Real sx = -sin_pi(freq * x) * cos_pi(freq * y) * cos_pi(freq * z);
+    Real sy = -cos_pi(freq * x) * sin_pi(freq * y) * cos_pi(freq * z);
+    Real sz = -cos_pi(freq * x) * cos_pi(freq * y) * sin_pi(freq * z);
+    g.drho_dx = rho_amp * fx * sx;
+    g.drho_dy = rho_amp * fx * sy;
+    g.drho_dz = rho_amp * fx * sz;
+    g.du_dx = u_amp * fx * sx;
+    g.du_dy = u_amp * fx * sy;
+    g.du_dz = u_amp * fx * sz;
+    g.dv_dx = v_amp * fx * sx;
+    g.dv_dy = v_amp * fx * sy;
+    g.dv_dz = v_amp * fx * sz;
+    g.dw_dx = w_amp * fx * sx;
+    g.dw_dy = w_amp * fx * sy;
+    g.dw_dz = w_amp * fx * sz;
+    g.dp_dx = p_amp * fx * sx;
+    g.dp_dy = p_amp * fx * sy;
+    g.dp_dz = p_amp * fx * sz;
+    return g;
+}
+
+PrimitiveState MmsSolutionSABC::eval_sa(Real x, Real y, Real z) const {
+    PrimitiveState w = eval(x, y, z);
+    w.nu_tilde = nt0 + nt_amp * cos_pi(freq * x) * cos_pi(freq * y) * cos_pi(freq * z);
+    return w;
+}
+
+PrimitiveGradient MmsSolutionSABC::eval_gradient_sa(Real x, Real y, Real z) const {
+    PrimitiveGradient g = eval_gradient(x, y, z);
+    Real fx = freq * kPi;
+    Real sx = -sin_pi(freq * x) * cos_pi(freq * y) * cos_pi(freq * z);
+    Real sy = -cos_pi(freq * x) * sin_pi(freq * y) * cos_pi(freq * z);
+    Real sz = -cos_pi(freq * x) * cos_pi(freq * y) * sin_pi(freq * z);
+    g.dnu_tilde_dx = nt_amp * fx * sx;
+    g.dnu_tilde_dy = nt_amp * fx * sy;
+    g.dnu_tilde_dz = nt_amp * fx * sz;
+    return g;
+}
+
+void fill_mms(const CfdMesh& mesh, const MmsSolutionEulerBC& mms,
+              std::vector<ConservativeState>& q, Real gamma) {
+    q.resize(mesh.cells.size());
+    for (std::size_t i = 0; i < mesh.cells.size(); ++i) {
+        PrimitiveState w = mms.eval(
+            mesh.cells[i].cx, mesh.cells[i].cy, mesh.cells[i].cz);
+        q[i] = primitive_to_conservative(w, gamma);
+    }
+}
+
+void fill_mms_sa(const CfdMesh& mesh, const MmsSolutionSABC& mms,
+                 std::vector<ConservativeState>& q, Real gamma) {
+    q.resize(mesh.cells.size());
+    for (std::size_t i = 0; i < mesh.cells.size(); ++i) {
+        PrimitiveState w = mms.eval_sa(
+            mesh.cells[i].cx, mesh.cells[i].cy, mesh.cells[i].cz);
+        q[i] = primitive_to_conservative(w, gamma);
+    }
+}
+
+MmsSolutionEulerBC make_default_mms_euler_bc() {
+    MmsSolutionEulerBC mms{};
+    mms.freq = 1.0;
+    mms.rho0 = 1.0;   mms.rho_amp = 0.1;
+    mms.u0   = 0.5;   mms.u_amp   = 0.05;
+    mms.v0   = 0.0;   mms.v_amp   = 0.05;
+    mms.w0   = 0.0;   mms.w_amp   = 0.05;
+    mms.p0   = 1.0 / 1.4;  mms.p_amp = 0.05;
+    return mms;
+}
+
+MmsSolutionSABC make_default_mms_sa_bc() {
+    MmsSolutionSABC mms{};
+    mms.freq = 1.0;
+    mms.rho0 = 1.0;   mms.rho_amp = 0.1;
+    mms.u0   = 0.5;   mms.u_amp   = 0.05;
+    mms.v0   = 0.0;   mms.v_amp   = 0.05;
+    mms.w0   = 0.0;   mms.w_amp   = 0.05;
+    mms.p0   = 1.0 / 1.4;  mms.p_amp = 0.05;
+    mms.nt0  = 0.1;   mms.nt_amp = 0.05;
+    return mms;
+}
+
 MmsSolutionEuler make_default_mms_euler() {
     MmsSolutionEuler mms{};
     mms.freq = 1.0;

@@ -298,6 +298,7 @@ CfdSolveSummary CfdSolver::solve_from_state(
     }
 
     PrimitiveState w_inf = make_freestream(condition.mach, condition.alpha_deg, condition.beta_deg, config.gamma);
+    w_inf.nu_tilde = condition.nu_tilde;
     std::vector<ConservativeState> q = initial_state;
     std::vector<ConservativeState> q_next;
     q_next.resize(mesh_.cells.size());
@@ -450,8 +451,29 @@ CfdSolveSummary CfdSolver::solve_from_state(
             }
             for (std::size_t i = 0; i < q.size(); ++i)
                 residual[i].turbulence += sources[i].total_source * mesh_.cells[i].volume;
+        }
 
-            // Semi-implicit destruction treatment (match GPU apply_rans_implicit_gpu)
+        // MMS source injection (all components, incl. turbulence).
+        // Must come before semi-implicit correction: the MMS source S_mms = R(q_exact)
+        // should cancel the explicit residual so that q=q_exact gives residual=0.
+        if (!config.mms_source.empty()) {
+            for (std::size_t i = 0; i < q.size(); ++i) {
+                residual[i].mass      -= config.mms_source[i].mass;
+                residual[i].mom_x     -= config.mms_source[i].mom_x;
+                residual[i].mom_y     -= config.mms_source[i].mom_y;
+                residual[i].mom_z     -= config.mms_source[i].mom_z;
+                residual[i].energy    -= config.mms_source[i].energy;
+                residual[i].turbulence -= config.mms_source[i].turbulence;
+            }
+        }
+
+        // Semi-implicit destruction treatment (match GPU apply_rans_implicit_gpu).
+        // Skipped in MMS mode: the semi-implicit correction is a convergence acceleration
+        // technique, not part of the spatial discretization being verified. Applying it
+        // after MMS subtraction would break source consistency since the correction
+        // transforms residual as R' = q*(f-1)/dtv + R*f, making it impossible for
+        // S_mms to cancel R when q=q_exact.
+        if (config.turbulence && config.mms_source.empty()) {
             for (std::size_t i = 0; i < q.size(); ++i) {
                 Real wall_distance = mesh_.cells[i].h_min;
                 if (wall_distance <= 0.0f) wall_distance = 1e30f;
@@ -466,17 +488,6 @@ CfdSolveSummary CfdSolver::solve_from_state(
                 Real old_residual = residual[i].turbulence;
                 residual[i].turbulence = old_rhont * (implicit_factor - 1.0f) / (dt_over_V + 1e-30f)
                                        + old_residual * implicit_factor;
-            }
-        }
-
-        if (!config.mms_source.empty()) {
-            for (std::size_t i = 0; i < q.size(); ++i) {
-                residual[i].mass      -= config.mms_source[i].mass;
-                residual[i].mom_x     -= config.mms_source[i].mom_x;
-                residual[i].mom_y     -= config.mms_source[i].mom_y;
-                residual[i].mom_z     -= config.mms_source[i].mom_z;
-                residual[i].energy    -= config.mms_source[i].energy;
-                residual[i].turbulence -= config.mms_source[i].turbulence;
             }
         }
 

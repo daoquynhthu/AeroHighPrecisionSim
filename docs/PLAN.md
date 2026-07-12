@@ -489,9 +489,11 @@ Gate:
 - [x] Wall heat flux Q_wall accumulated on CPU (`integrate_wall_faces`) and GPU (`wall_force_kernel`), non-dimensionalized as `mu·dT_dn/((γ-1)·Pr·Re)·area`.
 - [x] CPU/GPU wall forces and Q_wall consistent — Q_wall added to `assert_oracle_equivalent` ForcePair array; CPU solver passes final-iteration gradients.
 - [ ] [V&V] MMS for laminar NS: observed order ≥ 1.8 (2nd-order) on smooth manufactured solution.
-  - Source consistency: PASS (residual=0, L2_err=0 on 8³ mesh). Order-of-accuracy deferred:
-    forward Euler unstable on coarse meshes with large MMS source terms. Needs RK2/implicit
-    timestepping or CFL ramp-up.
+  - Source consistency: PASS (residual=0, L2_err=0, Euler+NS order-1/order-2).
+  - Boundary-compatible MMS added (cos(πx)cos(πy)cos(πz) modes vanish at [-0.5,0.5]³).
+  - Order-of-accuracy from freestream IC blocked: farfield BC error dominates (O(1) in L2)
+    on coarse meshes, masking spatial order. Either: (a) MMS-compatible farfield BC,
+    (b) much larger domain, or (c) implicit solver with direct q_exact IC.
 
 ---
 
@@ -586,10 +588,10 @@ Gate:
 - [x] Turbulent flat plate Cf > laminar reference at same Re.
 - [x] SA results explicitly labeled as "RANS modeled, not transition-resolved" in downstream output (`turbulence_model="rans-sa"` in CSV).
 - [ ] [V&V] SA MMS: observed order ≥ 1.8 on smooth manufactured solution with non-zero nu_tilde.
-  - BLOCKED: solver applies semi-implicit RANS destruction correction (cfd_solver.cpp:454-469)
-    not replicated in compute_mms_source() → residual=0.000612, L2_err=0.348. Options:
-    (a) align source computation with implicit treatment, (b) add MMS mode flag to disable
-    semi-implicit correction.
+  - Source consistency (order-2): PASS (r0=0, rf=0, L2_err=0 on 8³ mesh). Fixes:
+    (a) MMS injection moved before semi-implicit correction; semi-implicit skipped in MMS mode.
+    (b) w_inf.nu_tilde propagated from FreestreamCondition.nu_tilde for farfield BC match.
+  - Order-of-accuracy: same farfield BC issue as laminar NS — deferred.
 
 ---
 

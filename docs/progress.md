@@ -694,7 +694,21 @@
   order-2 reconstruction, viscous. All 9 existing CFD suites still PASS.
 - SA source consistency FAILS: solver applies semi-implicit RANS destruction correction
   (cfd_solver.cpp:454-469) not replicated in compute_mms_source() → residual=0.000612, L2_err=0.348.
-  Deferred — needs compute_mms_source to align with implicit treatment or MMS mode flag.
-- Order-of-accuracy verification FAILS: forward Euler diverges from uniform freestream
-  IC on coarse meshes with large MMS source terms. Needs RK2/implicit timestepping or
-  CFL ramp-up. Deferred.
+
+2026-07-12 — MMS deep investigation + fixes (MMS-1/MMS-2)
+- MMS-1 FIXED: SA source consistency now PASSES (r0=0, rf=0, L2_err=0 for order-2).
+  Root cause: two bugs in cfd_solver.cpp:
+  (a) MMS injection was AFTER semi-implicit RANS correction; the correction transforms
+      residual as R' = q*(f-1)/dtv + R*f, making exact cancellation impossible.
+      Fix: move MMS injection before semi-implicit correction.
+  (b) Semi-implicit correction is a convergence acceleration technique, not part of spatial
+      discretization. Fix: skip it when `!config.mms_source.empty()`.
+  (c) w_inf.nu_tilde not propagated from FreestreamCondition.nu_tilde — caused farfield BC
+      mismatch between MMS source computation and solver.
+- MMS-2 INVESTIGATED: Euler order-of-accuracy from freestream IC fails because farfield BC
+  error dominates (O(1) in L2), masking spatial order. Source consistency from q_exact IC
+  works perfectly (err=0, res=0 for Euler order-1/order-2). Added boundary-compatible MMS
+  functions (MmsSolutionEulerBC/MmsSolutionSABC) using cos(πx)cos(πy)cos(πz) modes that
+  vanish at domain boundaries for future order-of-accuracy tests.
+- 5 MMS tests: NS-SA-order2, SA-order2, SA-order1, Euler-order1, Euler-order2 all PASS.
+  All 9 existing CFD suites still PASS.

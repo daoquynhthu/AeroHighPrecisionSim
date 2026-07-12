@@ -62,6 +62,36 @@ Real mms_observed_order(
 MmsSolutionEuler make_default_mms_euler();
 MmsSolutionSA make_default_mms_sa();
 
+// Boundary-compatible MMS: all perturbations use cos(pi*x)*cos(pi*y)*cos(pi*z)
+// which vanishes at domain boundaries [-0.5, 0.5]^3. Base state matches freestream
+// for Mach=0.5, alpha=0, beta=0, gamma=1.4 so that q_exact = freestream at farfield.
+// Required for order-of-accuracy verification with farfield BC.
+struct MmsSolutionEulerBC {
+    Real freq;
+    Real rho0, rho_amp;
+    Real u0, u_amp;
+    Real v0, v_amp;
+    Real w0, w_amp;
+    Real p0, p_amp;
+
+    PrimitiveState eval(Real x, Real y, Real z) const;
+    PrimitiveGradient eval_gradient(Real x, Real y, Real z) const;
+};
+
+struct MmsSolutionSABC : MmsSolutionEulerBC {
+    Real nt0, nt_amp;
+    PrimitiveState eval_sa(Real x, Real y, Real z) const;
+    PrimitiveGradient eval_gradient_sa(Real x, Real y, Real z) const;
+};
+
+void fill_mms(const CfdMesh& mesh, const MmsSolutionEulerBC& mms,
+              std::vector<ConservativeState>& q, Real gamma);
+void fill_mms_sa(const CfdMesh& mesh, const MmsSolutionSABC& mms,
+                 std::vector<ConservativeState>& q, Real gamma);
+
+MmsSolutionEulerBC make_default_mms_euler_bc();
+MmsSolutionSABC make_default_mms_sa_bc();
+
 } // namespace cfd
 } // namespace aero
 } // namespace aerosp
