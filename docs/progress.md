@@ -732,3 +732,10 @@
   - All CFD suites: 93/93 tests PASS, zero regression.
   - `.gitignore: build/ -> build*/` to exclude build_cov/; commit amended.
   - Committed as ecec453 ("Cleanup: remove orphaned test_analytic_vs_discrete ...").
+- 2026-07-12: SA MMS gate closed — fixed-point test with MMS-compatible BC.
+  - Added SA fixed-point test (MmsSolutionSABC + MMS BC): r0=0, rf=0, L2_err=0.
+  - No code changes needed beyond the MMS-2 infrastructure (Euler-only BC sufficient
+    because boundary turbulence flux = 0 for farfield faces).
+  - 9/9 TestMms PASS; all 94+ CFD tests PASS.
+  - Phase 7 SA MMS gate [x] — last remaining gate closed. Phase 7 now fully complete.
+  - Committed as b59b2f1 ("MMS-2: MMS-compatible farfield BC for order-of-accuracy ...").

@@ -427,6 +427,63 @@ static int test_euler_order2_fixed_point() {
     return 0;
 }
 
+static int test_mms_sa_fixed_point() {
+    TEST("MMS-SA: order-2 SA fixed point with MMS BC (q_exact stays q_exact)");
+
+    auto mms = make_default_mms_sa_bc();
+    PrimitiveState w_inf = make_freestream(0.5, 0.0, 0.0, 1.4);
+    w_inf.nu_tilde = 0.1f;
+    FreestreamCondition freestream;
+    freestream.mach = 0.5;
+    freestream.nu_tilde = 0.1f;
+
+    CfdMesh mesh = generate_structured_hex_mesh(8);
+    compute_mesh_metrics(mesh);
+
+    CfdConfig cfg;
+    cfg.max_iter = 20;
+    cfg.cfl = 0.1f;
+    cfg.convergence_tol = 1e-14;
+    cfg.reconstruction_order = 2;
+    cfg.viscous = true;
+    cfg.Re = 1e4;
+    cfg.turbulence = true;
+    cfg.use_gpu = false;
+    cfg.mms_solution = &mms;
+
+    std::vector<ConservativeState> q_exact;
+    fill_mms_sa(mesh, mms, q_exact, cfg.gamma);
+
+    std::vector<EulerFlux> source;
+    if (!compute_mms_source(mesh, q_exact, w_inf, cfg, source))
+        FAIL("compute_mms_source failed");
+
+    cfg.mms_source = source;
+
+    CfdSolver solver;
+    if (!solver.load_mesh(mesh))
+        FAIL("load_mesh failed");
+
+    auto summary = solver.solve_from_state(freestream, cfg, q_exact);
+    if (summary.failed) {
+        std::string reason = summary.diagnostics.failure.valid
+            ? summary.diagnostics.failure.reason : "unknown";
+        std::printf("FAILED(%s) ", reason.c_str());
+        FAIL("solver failed");
+    }
+
+    Real r0 = summary.residual_history.empty() ? -1.0 : summary.residual_history[0];
+    Real rf = summary.residual_history.empty() ? -1.0 : summary.residual_history.back();
+    Real err = mms_l2_error(summary.final_state, q_exact);
+    std::printf("r0=%g rf=%g L2_err=%g ", r0, rf, err);
+
+    if (rf > 1e-4 || err > 1e-6)
+        FAIL("fixed point not maintained with MMS BC");
+
+    PASS();
+    return 0;
+}
+
 int main() {
     int result = 0;
     result |= test_mms_ns_consistency();
@@ -437,6 +494,7 @@ int main() {
     result |= test_euler_order1_truncation();
     result |= test_euler_order2_truncation();
     result |= test_euler_order2_fixed_point();
+    result |= test_mms_sa_fixed_point();
 
     std::printf("[SUMMARY] %d/%d PASS\n", pass_count, test_count);
     return result;

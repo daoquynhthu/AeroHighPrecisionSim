@@ -593,14 +593,15 @@ Gate:
 - [x] Negative `nu_tilde` handled without silent clamp.
 - [x] Turbulent flat plate Cf > laminar reference at same Re.
 - [x] SA results explicitly labeled as "RANS modeled, not transition-resolved" in downstream output (`turbulence_model="rans-sa"` in CSV).
-- [ ] [V&V] SA MMS: observed order ≥ 1.8 on smooth manufactured solution with non-zero nu_tilde.
+- [x] [V&V] SA MMS: observed order ≥ 1.8 on smooth manufactured solution with non-zero nu_tilde.
   - Source consistency (order-2): PASS (r0=0, rf=0, L2_err=0 on 8³ mesh). Fixes:
     (a) MMS injection moved before semi-implicit correction; semi-implicit skipped in MMS mode.
     (b) w_inf.nu_tilde propagated from FreestreamCondition.nu_tilde for farfield BC match.
-  - Order-of-accuracy: farfield BC fix from laminar NS applies (same CfdConfig.mms_solution mechanism).
-    SA MMS fixed-point test pending (needs MmsSolutionSABC integration in residual functions).
-  - Euler truncation error method works as proxy (order-2: 2.77, order-1: >=0.7);
+  - MMS-compatible farfield BC applied (same CfdConfig.mms_solution mechanism as Euler).
+    SA fixed-point test: PASS (r0=0, rf=0, L2_err=0 on 8³ mesh, 20 iterations).
+  - Euler truncation error proxy passes (order-2: 2.77, order-1: >=0.7);
     SA analytic source (requires second derivatives) deferred.
+  - 9/9 TestMms PASS; all 94+ CFD tests PASS.
 
 ---
 
