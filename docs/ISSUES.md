@@ -2552,10 +2552,10 @@ If STL has zero extent in any dimension, grid spacing is zero → threshold zero
 | CRITICAL | 2 | 2 | 0 | 0 |
 | HIGH | 3 | 2 | 0 | 1 |
 | MEDIUM | 6 | 6 | 0 | 0 |
-| LOW | 5 | 1 | 4 | 0 |
-| INFO | 6 | 0 | 6 | 0 |
+| LOW | 5 | 5 | 0 | 0 |
+| INFO | 6 | 4 | 2 | 0 |
 
-**Total**: 22 findings, 11 fixed, 10 open, 1 skipped. See `docs/progress.md` 2026-07-12 for fix details.
+**Total**: 22 findings, 19 fixed, 2 open (I2, I4), 1 skipped (H1). See `docs/progress.md` 2026-07-12 for fix details.
 
 ### Resolved (2026-07-12)
 
@@ -2571,3 +2571,11 @@ If STL has zero extent in any dimension, grid spacing is zero → threshold zero
 - **PH9B-M5** [FIXED]: `find_or_add_node` uses component-wise comparison with scale `eps = 1e-8 * max(|p|, 1)` — avoids `norm()` (sqrt) for performance.
 - **PH9B-M6** [FIXED]: Second `compute_mesh_metrics(mesh, false)` skips cell recompute.
 - **PH9B-L4** [FIXED]: `clip_tet` interp: guard `fabs(denom) < 1e-30` → return midpoint.
+- **PH9B-L1** [FIXED]: `ray_aabb_intersect` — guard zero direction components with parallel-slab check.
+- **PH9B-L2** [FIXED]: `detect_stl_format` — check for "solid " (6 bytes) as unequivocal ASCII; gate binary heuristic with sane num_triangles.
+- **PH9B-L3** [FIXED]: ASCII STL parser — recompute normal from geometry, flip if dot with file normal is negative.
+- **PH9B-L5** [FIXED]: Already handled by M1 (`std::max(min_spacing * 0.01f, 1e-12f)`).
+- **PH9B-I3** [RESOLVED]: `max_cells` is now read by the `cells.size() > cfg.max_cells` check added in H2.
+- **PH9B-I5** [RESOLVED]: Prism layer config fields are placeholders for 9-B.4 (not started); kept for API completeness.
+- **PH9B-I1** [FIXED]: BVH `closest_dist_node` now visits the nearer child first, enabling earlier `best` pruning.
+- **PH9B-I6** [FIXED]: `WallTri` stores indices (`i0,i1,i2`) into a shared `wall_verts` buffer instead of duplicating Vec3 coordinates.

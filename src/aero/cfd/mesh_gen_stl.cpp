@@ -214,7 +214,6 @@ private:
         if (d_box >= best) return;
 
         if (node.left < 0) {
-            // Leaf
             for (int i = 0; i < node.tri_count; ++i) {
                 const auto& t = (*tris_)[indices_[node.tri_start + i]];
                 Real d = point_tri_distance(p, t.v0, t.v1, t.v2);
@@ -223,8 +222,12 @@ private:
             return;
         }
 
-        closest_dist_node(node.left, p, best);
-        closest_dist_node(node.right, p, best);
+        Real dl = box_dist(nodes_[node.left].box, p);
+        Real dr = box_dist(nodes_[node.right].box, p);
+        int first = (dl <= dr) ? node.left : node.right;
+        int second = (dl <= dr) ? node.right : node.left;
+        closest_dist_node(first, p, best);
+        closest_dist_node(second, p, best);
     }
 
     bool ray_intersect_node(int idx, Vec3 origin, Vec3 dir, Real t_max, Real& t_hit) const {
@@ -805,7 +808,7 @@ struct GeneratedCell {
 };
 
 struct WallTri {
-    Vec3 v0, v1, v2;
+    int i0, i1, i2;
 };
 
 } // anonymous namespace
@@ -858,6 +861,7 @@ bool generate_conformal_mesh_from_stl(
 
     // 6. Classify background cells and generate output
     std::vector<GeneratedCell> cells;
+    std::vector<Vec3> wall_verts;
     std::vector<WallTri> wall_tris;
 
     for (int k = 0; k < grid.nz; ++k) {
@@ -940,12 +944,18 @@ bool generate_conformal_mesh_from_stl(
 
                         // Add wall triangles, filtering degenerates
                         for (size_t ti = 0; ti + 2 < clip.wall_indices.size(); ti += 3) {
+                            int wi0 = static_cast<int>(wall_verts.size());
+                            wall_verts.push_back(clip.wall_verts[clip.wall_indices[ti]]);
+                            wall_verts.push_back(clip.wall_verts[clip.wall_indices[ti + 1]]);
+                            wall_verts.push_back(clip.wall_verts[clip.wall_indices[ti + 2]]);
+                            Vec3 wv0 = wall_verts[wi0], wv1 = wall_verts[wi0+1], wv2 = wall_verts[wi0+2];
+                            Vec3 e01 = wv1 - wv0, e02 = wv2 - wv0;
+                            if (norm(cross(e01, e02)) < Real(1e-20)) {
+                                wall_verts.resize(wi0);
+                                continue;
+                            }
                             WallTri wt;
-                            wt.v0 = clip.wall_verts[clip.wall_indices[ti]];
-                            wt.v1 = clip.wall_verts[clip.wall_indices[ti + 1]];
-                            wt.v2 = clip.wall_verts[clip.wall_indices[ti + 2]];
-                            Vec3 e01 = wt.v1 - wt.v0, e02 = wt.v2 - wt.v0;
-                            if (norm(cross(e01, e02)) < Real(1e-20)) continue;
+                            wt.i0 = wi0; wt.i1 = wi0 + 1; wt.i2 = wi0 + 2;
                             wall_tris.push_back(wt);
                         }
                     }

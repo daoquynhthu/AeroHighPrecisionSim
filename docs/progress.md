@@ -896,3 +896,17 @@
 - L4 [FIXED]: clip_tet sa-sb zero denominator guard
 - Verification: TestCfdMeshStl 3/3 PASS, TestCfdMesh 28/28 PASS, TestCfdEuler 9/9 PASS
 - ISSUES.md updated: resolved section appended with status summary (11 fixed, 10 open, 1 skipped)
+
+2026-07-12 — Phase 9-B: INFO fixes (I1, I3, I5, I6) + LOW fixes (L1, L2, L3)
+- L1 [FIXED]: ray_aabb_intersect guard for zero-length direction components
+- L2 [FIXED]: detect_stl_format checks for "solid " (6 bytes with space) as unequivocal ASCII; gates binary heuristic with sane num_triangles
+- L3 [FIXED]: ASCII STL parser recomputes normal from geometry, flips if dot with file normal is negative
+- L5 [FIXED]: Already resolved by M1 (max(min_spacing * 0.01f, 1e-12f))
+- I1 [FIXED]: BVH closest_dist_node visits nearer child first for early pruning
+- I3 [RESOLVED]: max_cells config used by H2 check
+- I5 [RESOLVED]: Prism layer config fields kept as 9-B.4 placeholders
+- I6 [FIXED]: WallTri stores indices into shared wall_verts buffer
+- I2 [OPEN]: Spatial hash was buggy (scale-dependent eps breaks quantization); reverted to linear scan
+- I4 [OPEN]: Shared Vec3 header deferred (risk > benefit, different function sets in each TU)
+- Verification: TestCfdMeshStl 3/3 PASS
+- Committed as 67ca3ed
