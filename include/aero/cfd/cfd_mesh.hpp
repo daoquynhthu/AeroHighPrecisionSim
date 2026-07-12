@@ -5,7 +5,6 @@
 
 #include <string>
 #include <vector>
-#include <cuda_runtime.h>
 
 namespace aerosp {
 namespace aero {

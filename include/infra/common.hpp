@@ -1,6 +1,11 @@
 #pragma once
 
+#ifdef __CUDACC__
 #include <cuda_runtime.h>
+#else
+struct float3 { float x, y, z; };
+struct double3 { double x, y, z; };
+#endif
 
 #ifdef __CUDACC__
     #define CUDA_HOST_DEVICE __host__ __device__

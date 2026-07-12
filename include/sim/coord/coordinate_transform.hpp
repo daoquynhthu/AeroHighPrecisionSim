@@ -1,7 +1,6 @@
 #pragma once
 
 #include <Eigen/Core>
-#include <cuda_runtime.h>
 #include "infra/math/constants.hpp"
 #include "infra/common.hpp"
 

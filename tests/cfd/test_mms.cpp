@@ -275,16 +275,91 @@ static int test_mms_sa_order1_consistency() {
     return 0;
 }
 
+// Order-of-accuracy test via truncation error measurement.
+// Computes T_i = R_h(q_exact)_i - V_i * S_analytic(x_i) directly without
+// running the solver. T is the truncation error of the FV scheme and should
+// converge as O(h^p). This is more direct than solver-based convergence
+// tests (forward Euler is unstable for large analytic source terms).
+static int run_truncation_error_order(int order) {
+    auto mms = make_default_mms_euler_bc();
+    PrimitiveState w_inf = make_freestream(0.5, 0.0, 0.0, 1.4);
+
+    int ns[] = {8, 12, 16};
+    Real tnorms[3] = {};
+    bool ok = true;
+
+    for (int mi = 0; mi < 3; ++mi) {
+        int n = ns[mi];
+        CfdMesh mesh = generate_structured_hex_mesh(n);
+        compute_mesh_metrics(mesh);
+
+        CfdConfig cfg;
+        cfg.reconstruction_order = order;
+        cfg.use_gpu = false;
+
+        std::vector<ConservativeState> q_exact;
+        fill_mms(mesh, mms, q_exact, cfg.gamma);
+        std::vector<EulerFlux> discrete;
+        if (!compute_mms_source(mesh, q_exact, w_inf, cfg, discrete)) {
+            std::printf("n=%d discrete_failed ", n); ok = false; continue;
+        }
+        std::vector<EulerFlux> analytic;
+        if (!compute_euler_source_analytic(mesh, mms, cfg.gamma, analytic)) {
+            std::printf("n=%d analytic_failed ", n); ok = false; continue;
+        }
+
+        Real t2 = 0.0;
+        for (std::size_t i = 0; i < q_exact.size(); ++i) {
+            Real t0 = discrete[i].mass   - analytic[i].mass;
+            Real t1 = discrete[i].mom_x  - analytic[i].mom_x;
+            Real t2_ = discrete[i].mom_y  - analytic[i].mom_y;
+            Real t3 = discrete[i].mom_z  - analytic[i].mom_z;
+            Real t4 = discrete[i].energy - analytic[i].energy;
+            t2 += t0*t0 + t1*t1 + t2_*t2_ + t3*t3 + t4*t4;
+        }
+        tnorms[mi] = std::sqrt(t2 / (5.0 * static_cast<Real>(q_exact.size())));
+        std::printf("n=%d |T|=%g ", n, tnorms[mi]);
+    }
+
+    if (!ok) return -1;
+    if (tnorms[0] <= 0.0 || tnorms[1] <= 0.0 || tnorms[2] <= 0.0) return -2;
+
+    Real observed = mms_observed_order(tnorms[0], ns[0], tnorms[1], ns[1], tnorms[2], ns[2]);
+    std::printf("T_order=%g ", observed);
+    return static_cast<int>(observed * 10 + 0.5);
+}
+
+static int test_euler_order2_truncation() {
+    TEST("EULER-OA: order-2 truncation error order (analytic vs discrete)");
+    int o = run_truncation_error_order(2);
+    if (o < 15) {
+        std::printf("got_T_order=%d ", o);
+        FAIL("expected truncation error order >= 1.5");
+    }
+    PASS();
+    return 0;
+}
+
+static int test_euler_order1_truncation() {
+    TEST("EULER-OA: order-1 truncation error order (analytic vs discrete)");
+    int o = run_truncation_error_order(1);
+    if (o < 7) {
+        std::printf("got_T_order=%d ", o);
+        FAIL("expected truncation error order >= 0.7");
+    }
+    PASS();
+    return 0;
+}
+
 int main() {
     int result = 0;
     result |= test_mms_ns_consistency();
-    // SA consistency: MMS-1 fix (MMS injection before semi-implicit + skip in MMS mode).
     result |= test_mms_sa_consistency();
-    // Euler source consistency: order-1 and order-2 with BC-compatible MMS,
-    // initialized from q_exact (should give err=0).
     result |= test_mms_euler_order1_consistency();
     result |= test_mms_euler_order2_consistency();
     result |= test_mms_sa_order1_consistency();
+    result |= test_euler_order1_truncation();
+    result |= test_euler_order2_truncation();
 
     std::printf("[SUMMARY] %d/%d PASS\n", pass_count, test_count);
     return result;

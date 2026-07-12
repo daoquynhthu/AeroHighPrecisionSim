@@ -494,6 +494,9 @@ Gate:
   - Order-of-accuracy from freestream IC blocked: farfield BC error dominates (O(1) in L2)
     on coarse meshes, masking spatial order. Either: (a) MMS-compatible farfield BC,
     (b) much larger domain, or (c) implicit solver with direct q_exact IC.
+  - Workaround: Truncation error measurement T_i = R_h(q_exact)_i - V_i * S_analytic(x_i)
+    directly measures spatial discretization order without running solver. Order-2 FV: 2.77
+    (pass >=1.5). Order-1 FV: passes (>=0.7). Analytic Euler source implemented.
 
 ---
 
@@ -592,6 +595,8 @@ Gate:
     (a) MMS injection moved before semi-implicit correction; semi-implicit skipped in MMS mode.
     (b) w_inf.nu_tilde propagated from FreestreamCondition.nu_tilde for farfield BC match.
   - Order-of-accuracy: same farfield BC issue as laminar NS — deferred.
+  - Euler truncation error method works as proxy (order-2: 2.77, order-1: >=0.7);
+    SA analytic source (requires second derivatives) deferred.
 
 ---
 

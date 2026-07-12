@@ -2,7 +2,6 @@
 
 #include <Eigen/Core>
 #include <Eigen/Geometry>
-#include <cuda_runtime.h>
 #include "infra/common.hpp"
 
 namespace aerosp {

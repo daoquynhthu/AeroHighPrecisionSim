@@ -2,7 +2,12 @@
 
 #include <vector>
 #include <string>
+#ifdef __CUDACC__
 #include <cuda_runtime.h>
+#else
+#include "infra/common.hpp"
+static inline float3 make_float3(float x, float y, float z) { return {x, y, z}; }
+#endif
 
 namespace aerosp {
 namespace aero {

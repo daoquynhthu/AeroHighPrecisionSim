@@ -92,6 +92,23 @@ void fill_mms_sa(const CfdMesh& mesh, const MmsSolutionSABC& mms,
 MmsSolutionEulerBC make_default_mms_euler_bc();
 MmsSolutionSABC make_default_mms_sa_bc();
 
+// Compute the analytic (continuous) Euler source term at a single point.
+// S = div(F(q)) where F is the Euler flux and q comes from the MMS solution.
+// Uses analytical derivatives via eval_gradient.
+EulerFlux compute_euler_source_analytic_point(
+    const MmsSolutionEulerBC& mms, Real x, Real y, Real z, Real gamma);
+
+// Compute analytic Euler source for all cells in the mesh.
+// Source[i] = V_i * S_continuous(x_i) where S_continuous is the analytic divergence.
+// This is the CORRECT source for order-of-accuracy verification:
+// the solver finds q_h ≈ q_exact + O(h^p), not q_h = q_exact (discrete case).
+// For viscous NS, second derivatives would be needed (deferred).
+bool compute_euler_source_analytic(
+    const CfdMesh& mesh,
+    const MmsSolutionEulerBC& mms,
+    Real gamma,
+    std::vector<EulerFlux>& source);
+
 } // namespace cfd
 } // namespace aero
 } // namespace aerosp

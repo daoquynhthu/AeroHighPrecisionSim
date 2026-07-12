@@ -153,6 +153,92 @@ bool compute_mms_source(const CfdMesh& mesh,
     return true;
 }
 
+// --- Analytic Euler source for order-of-accuracy (continuous MMS) ---
+//
+// Compute S = div(F) analytically at a point using the MMS primitive + gradient.
+// The Euler flux divergence per unit volume at (x,y,z) is:
+//
+//   S_rho     = d(rho*u)/dx + d(rho*v)/dy + d(rho*w)/dz
+//   S_rhou    = d(rho*u^2 + p)/dx + d(rho*u*v)/dy + d(rho*u*w)/dz
+//   S_rhov    = d(rho*u*v)/dx + d(rho*v^2 + p)/dy + d(rho*v*w)/dz
+//   S_rhow    = d(rho*u*w)/dx + d(rho*v*w)/dy + d(rho*w^2 + p)/dz
+//   S_rhoE    = d(u*(rho*E+p))/dx + d(v*(rho*E+p))/dy + d(w*(rho*E+p))/dz
+//
+// The result is multiplied by cell volume in compute_euler_source_analytic.
+//
+EulerFlux compute_euler_source_analytic_point(
+    const MmsSolutionEulerBC& mms, Real x, Real y, Real z, Real gamma)
+{
+    PrimitiveState w = mms.eval(x, y, z);
+    PrimitiveGradient g = mms.eval_gradient(x, y, z);
+
+    Real r = w.rho, u = w.u, v = w.v, ww = w.w, p = w.p;
+    Real rx = g.drho_dx, ry = g.drho_dy, rz = g.drho_dz;
+    Real ux = g.du_dx, uy = g.du_dy, uz = g.du_dz;
+    Real vx = g.dv_dx, vy = g.dv_dy, vz = g.dv_dz;
+    Real wx = g.dw_dx, wy = g.dw_dy, wz = g.dw_dz;
+    Real px = g.dp_dx, py = g.dp_dy, pz = g.dp_dz;
+
+    // Continuity: S_rho = div(rho*V)
+    Real S_rho = rx*u + r*ux + ry*v + r*vy + rz*ww + r*wz;
+
+    // Momentum x: S_rhou = div(rho*u*V) + dp/dx
+    Real S_rhou = (2.0f*r*u*ux + u*u*rx + px)
+                + (r*u*vy + r*v*uy + u*v*ry)
+                + (r*u*wz + r*ww*uz + u*ww*rz);
+
+    // Momentum y: S_rhov = div(rho*v*V) + dp/dy
+    Real S_rhov = (r*v*ux + r*u*vx + u*v*rx)
+                + (2.0f*r*v*vy + v*v*ry + py)
+                + (r*v*wz + r*ww*vz + v*ww*rz);
+
+    // Momentum z: S_rhow = div(rho*w*V) + dp/dz
+    Real S_rhow = (r*ww*ux + r*u*wx + u*ww*rx)
+                + (r*ww*vy + r*v*wy + v*ww*ry)
+                + (2.0f*r*ww*wz + ww*ww*rz + pz);
+
+    // Energy: rho*E = p/(gamma-1) + 0.5*rho*(u^2+v^2+w^2)
+    Real vsq = u*u + v*v + ww*ww;
+    Real rE = p / (gamma - 1.0f) + 0.5f * r * vsq;
+
+    // d(rho*E)/dx = p_x/(g-1) + 0.5*r_x*vsq + r*(u*u_x + v*v_x + w*w_x)
+    Real rEx = px / (gamma - 1.0f) + 0.5f * rx * vsq + r * (u*ux + v*vx + ww*wx);
+    Real rEy = py / (gamma - 1.0f) + 0.5f * ry * vsq + r * (u*uy + v*vy + ww*wy);
+    Real rEz = pz / (gamma - 1.0f) + 0.5f * rz * vsq + r * (u*uz + v*vz + ww*wz);
+
+    // S_rhoE = d(u*(rho*E+p))/dx + d(v*(rho*E+p))/dy + d(w*(rho*E+p))/dz
+    Real hp = rE + p;
+    Real S_rhoE = (ux*hp + u*(rEx + px))
+                + (vy*hp + v*(rEy + py))
+                + (wz*hp + ww*(rEz + pz));
+
+    EulerFlux s;
+    s.mass   = S_rho;
+    s.mom_x  = S_rhou;
+    s.mom_y  = S_rhov;
+    s.mom_z  = S_rhow;
+    s.energy = S_rhoE;
+    return s;
+}
+
+bool compute_euler_source_analytic(const CfdMesh& mesh,
+    const MmsSolutionEulerBC& mms, Real gamma,
+    std::vector<EulerFlux>& source)
+{
+    source.assign(mesh.cells.size(), EulerFlux{});
+    for (std::size_t i = 0; i < mesh.cells.size(); ++i) {
+        EulerFlux s = compute_euler_source_analytic_point(mms,
+            mesh.cells[i].cx, mesh.cells[i].cy, mesh.cells[i].cz, gamma);
+        // Source is per-unit-volume; multiply by cell volume for discrete injection
+        source[i].mass   = s.mass   * mesh.cells[i].volume;
+        source[i].mom_x  = s.mom_x  * mesh.cells[i].volume;
+        source[i].mom_y  = s.mom_y  * mesh.cells[i].volume;
+        source[i].mom_z  = s.mom_z  * mesh.cells[i].volume;
+        source[i].energy = s.energy * mesh.cells[i].volume;
+    }
+    return true;
+}
+
 Real mms_l2_error(const std::vector<ConservativeState>& q,
                   const std::vector<ConservativeState>& q_ref, int nvar) {
     if (q.empty() || q.size() != q_ref.size()) return std::numeric_limits<Real>::max();

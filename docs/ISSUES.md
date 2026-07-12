@@ -2255,4 +2255,8 @@ Fixed: global `CMAKE_CUDA_SEPARABLE_COMPILATION ON` removed (part of PERF-H2); o
   solver (GPU-only) initialized from q_exact with artificial perturbation.
 - **Workaround**: Source consistency tests from q_exact IC verify the spatial discretization
   correctness without needing steady-state convergence.
-- **Status**: OPEN (boundary-compatible MMS functions added, pending BC fix)
+- **Workaround**: Truncation error measurement T_i = R_h(q_exact)_i - V_i * S_analytic(x_i)
+  successfully measures spatial discretization order without solver: order-2 FV ~2.77 (pass >=1.5).
+  Analytic Euler source (compute_euler_source_analytic) implemented.
+- **Status**: OPEN (boundary-compatible MMS functions added, analytic Euler source implemented,
+  truncation error workaround verified; SA analytic source + full BC fix pending)

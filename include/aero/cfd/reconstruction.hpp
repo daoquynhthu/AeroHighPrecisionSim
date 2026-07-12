@@ -7,6 +7,13 @@
 #include <string>
 #include <vector>
 
+#ifdef __CUDACC__
+#include <cuda_runtime.h>
+#else
+struct CUstream_st;
+using cudaStream_t = CUstream_st*;
+#endif
+
 namespace aerosp {
 namespace aero {
 namespace cfd {

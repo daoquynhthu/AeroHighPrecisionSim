@@ -7,7 +7,14 @@
 #include "aero/cfd/reconstruction.hpp"
 
 #include <cstddef>
+#ifdef __CUDACC__
 #include <cuda_runtime_api.h>
+#else
+struct CUstream_st;
+using cudaStream_t = CUstream_st*;
+struct CUevent_st;
+using cudaEvent_t = CUevent_st*;
+#endif
 #include <string>
 #include <vector>
 

@@ -2,7 +2,9 @@
 
 #include "aero/cfd/real_fwd.hpp"
 #include <cmath>
+#ifdef __CUDACC__
 #include <cuda_runtime.h>
+#endif
 
 namespace aerosp {
 

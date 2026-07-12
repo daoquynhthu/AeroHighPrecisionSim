@@ -712,3 +712,13 @@
   vanish at domain boundaries for future order-of-accuracy tests.
 - 5 MMS tests: NS-SA-order2, SA-order2, SA-order1, Euler-order1, Euler-order2 all PASS.
   All 9 existing CFD suites still PASS.
+
+2026-07-12 — MMS truncation error order-of-accuracy + cleanup
+- Added analytic Euler source computation (compute_euler_source_analytic) using product-rule
+  derivatives from MMS eval_gradient.
+- Truncation error measurement: T_i = R_h(q_exact)_i - V_i * S_analytic(x_i), measures spatial
+  discretization order without running the solver. Order-2 FV: 2.77 (pass >=1.5). Order-1 FV:
+  passes (>=0.7).
+- 7 MMS tests total: 5 source consistency + 2 truncation error order — all PASS.
+- Removed orphaned diagnostic test code (leftover from previous edit).
+- Committed as 23af867 / 370fd2d (MMS V&V framework).
