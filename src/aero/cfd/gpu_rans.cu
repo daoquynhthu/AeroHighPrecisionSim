@@ -84,7 +84,7 @@ __global__ void rans_source_kernel(
                  + 1e-30f;
     Real diffusion = (cb2 / sigma) * grad_nu2;
 
-    Real chi = Re * rho * nu_tilde / (mu + 1e-30f) + 1e-30f;
+    Real chi = Re * rho * nu_tilde / (mu + 1e-30f);
 
     Real source;
     if (chi >= 0.0f) {

@@ -301,7 +301,7 @@ __global__ void viscous_flux_kernel_atomic(
 
     Real dnu_dn = grad_dnu_dx*nx + grad_dnu_dy*ny + grad_dnu_dz*nz;
 
-    Real chi_face = Re * face_rho * face_nu_tilde / (mu_face + 1e-30f) + 1e-30f;
+    Real chi_face = Re * face_rho * face_nu_tilde / (mu_face + 1e-30f);
     Real chi3 = chi_face * chi_face * chi_face;
     Real fv1_face = chi3 / (chi3 + cv13 + 1e-30f);
     Real mu_tilde = face_rho * face_nu_tilde * fv1_face / sigma_sa;
@@ -586,7 +586,7 @@ __global__ void viscous_flux_kernel_colored(
 
     Real dnu_dn = grad_dnu_dx*nx + grad_dnu_dy*ny + grad_dnu_dz*nz;
 
-    Real chi_face = Re * face_rho * face_nu_tilde / (mu_face + 1e-30f) + 1e-30f;
+    Real chi_face = Re * face_rho * face_nu_tilde / (mu_face + 1e-30f);
     Real chi3 = chi_face * chi_face * chi_face;
     Real fv1_face = chi3 / (chi3 + cv13 + 1e-30f);
     Real mu_tilde = face_rho * face_nu_tilde * fv1_face / sigma_sa;

@@ -2662,14 +2662,14 @@ GPU HLLC 通量缺乏熵修正/保号声速校正。波速 `s_l = fmin(vn_l - a_
 **PHYS-7** [FIXED] `src/aero/cfd/gpu_viscous.cu:26-29, gpu_rans.cu:19-21`
 `d_sutherland_mu` 检查 `T <= 0.0f` 但不检查 `T` 是否为 NaN。NaN 通过 `T <= 0.0f` 检查（返回 false），经 `t_ratio` 和 `real_sqrt(t_ratio)` 传播为 NaN 粘度。修复：两处均添加 `!real_isfinite(T)` 前置检查。
 
-**PHYS-8** [MEDIUM] `src/aero/cfd/gpu_rans.cu:86`
-SA chi 公式：`chi = Re * rho * nu_tilde / (mu + 1e-30f) + 1e-30f`。加法项使 chi 偏移 ~1e-30，阻止 chi 在壁面处精确为零。CPU 版本（`rans.cpp:43`）也存在同样模式。
+**PHYS-8** [FIXED] `src/aero/cfd/gpu_rans.cu:86`
+SA chi 公式：`chi = Re * rho * nu_tilde / (mu + 1e-30f) + 1e-30f`。加法项使 chi 偏移 ~1e-30，阻止 chi 在壁面处精确为零。修复：移除尾端 `+ 1e-30f`。GPU RANS source、GPU viscous（2处）、CPU viscous 均已修复。
 
 **PHYS-9** [MEDIUM] `src/aero/cfd/gpu_wall.cu:152`
 壁面热导率：`conductivity = mu_face / ((gamma - 1.0f) * prandtl + 1e-30f)`。标准粘性能量通量使用 `kappa = mu * Cp / Pr = mu * gamma * R / ((gamma-1) * Pr)`，但代码缺少 `gamma * R` 因子。需要对照无量纲形式验证。
 
-**PHYS-10** [MEDIUM] `src/aero/cfd/mesh_validator.cpp:211-228`
-`compute_mesh_quality_detail` 计算 `closed_surface_error` 并存储于 `MeshQualityReport` 中，但求解器启动前不检查此值。非水密网格上的守恒误差不被检测。
+**PHYS-10** [FIXED] `src/aero/cfd/mesh_validator.cpp:211-228`
+`compute_mesh_quality_detail` 计算 `closed_surface_error` 并存储于 `MeshQualityReport` 中，但求解器启动前不检查此值。非水密网格上的守恒误差不被检测。修复：`CfdSolver::load_mesh` 新增面积-法向向量和检查，封闭性误差 > 1e-4×总面积时返回 false。
 
 **PHYS-11** [FIXED] `src/aero/cfd/gpu_timestep.cu:54, 113`
 CFL 时间步长使用 `numeric_limits<Real>::min()` (~1.175e-38) 作为 `denom = vmag + a` 的底线。FTZ 模式下真正的零或次正规数被刷新为 0，`> :min()` 检查失败，使用底线值，产生极大 dt（~1e38），可导致求解器爆炸。修复：改为 `Real(1e-30)`。

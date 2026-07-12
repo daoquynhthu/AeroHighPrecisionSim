@@ -296,11 +296,24 @@ EulerFlux hllc_flux(const PrimitiveState& left, const PrimitiveState& right, Rea
 bool CfdSolver::load_mesh(const CfdMesh& mesh) {
     mesh_ = mesh;
     wall_face_indices_.clear();
+
+    Real sx = 0.0f, sy = 0.0f, sz = 0.0f;
+    Real total_area = 0.0f;
     for (std::size_t i = 0; i < mesh_.faces.size(); ++i) {
         const auto& face = mesh_.faces[i];
         if (face.boundary == BoundaryKind::SlipWall || face.boundary == BoundaryKind::NoSlipWall)
             wall_face_indices_.push_back(static_cast<int>(i));
+        if (face.boundary != BoundaryKind::Interior) {
+            sx += face.area * face.nx;
+            sy += face.area * face.ny;
+            sz += face.area * face.nz;
+            total_area += face.area;
+        }
     }
+
+    Real closure_error = real_sqrt(sx*sx + sy*sy + sz*sz);
+    if (closure_error > Real(1e-4) * (total_area + Real(1e-30))) return false;
+
     return true;
 }
 

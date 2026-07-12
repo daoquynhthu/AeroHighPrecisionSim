@@ -40,7 +40,7 @@ RansSource compute_rans_source(
     constexpr Real ct3 = 1.2f;
     constexpr Real ct4 = 0.5f;
 
-    Real chi = rho * Re * w.nu_tilde / (mu + 1e-30f) + 1e-30f;
+    Real chi = rho * Re * w.nu_tilde / (mu + 1e-30f);
     Real vort = sa_vorticity(grad);
 
     Real grad_nu2 = grad.dnu_tilde_dx * grad.dnu_tilde_dx

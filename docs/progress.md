@@ -944,6 +944,11 @@
 - PHYS-12: Marked VERIFIED (formula confirmed correct)
 - Verification: TestCfdGpu 65/65 PASS
 
+2026-07-12 — PHYS-8+PHYS-10: chi offset + mesh closure check
+- PHYS-8: Removed `+ 1e-30f` offset from SA chi formula in gpu_rans.cu, gpu_viscous.cu (x2), cfd_residual.cpp, rans.cpp
+- PHYS-10: Added boundary-face area-normal closure check in CfdSolver::load_mesh; >1e-4×total_area rejects mesh
+- Verification: TestCfdGpu 65/65, TestCfdRans 14/14, TestCfdEuler 9/9, TestCfdMesh 28/28 all PASS
+
 2026-07-12 — PHYS-4: Fix d_dt_cell over-allocation (nvar_cells → n_cells)
 - Fix: d_dt_cell now allocates n_cells (per-cell timestep); separated d_neg_r at nvar_cells for residual negation scratch
 - The alias `Real* d_neg_r = d_dt_cell` removed; d_neg_r has its own proper allocation
