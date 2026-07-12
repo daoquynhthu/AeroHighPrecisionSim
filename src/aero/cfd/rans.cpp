@@ -75,11 +75,10 @@ Real fv1 = chi3 / (chi3 + cv13 + 1e-30f);
         s.production = production;
         s.destruction = destruction;
     } else {
-        Real ft2 = ct3 * std::exp(-ct4 * chi * chi);
-        source = cb1 * (1.0f - ft2) * vort * w.nu_tilde
-               - cw1 * (w.nu_tilde / wall_distance) * (w.nu_tilde / wall_distance)
+        source = cb1 * (1.0f - ct3) * vort * w.nu_tilde
+               + cw1 * (w.nu_tilde / wall_distance) * (w.nu_tilde / wall_distance)
                + diffusion;
-        s.production = cb1 * (1.0f - ft2) * vort * w.nu_tilde;
+        s.production = cb1 * (1.0f - ct3) * vort * w.nu_tilde;
         s.destruction = cw1 * (w.nu_tilde / wall_distance) * (w.nu_tilde / wall_distance);
     }
 

@@ -111,11 +111,10 @@ __global__ void rans_source_kernel(
 
         source = production - destruction + diffusion;
     } else {
-        Real ft2 = ct3 * real_exp(-ct4 * chi * chi);
         Real vort = d_sa_vorticity(*g);
         Real cw1 = cb1 / (karman*karman) + (1.0f + cb2) / sigma;
-        source = cb1 * (1.0f - ft2) * vort * nu_tilde
-               - cw1 * (nu_tilde / wall_distance) * (nu_tilde / wall_distance)
+        source = cb1 * (1.0f - ct3) * vort * nu_tilde
+               + cw1 * (nu_tilde / wall_distance) * (nu_tilde / wall_distance)
                + diffusion;
     }
 

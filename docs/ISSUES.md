@@ -2591,10 +2591,10 @@ Four-parallel subagent audit covering architecture compliance, physical/numerica
 | Category | HIGH | MEDIUM | LOW | INFO | Total |
 |----------|------|--------|-----|------|-------|
 | 架构合规 (ARCH) | 3 | 2 | 3 | 4 | 12 |
-| 物理正确 (PHYS) | 3 | 8 | 5 | 4 | 21 |
+| 物理正确 (PHYS) | 2 | 8 | 5 | 4 | 21 |
 | 测试覆盖 (COV) | 3 | 8 | 6 | 6 | 23 |
 | 性能优化 (PERF2) | 3 | 5 | 3 | 1 | 12 |
-| **Total** | **12** | **23** | **17** | **15** | **68** |
+| **Total** | **11** | **23** | **17** | **15** | **68** |
 
 ---
 
@@ -2644,8 +2644,8 @@ GPU 代码中存在 PERF-* 任务追踪注释（如 `// PERF-G9: cache events ac
 SA 隐式核函数破坏缩放分母错误：`d_dest = 2*cw1*nu_tilde/(karman^2 * d^2)` 含有额外的 `karman^2` 因子。标准 SA 破坏项为 `cw1*fw*(nu_tilde/d)^2`（无 karman^2），隐式 Jacobian 应为 `~2*cw1*nu_tilde/d^2`。多出的 `1/karman^2 ≈ 5.95` 使隐式校正弱约 6 倍。
 Fix: 移除分母中多余的 `karman * karman *`。回归测试 `CFD-RANS-IMPLICIT-KARMAN-1` 验证正确 d_dest 量级。
 
-**PHYS-2** [HIGH] `src/aero/cfd/rans.cpp:79, gpu_rans.cu:118`
-SA-neg 分支（chi < 0）：破坏项为 `-cw1*(nu_tilde/d)^2`。对于负 nu_tilde，nu_tilde² > 0 使此项为负，推动 nu_tilde 进一步为负。标准 SA-neg 应销毁（添加）此项以将 nu_tilde 推回至零。
+**PHYS-2** [FIXED] `src/aero/cfd/rans.cpp:79, gpu_rans.cu:118`
+SA-neg 分支（chi < 0）：破坏项为 `-cw1*(nu_tilde/d)^2`，推动负 nu_tilde 进一步为负。修复：改为 `+cw1*(nu_tilde/d)^2`（标准 SA-neg 将破坏项作为恢复项添加）。同时将 `(1-ft2)` 替换为标准中的 `(1-ct3)`（常数 ct3=1.2 而非 ft2 函数）。GPU/CPU 两分支均已修复。测试 CFD-RANS-13/14 验证修复后破坏项为正、总源项为正。
 
 **PHYS-3** [HIGH] `src/aero/cfd/cfd_residual_gpu.cu:236-244`
 GPU 残差组装中所有未知边界类型静默按远场处理。`else` 分支捕获未识别的 BoundaryKind 时应报错而非静默错误。

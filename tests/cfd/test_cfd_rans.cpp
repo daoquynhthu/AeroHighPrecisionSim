@@ -158,14 +158,47 @@ static int test_rans_source_negative_chi() {
         PASS;
     }
 
-    TEST("CFD-RANS-12 rans_source negative chi production ~ cb1*vort*nu_tilde (negative)");
+    TEST("CFD-RANS-12 rans_source negative chi production ~ cb1*(1-ct3)*vort*nu_tilde (positive)");
     {
         PrimitiveState w;
         w.rho = 1.0f; w.u = 0.0f; w.p = 1.0f; w.nu_tilde = -0.1f;
         PrimitiveGradient grad;
         grad.du_dz = 100.0f;
         RansSource s = compute_rans_source(w, grad, 0.01f, 1.0f, 1.0f, 1e6f);
-        if (s.production > 0.0f) FAIL("production=%g should be negative for negative nu_tilde", s.production);
+        // (1-ct3) = -0.2 < 0, nu_tilde = -0.1 < 0, product cb1*(-0.2)*(-0.1) > 0
+        if (s.production < 0.0f) FAIL("production=%g should be positive (fix PHYS-2)", s.production);
+        PASS;
+    }
+    return 0;
+}
+
+static int test_rans_neg_destruction_sign() {
+    TEST("CFD-RANS-13 rans_source negative chi destruction is positive (PHYS-2 fix)");
+    {
+        PrimitiveState w;
+        w.rho = 1.0f; w.u = 0.0f; w.p = 1.0f; w.nu_tilde = -0.1f;
+        PrimitiveGradient grad;
+        grad.du_dz = 100.0f;
+        RansSource s = compute_rans_source(w, grad, 0.01f, 1.0f, 1.0f, 1e6f);
+        // For nu_tilde < 0, (nu_tilde/d)^2 > 0, destruction = cw1*(nu_tilde/d)^2 > 0
+        if (s.destruction < 0.0f) FAIL("destruction=%g should be positive (fix PHYS-2)", s.destruction);
+        PASS;
+    }
+
+    TEST("CFD-RANS-14 rans_source negative chi total source less negative than production alone");
+    {
+        PrimitiveState w;
+        w.rho = 1.0f; w.u = 0.0f; w.p = 1.0f; w.nu_tilde = -0.1f;
+        PrimitiveGradient grad;
+        grad.du_dz = 100.0f;
+        RansSource s = compute_rans_source(w, grad, 0.01f, 1.0f, 1.0f, 1e6f);
+        // With fix: source = production + destruction + diffusion
+        // production = cb1*(1-ct3)*vort*nu_tilde = 0.1355*(-0.2)*100*(-0.1) = +0.271
+        // destruction = cw1*(nu_tilde/d)^2 = 3.239*(0.1/0.01)^2 = 3.239*100 = 323.9
+        // source = +0.271 + 323.9 + diffusion > 0 (strongly positive, pushes nu_tilde up)
+        if (s.total_source <= 0.0f) FAIL("total_source=%g should be positive post-fix (pushes nu_tilde toward zero)", s.total_source);
+        if (s.destruction <= std::fabs(s.production))
+            FAIL("destruction=%g should dominate production=%g for negative chi", s.destruction, s.production);
         PASS;
     }
     return 0;
@@ -176,6 +209,7 @@ int main() {
     result |= test_sa_vorticity();
     result |= test_rans_source_positive_chi();
     result |= test_rans_source_negative_chi();
+    result |= test_rans_neg_destruction_sign();
     std::printf("\n%d / %d tests PASSED.\n", pass_count, test_count);
     return result == 0 && pass_count == test_count ? 0 : 1;
 }

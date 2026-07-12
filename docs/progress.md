@@ -924,3 +924,10 @@
 - Test: CFD-RANS-IMPLICIT-KARMAN-1 — direct unit test on single-cell DeviceMesh with known nu_tilde=1, d=1, dt=0.1; verifies R_new ≈ -3.93 (not -7.94 from bug)
 - Verification: TestCfdGpu 64/64 PASS
 - Committed as part of PHYS-1
+
+2026-07-12 — PHYS-2: SA-neg branch destruction sign
+- Fix: changed `-cw1*(nu_tilde/d)^2` to `+cw1*(nu_tilde/d)^2` in SA-neg branch (both GPU gpu_rans.cu:118 and CPU rans.cpp:79)
+- Fix: changed `(1-ft2)` to `(1-ct3)` in production term per standard SA-neg (constant ct3=1.2, not ft2 function)
+- Updated test RANS-12: expects positive production for negative chi (correct SA-neg behavior)
+- New tests: RANS-13 (destruction positive), RANS-14 (total source positive, dominated by recovery)
+- Verification: TestCfdRans 14/14 PASS, TestCfdGpu 64/64 PASS
