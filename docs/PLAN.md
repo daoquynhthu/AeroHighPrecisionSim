@@ -1233,6 +1233,24 @@ Gate:
 - [x] `amr=false` has zero overhead (no AMR code path executed).
 - [x] All test suites PASS: TestCfdMesh 22/22, TestCfdEuler 9/9, TestCfdRans 12/12, TestCfdState 34/34.
 
+### 12.5 Post-completion audit fixes (2026-07-12)
+
+4 parallel subagent audits (correctness, memory/error, code quality/约定, solver integration/性能) produced 30 findings (8 CRITICAL, 5 HIGH, 9 MEDIUM, 8 LOW, 8 INFO). All 8 CRITICAL issues fixed.
+
+| ID | Description | Fix |
+|----|-------------|-----|
+| PH12-C1 | Coarsened parent state zero | CoarsenInfo output → volume-weighted restrict in solver |
+| PH12-C2 | amr_records overwritten, multi-level coarsening broken | Append + remove stale records |
+| PH12-C3 | amr_interval=0 div by zero | Guard `config.amr.interval > 0` |
+| PH12-C4 | refine_cells partial failure corrupts mesh | Restore mesh.nodes on failure |
+| PH12-C5 | rebuild_mesh_faces destroys boundary classification | Save/restore via FaceKey map |
+| PH12-C6 | GPU+AMR silent no-op | Error in solve_gpu_dispatch |
+| PH12-C7 | Refine/coarsen conflict drops refinement | Refine takes priority |
+| PH12-C8 | Stale residual norm after AMR | Reset to convergence_tol |
+
+Files changed: `amr_types.hpp`, `amr_refine.cpp`, `amr_interpolate.cpp`, `mesh_metrics.cpp`, `cfd_solver.cpp`, `cfd_solver_gpu.cpp`
+Verification: TestCfdMesh 22/22, TestCfdEuler 9/9 — all PASS.
+
 ---
 
 ## Phase 13 — Advanced Turbulence Models

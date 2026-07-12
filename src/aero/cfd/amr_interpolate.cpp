@@ -81,7 +81,6 @@ void restrict_solution(
     const std::vector<RefinementRecord>& records,
     std::vector<ConservativeState>& q_parent) {
 
-    (void)mesh_children;
     // Size: n_old = n_new - total_children + n_records
     int n_records = static_cast<int>(records.size());
     q_parent.resize(0);

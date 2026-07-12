@@ -17,6 +17,12 @@ CfdSolveSummary solve_gpu_dispatch(
     const CfdConfig& config,
     std::string* error) {
 
+    if (config.amr.enabled) {
+        if (error) *error = "GPU solver does not support AMR (use CPU solver instead)";
+        CfdSolveSummary s;
+        s.failed = true;
+        return s;
+    }
     DeviceMesh d_mesh;
     if (!d_mesh.upload_mesh(mesh, error)) {
         CfdSolveSummary s;

@@ -766,3 +766,18 @@
 - New files: amr_types.hpp, amr_refine.cpp, amr_interpolate.hpp/.cpp, amr_hanging.hpp/.cpp, amr_sensor.hpp/.cpp
 - Tests: TestCfdMesh 22/22 PASS (AMR-1 through AMR-11), TestCfdEuler 9/9 PASS (EULER-9 AMR solver loop)
 - Includes: density-jump gradient sensor amr_sensor.hpp/.cpp with compute_gradient_sensor()
+
+2026-07-12
+- Phase 12 CRITICAL audit fixes (4 parallel audits, 30 findings → 9 fixed, 21 open).
+  - PH12-C1: Coarsened parent cells now restrict-solution from children (volume-weighted avg) via CoarsenInfo output from refine_cells.
+  - PH12-C2: amr_records accumulated (append + remove stale) instead of replaced each AMR step — enables multi-level coarsening.
+  - PH12-C3: amr_interval=0 guarded to prevent div-by-zero UB.
+  - PH12-C4: refine_cells failure restores mesh.nodes to pre-loop state.
+  - PH12-C5: rebuild_mesh_faces preserves boundary classification via FaceKey map.
+  - PH12-C6: solve_gpu_dispatch returns error when amr.enabled=true (no silent no-op).
+  - PH12-C7: refine prioritized over coarsen when both requested on same cell.
+  - PH12-C8: residual_l2 reset to convergence_tol after AMR step to prevent stale convergence.
+  - PH12-L4: (void)mesh_children removed from restrict_solution (was hiding real use).
+  - Fixes: 8 files (amr_types.hpp, amr_refine.cpp, amr_interpolate.cpp, mesh_metrics.cpp,
+    cfd_solver.cpp, cfd_solver_gpu.cpp, cfd_solver.hpp, cfd_config.hpp).
+  - Verification: TestCfdMesh 22/22, TestCfdEuler 9/9 — all PASS.

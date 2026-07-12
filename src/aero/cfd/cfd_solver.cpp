@@ -504,7 +504,7 @@ CfdSolveSummary CfdSolver::solve_from_state(
         summary.residual_history.push_back(residual_l2);
         q.swap(q_next);
 
-        if (config.amr.enabled && iter > 0 && (iter % config.amr.interval) == 0) {
+        if (config.amr.enabled && iter > 0 && config.amr.interval > 0 && (iter % config.amr.interval) == 0) {
             CfdMesh mesh_old = mesh_;
             std::vector<ConservativeState> q_old = q;
 
@@ -515,11 +515,47 @@ CfdSolveSummary CfdSolver::solve_from_state(
 
             if (has_work) {
                 std::vector<RefinementRecord> new_records;
+                std::vector<CoarsenInfo> coarsen_info;
                 std::string err;
                 const std::vector<RefinementRecord>* prev = amr_records.empty() ? nullptr : &amr_records;
-                if (refine_cells(mesh_, requests, &new_records, &err, prev)) {
+                if (refine_cells(mesh_, requests, &new_records, &err, prev, &coarsen_info)) {
                     prolongate_solution(q_old, mesh_old, mesh_, new_records, q);
-                    amr_records = std::move(new_records);
+                    for (const auto& ci : coarsen_info) {
+                        Real vol_sum = 0.0f;
+                        ConservativeState avg;
+                        for (int c = 0; c < ci.n_children; ++c) {
+                            int child_id = ci.old_child_ids[c];
+                            if (child_id < 0 || child_id >= static_cast<int>(q_old.size())) continue;
+                            Real vol = mesh_old.cells[child_id].volume;
+                            vol_sum += vol;
+                            avg.rho += q_old[child_id].rho * vol;
+                            avg.rho_u += q_old[child_id].rho_u * vol;
+                            avg.rho_v += q_old[child_id].rho_v * vol;
+                            avg.rho_w += q_old[child_id].rho_w * vol;
+                            avg.rho_E += q_old[child_id].rho_E * vol;
+                            avg.rho_nu_tilde += q_old[child_id].rho_nu_tilde * vol;
+                        }
+                        if (vol_sum > 0.0f) {
+                            Real inv = 1.0f / vol_sum;
+                            avg.rho *= inv; avg.rho_u *= inv; avg.rho_v *= inv;
+                            avg.rho_w *= inv; avg.rho_E *= inv; avg.rho_nu_tilde *= inv;
+                        }
+                        q[ci.new_parent_id] = avg;
+                    }
+                    amr_records.insert(amr_records.end(), new_records.begin(), new_records.end());
+                    if (!coarsen_info.empty()) {
+                        std::vector<int> stale_parents;
+                        stale_parents.reserve(coarsen_info.size());
+                        for (const auto& ci : coarsen_info)
+                            stale_parents.push_back(ci.old_parent_id);
+                        std::sort(stale_parents.begin(), stale_parents.end());
+                        amr_records.erase(
+                            std::remove_if(amr_records.begin(), amr_records.end(),
+                                [&](const RefinementRecord& rec) {
+                                    return std::binary_search(stale_parents.begin(), stale_parents.end(), rec.parent_cell_id);
+                                }),
+                            amr_records.end());
+                    }
                     rebuild_mesh_faces(mesh_);
                     compute_mesh_metrics(mesh_);
                     int n_new = static_cast<int>(mesh_.cells.size());
@@ -535,6 +571,7 @@ CfdSolveSummary CfdSolver::solve_from_state(
                         if (bc == BoundaryKind::SlipWall || bc == BoundaryKind::NoSlipWall)
                             wall_face_indices_.push_back(fi);
                     }
+                    residual_l2 = config.convergence_tol;
                 }
             }
         }

@@ -580,7 +580,23 @@ CfdMesh generate_prism_boundary_layer_mesh(
 }
 
 void rebuild_mesh_faces(CfdMesh& mesh) {
+    std::unordered_map<FaceKey, BoundaryKind, FaceKeyHash> old_boundaries;
+    for (const auto& face : mesh.faces) {
+        if (face.boundary != BoundaryKind::Interior) {
+            FaceKey key(face.node_count, face.node[0], face.node[1], face.node[2],
+                        face.node_count == 4 ? face.node[3] : -1);
+            old_boundaries[key] = face.boundary;
+        }
+    }
     rebuild_faces(mesh);
+    for (auto& face : mesh.faces) {
+        if (face.boundary == BoundaryKind::Interior) continue;
+        FaceKey key(face.node_count, face.node[0], face.node[1], face.node[2],
+                    face.node_count == 4 ? face.node[3] : -1);
+        auto it = old_boundaries.find(key);
+        if (it != old_boundaries.end())
+            face.boundary = it->second;
+    }
 }
 
 MeshQualityReport compute_mesh_metrics(CfdMesh& mesh, bool recompute_cells) {

@@ -31,6 +31,13 @@ struct RefinementRecord {
     int parent_face_count = 0;
 };
 
+struct CoarsenInfo {
+    int new_parent_id = -1;
+    int old_parent_id = -1;
+    int old_child_ids[8] = {-1, -1, -1, -1, -1, -1, -1, -1};
+    int n_children = 0;
+};
+
 struct AmrConfig {
     bool enabled = false;
     int interval = 50;
@@ -45,7 +52,8 @@ bool refine_cells(CfdMesh& mesh,
                   const std::vector<RefinementRequest>& requests,
                   std::vector<RefinementRecord>* records_out = nullptr,
                   std::string* error = nullptr,
-                  const std::vector<RefinementRecord>* prev_records = nullptr);
+                  const std::vector<RefinementRecord>* prev_records = nullptr,
+                  std::vector<CoarsenInfo>* coarsen_info = nullptr);
 
 } // namespace cfd
 } // namespace aero

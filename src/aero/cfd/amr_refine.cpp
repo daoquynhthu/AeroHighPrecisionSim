@@ -240,7 +240,8 @@ bool refine_cells(CfdMesh& mesh,
                   const std::vector<RefinementRequest>& requests,
                   std::vector<RefinementRecord>* records_out,
                   std::string* error,
-                  const std::vector<RefinementRecord>* prev_records) {
+                  const std::vector<RefinementRecord>* prev_records,
+                  std::vector<CoarsenInfo>* coarsen_info) {
     // ----- 1. Build sets for refine and coarsen -----
     std::vector<int> to_refine, to_coarsen;
     for (const auto& req : requests) {
@@ -327,12 +328,16 @@ bool refine_cells(CfdMesh& mesh,
     // Mark cells to be removed (coarsened — absorbed into parent)
     std::vector<bool> removed(mesh.cells.size(), false);
     for (const auto& cg : coarsen_groups) {
-        for (int i = 0; i < 8; ++i) removed[cg.children[i]] = true;
+        for (int i = 0; i < 8; ++i) {
+            // Refinement takes priority over coarsening
+            if (!replaced[cg.children[i]]) removed[cg.children[i]] = true;
+        }
     }
 
+    std::size_t node_count_before = mesh.nodes.size();
     int ci_new = 0;
     for (int ci = 0; ci < static_cast<int>(mesh.cells.size()); ++ci) {
-        if (removed[ci]) continue;  // coarsened cell — skip
+        if (removed[ci]) continue;
         if (replaced[ci]) {
             const auto& cell = mesh.cells[ci];
             if (cell.type == ElementType::TET4) {
@@ -341,6 +346,7 @@ bool refine_cells(CfdMesh& mesh,
                 refine_hex8(cell, ci, old_nodes, mesh.nodes, new_cells, edge_map, records);
             } else {
                 if (error) *error = "unsupported element type for refinement";
+                mesh.nodes.resize(node_count_before);
                 return false;
             }
         } else {
@@ -358,6 +364,15 @@ bool refine_cells(CfdMesh& mesh,
         int nn = (parent.type == ElementType::TET4) ? 4 : 8;
         for (int i = 0; i < nn; ++i) parent.node[i] = cg.src_record.parent_node[i];
         new_cells.push_back(parent);
+        if (coarsen_info) {
+            CoarsenInfo ci;
+            ci.new_parent_id = static_cast<int>(new_cells.size()) - 1;
+            ci.old_parent_id = cg.src_record.parent_cell_id;
+            ci.n_children = cg.src_record.n_children;
+            for (int i = 0; i < ci.n_children && i < 8; ++i)
+                ci.old_child_ids[i] = cg.src_record.child_cell_ids[i];
+            coarsen_info->push_back(ci);
+        }
     }
 
     // ----- 5. Replace mesh -----
