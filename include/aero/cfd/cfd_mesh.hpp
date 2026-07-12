@@ -111,6 +111,7 @@ CfdMesh generate_prism_boundary_layer_mesh(
     Real first_height = 1e-5f, Real growth_ratio = 1.12f);
 
 void rebuild_mesh_faces(CfdMesh& mesh);
+void compact_mesh_nodes(CfdMesh& mesh);
 MeshQualityReport compute_mesh_metrics(CfdMesh& mesh, bool recompute_cells = true);
 
 bool validate_mesh(const CfdMesh& mesh, MeshQualityReport* report = nullptr);

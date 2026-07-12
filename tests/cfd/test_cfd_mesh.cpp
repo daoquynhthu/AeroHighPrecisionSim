@@ -936,6 +936,62 @@ static int test_amr_order2_hanging() {
     return 0;
 }
 
+static int test_compact_mesh_nodes() {
+    TEST("CFD-MESH-COV3-1 no-op when all nodes used");
+    {
+        auto mesh = generate_structured_cube_mesh(5.0f, 5);
+        compute_mesh_metrics(mesh);
+        std::size_t n_before = mesh.nodes.size();
+        compact_mesh_nodes(mesh);
+        if (mesh.nodes.size() != n_before) FAIL("nodes changed: %zu -> %zu", n_before, mesh.nodes.size());
+        PASS;
+    }
+
+    TEST("CFD-MESH-COV3-2 removes unused trailing nodes");
+    {
+        auto mesh = generate_structured_cube_mesh(5.0f, 5);
+        compute_mesh_metrics(mesh);
+        std::size_t n_orig = mesh.nodes.size();
+        mesh.nodes.push_back({100.0f, 200.0f, 300.0f});
+        compact_mesh_nodes(mesh);
+        if (mesh.nodes.size() != n_orig) FAIL("expected %zu nodes after compact, got %zu", n_orig, mesh.nodes.size());
+        PASS;
+    }
+
+    TEST("CFD-MESH-COV3-3 remaps cell node indices after compaction");
+    {
+        auto mesh = generate_structured_cube_mesh(5.0f, 5);
+        compute_mesh_metrics(mesh);
+        std::size_t n_orig = mesh.nodes.size();
+        mesh.nodes.push_back({100.0f, 200.0f, 300.0f});
+        int max_node_before = 0;
+        for (const auto& cell : mesh.cells) {
+            for (int i = 0; i < 8; ++i) {
+                if (cell.node[i] > max_node_before) max_node_before = cell.node[i];
+            }
+        }
+        compact_mesh_nodes(mesh);
+        int max_node_after = 0;
+        for (const auto& cell : mesh.cells) {
+            for (int i = 0; i < 8; ++i) {
+                if (cell.node[i] > max_node_after) max_node_after = cell.node[i];
+            }
+        }
+        if (max_node_after >= static_cast<int>(mesh.nodes.size()))
+            FAIL("node index %d out of range (n_nodes=%zu)", max_node_after, mesh.nodes.size());
+        if (mesh.nodes.size() != n_orig) FAIL("expected %zu nodes, got %zu", n_orig, mesh.nodes.size());
+        PASS;
+    }
+
+    TEST("CFD-MESH-COV3-4 empty mesh does not crash");
+    {
+        CfdMesh empty;
+        compact_mesh_nodes(empty);
+        PASS;
+    }
+    return 0;
+}
+
 int main() {
     int result = 0;
     result |= test_cube_mesh();
@@ -952,6 +1008,7 @@ int main() {
     result |= test_amr_disabled_regression();
     result |= test_amr_max_level();
     result |= test_amr_order2_hanging();
+    result |= test_compact_mesh_nodes();
     std::printf("\n%d / %d tests PASSED.\n", pass_count, test_count);
     return result == 0 && pass_count == test_count ? 0 : 1;
 }

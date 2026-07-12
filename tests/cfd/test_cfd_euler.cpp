@@ -1,4 +1,5 @@
 #include "aero/cfd/cfd_solver.hpp"
+#include "aero/cfd/cfd_residual.hpp"
 #include "aero/cfd/real.hpp"
 
 #include <cmath>
@@ -219,6 +220,45 @@ static int test_amr_solver_loop() {
     return 0;
 }
 
+static int test_euler_residual_cpu_uniform() {
+    TEST("CFD-EULER-COV1-1 uniform freestream gives zero residual");
+    {
+        auto mesh = generate_structured_cube_mesh(5.0f, 9);
+        compute_mesh_metrics(mesh);
+        for (auto& face : mesh.faces) {
+            if (face.boundary == BoundaryKind::SlipWall) face.boundary = BoundaryKind::Farfield;
+        }
+        auto freestream = make_freestream(2.0f, 0.0f, 0.0f, 1.4f);
+        auto q = std::vector<ConservativeState>(mesh.cells.size());
+        for (auto& c : q) c = primitive_to_conservative(freestream, 1.4f);
+
+        std::vector<EulerFlux> residual;
+        bool ok = compute_euler_residual_cpu(mesh, q, freestream, 1.4f, residual);
+        if (!ok) FAIL("returned false");
+
+        Real max_res = 0.0f;
+        for (const auto& r : residual) {
+            Real n = std::fabs(r.mass) + std::fabs(r.mom_x) + std::fabs(r.mom_y) + std::fabs(r.mom_z) + std::fabs(r.energy);
+            if (n > max_res) max_res = n;
+        }
+        if (max_res > 1e-6f) FAIL("max residual=%g expected ~0", max_res);
+        PASS;
+    }
+
+    TEST("CFD-EULER-COV1-2 size mismatch returns false");
+    {
+        auto mesh = generate_structured_cube_mesh(5.0f, 5);
+        compute_mesh_metrics(mesh);
+        auto freestream = make_freestream(2.0f, 0.0f, 0.0f, 1.4f);
+        std::vector<ConservativeState> q; // empty
+        std::vector<EulerFlux> residual;
+        bool ok = compute_euler_residual_cpu(mesh, q, freestream, 1.4f, residual);
+        if (ok) FAIL("expected false for size mismatch");
+        PASS;
+    }
+    return 0;
+}
+
 int main() {
     int result = 0;
     result |= test_state_roundtrip();
@@ -227,6 +267,7 @@ int main() {
     result |= test_farfield_boundary();
     result |= test_wall_forces();
     result |= test_amr_solver_loop();
+    result |= test_euler_residual_cpu_uniform();
     std::printf("\n%d / %d tests PASSED.\n", pass_count, test_count);
     return result == 0 && pass_count == test_count ? 0 : 1;
 }

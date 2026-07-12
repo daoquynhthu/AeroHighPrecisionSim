@@ -16,28 +16,6 @@ namespace aerosp {
 namespace aero {
 namespace cfd {
 
-namespace {
-
-ConservativeState add_scaled(ConservativeState q, EulerFlux f, Real scale) {
-    q.rho += scale * f.mass;
-    q.rho_u += scale * f.mom_x;
-    q.rho_v += scale * f.mom_y;
-    q.rho_w += scale * f.mom_z;
-    q.rho_E += scale * f.energy;
-    q.rho_nu_tilde += scale * f.turbulence;
-    return q;
-}
-
-Real state_delta_l2(const ConservativeState& a, const ConservativeState& b) {
-    Real d0 = a.rho - b.rho;
-    Real d1 = a.rho_u - b.rho_u;
-    Real d2 = a.rho_v - b.rho_v;
-    Real d3 = a.rho_w - b.rho_w;
-    Real d4 = a.rho_E - b.rho_E;
-    Real d5 = a.rho_nu_tilde - b.rho_nu_tilde;
-    return d0*d0 + d1*d1 + d2*d2 + d3*d3 + d4*d4 + d5*d5;
-}
-
 void compact_mesh_nodes(CfdMesh& mesh) {
     int n_cells = static_cast<int>(mesh.cells.size());
     int n_faces = static_cast<int>(mesh.faces.size());
@@ -69,6 +47,28 @@ void compact_mesh_nodes(CfdMesh& mesh) {
             if (face.node[i] >= 0) face.node[i] = old_to_new[face.node[i]];
     }
     mesh.nodes.swap(compact);
+}
+
+namespace {
+
+ConservativeState add_scaled(ConservativeState q, EulerFlux f, Real scale) {
+    q.rho += scale * f.mass;
+    q.rho_u += scale * f.mom_x;
+    q.rho_v += scale * f.mom_y;
+    q.rho_w += scale * f.mom_z;
+    q.rho_E += scale * f.energy;
+    q.rho_nu_tilde += scale * f.turbulence;
+    return q;
+}
+
+Real state_delta_l2(const ConservativeState& a, const ConservativeState& b) {
+    Real d0 = a.rho - b.rho;
+    Real d1 = a.rho_u - b.rho_u;
+    Real d2 = a.rho_v - b.rho_v;
+    Real d3 = a.rho_w - b.rho_w;
+    Real d4 = a.rho_E - b.rho_E;
+    Real d5 = a.rho_nu_tilde - b.rho_nu_tilde;
+    return d0*d0 + d1*d1 + d2*d2 + d3*d3 + d4*d4 + d5*d5;
 }
 
 void integrate_wall_forces(const CfdMesh& mesh, const std::vector<int>& wall_face_indices,

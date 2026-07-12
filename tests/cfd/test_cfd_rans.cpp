@@ -1,4 +1,5 @@
 #include "aero/cfd/rans.hpp"
+#include "aero/cfd/cfd_mesh.hpp"
 #include "aero/cfd/real.hpp"
 
 #include <cmath>
@@ -204,12 +205,50 @@ static int test_rans_neg_destruction_sign() {
     return 0;
 }
 
+static int test_rans_sources_mesh() {
+    TEST("CFD-RANS-COV2-1 compute_rans_sources output size matches n_cells");
+    {
+        auto mesh = generate_structured_cube_mesh(5.0f, 9);
+        compute_mesh_metrics(mesh);
+        auto freestream = make_freestream(2.0f, 0.0f, 0.0f, 1.4f);
+        auto q = std::vector<ConservativeState>(mesh.cells.size());
+        for (auto& c : q) c = primitive_to_conservative(freestream, 1.4f);
+        auto gradients = std::vector<PrimitiveGradient>(mesh.cells.size());
+
+        auto sources = compute_rans_sources(mesh, q, gradients, 1.4f, 1e6f);
+        if (sources.size() != mesh.cells.size())
+            FAIL("sources.size=%zu cells=%zu", sources.size(), mesh.cells.size());
+        PASS;
+    }
+
+    TEST("CFD-RANS-COV2-2 uniform state gives finite source terms");
+    {
+        auto mesh = generate_structured_cube_mesh(5.0f, 9);
+        compute_mesh_metrics(mesh);
+        auto freestream = make_freestream(2.0f, 0.0f, 0.0f, 1.4f);
+        auto q = std::vector<ConservativeState>(mesh.cells.size());
+        for (auto& c : q) c = primitive_to_conservative(freestream, 1.4f);
+        auto gradients = std::vector<PrimitiveGradient>(mesh.cells.size());
+
+        auto sources = compute_rans_sources(mesh, q, gradients, 1.4f, 1e6f);
+        for (std::size_t i = 0; i < sources.size(); ++i) {
+            if (!std::isfinite(sources[i].total_source))
+                FAIL("cell %zu total_source=%g not finite", i, sources[i].total_source);
+            if (!std::isfinite(sources[i].production))
+                FAIL("cell %zu production=%g not finite", i, sources[i].production);
+        }
+        PASS;
+    }
+    return 0;
+}
+
 int main() {
     int result = 0;
     result |= test_sa_vorticity();
     result |= test_rans_source_positive_chi();
     result |= test_rans_source_negative_chi();
     result |= test_rans_neg_destruction_sign();
+    result |= test_rans_sources_mesh();
     std::printf("\n%d / %d tests PASSED.\n", pass_count, test_count);
     return result == 0 && pass_count == test_count ? 0 : 1;
 }
