@@ -2,6 +2,7 @@
 
 #include "aero/cfd/cfd_mesh.hpp"
 #include "aero/cfd/cfd_state.hpp"
+#include "aero/cfd/reconstruction.hpp"
 #include "aero/cfd/real_fwd.hpp"
 
 #include <vector>
@@ -43,6 +44,30 @@ void apply_hanging_interpolation(
     const std::vector<CellGradient3>& grad_rho_nu,
     std::vector<ConservativeState>& q_face_left,
     std::vector<ConservativeState>& q_face_right);
+
+// Primitive-space hanging face flux correction.
+// Reconstructs the coarse-side state at each hanging face center using
+// primitive gradients (positive-preserving by limiter design), then
+// computes the HLLC flux and adjusts the residual.
+//
+// For each hanging face:
+//   1. QL_old = reconstruct_primitive(w[coarse], grad[coarse], dr_coarse)
+//      QR_old = reconstruct_primitive(w[fine], grad[fine], dr_fine)
+//   2. QL_new = reconstruct_primitive_positive(w[coarse], grad[coarse], dr_coarse, ...)
+//   3. flux_old = hllc(QL_old, QR_old)
+//   4. flux_new = hllc(QL_new, QR_old)   (only coarse side changes)
+//   5. residual += (flux_old - flux_new) * area
+//
+// The residual adjustment accounts for the fact that the main residual
+// kernel already added flux_old. This function replaces it with flux_new.
+void apply_hanging_flux_correction_primitive(
+    const CfdMesh& mesh,
+    const std::vector<HangingFaceInfo>& hanging_faces,
+    const std::vector<ConservativeState>& q,
+    const std::vector<PrimitiveState>& w,
+    const std::vector<PrimitiveGradient>& grads,
+    Real gamma,
+    std::vector<EulerFlux>& residual);
 
 } // namespace cfd
 } // namespace aero

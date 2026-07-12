@@ -8,6 +8,7 @@
 #include "aero/cfd/amr_interpolate.hpp"
 #include "aero/cfd/amr_hanging.hpp"
 #include "aero/cfd/cfd_state.hpp"
+#include "aero/cfd/cfd_solver.hpp"
 #include "aero/cfd/real.hpp"
 
 #include <cmath>
@@ -379,6 +380,7 @@ static int test_tet4_refinement() {
         // (each original tet face becomes 4 smaller faces)
         auto rep2 = compute_mesh_metrics(mesh);
         if (rep2.min_volume <= 0.0f) FAIL("min volume after refine=%g", rep2.min_volume);
+        if (rep2.negative_jacobian_count != 0) FAIL("negative_jacobian_count=%d after refine", rep2.negative_jacobian_count);
         PASS;
     }
 
@@ -465,45 +467,6 @@ static int test_hanging_faces() {
         PASS;
     }
 
-    TEST("CFD-AMR-11 tet refine-coarsen roundtrip: 1->8->1, cells and volume conserved");
-    {
-        CfdMesh mesh;
-        mesh.nodes.resize(4);
-        mesh.nodes[0] = {0.0f, 0.0f, 0.0f};
-        mesh.nodes[1] = {1.0f, 0.0f, 0.0f};
-        mesh.nodes[2] = {0.0f, 1.0f, 0.0f};
-        mesh.nodes[3] = {0.0f, 0.0f, 1.0f};
-
-        CfdCell cell;
-        cell.type = ElementType::TET4;
-        cell.node[0] = 0; cell.node[1] = 1; cell.node[2] = 2; cell.node[3] = 3;
-        mesh.cells.push_back(cell);
-        rebuild_mesh_faces(mesh);
-        compute_mesh_metrics(mesh);
-        Real vol_orig = mesh.cells[0].volume;
-
-        // Refine
-        std::vector<RefinementRequest> refine_req = {{0, RefinementFlag::Refine}};
-        std::vector<RefinementRecord> recs;
-        std::string err;
-        if (!refine_cells(mesh, refine_req, &recs, &err)) FAIL("refine failed: %s", err.c_str());
-        if (mesh.cells.size() != 8u) FAIL("expected 8 after refine, got %zu", mesh.cells.size());
-
-        // Coarsen using records from refine step
-        std::vector<RefinementRequest> coarsen_req;
-        for (int ci = 0; ci < static_cast<int>(mesh.cells.size()); ++ci)
-            coarsen_req.push_back({ci, RefinementFlag::Coarsen});
-        std::vector<RefinementRecord> recs2;
-        if (!refine_cells(mesh, coarsen_req, &recs2, &err, &recs)) FAIL("coarsen failed: %s", err.c_str());
-        if (mesh.cells.size() != 1u) FAIL("expected 1 after coarsen, got %zu", mesh.cells.size());
-
-        compute_mesh_metrics(mesh);
-        Real vol_final = mesh.cells[0].volume;
-        Real rel_err = std::fabs(vol_final - vol_orig) / vol_orig;
-        if (rel_err > 1e-6f) FAIL("volume mismatch: orig=%g final=%g rel_err=%g", vol_orig, vol_final, rel_err);
-        PASS;
-    }
-
     TEST("CFD-AMR-10 hanging face interpolation with non-zero gradient");
     {
         CfdMesh mesh;
@@ -563,6 +526,45 @@ static int test_hanging_faces() {
                 break;
             }
         }
+        PASS;
+    }
+
+    TEST("CFD-AMR-11 tet refine-coarsen roundtrip: 1->8->1, cells and volume conserved");
+    {
+        CfdMesh mesh;
+        mesh.nodes.resize(4);
+        mesh.nodes[0] = {0.0f, 0.0f, 0.0f};
+        mesh.nodes[1] = {1.0f, 0.0f, 0.0f};
+        mesh.nodes[2] = {0.0f, 1.0f, 0.0f};
+        mesh.nodes[3] = {0.0f, 0.0f, 1.0f};
+
+        CfdCell cell;
+        cell.type = ElementType::TET4;
+        cell.node[0] = 0; cell.node[1] = 1; cell.node[2] = 2; cell.node[3] = 3;
+        mesh.cells.push_back(cell);
+        rebuild_mesh_faces(mesh);
+        compute_mesh_metrics(mesh);
+        Real vol_orig = mesh.cells[0].volume;
+
+        // Refine
+        std::vector<RefinementRequest> refine_req = {{0, RefinementFlag::Refine}};
+        std::vector<RefinementRecord> recs;
+        std::string err;
+        if (!refine_cells(mesh, refine_req, &recs, &err)) FAIL("refine failed: %s", err.c_str());
+        if (mesh.cells.size() != 8u) FAIL("expected 8 after refine, got %zu", mesh.cells.size());
+
+        // Coarsen using records from refine step
+        std::vector<RefinementRequest> coarsen_req;
+        for (int ci = 0; ci < static_cast<int>(mesh.cells.size()); ++ci)
+            coarsen_req.push_back({ci, RefinementFlag::Coarsen});
+        std::vector<RefinementRecord> recs2;
+        if (!refine_cells(mesh, coarsen_req, &recs2, &err, &recs)) FAIL("coarsen failed: %s", err.c_str());
+        if (mesh.cells.size() != 1u) FAIL("expected 1 after coarsen, got %zu", mesh.cells.size());
+
+        compute_mesh_metrics(mesh);
+        Real vol_final = mesh.cells[0].volume;
+        Real rel_err = std::fabs(vol_final - vol_orig) / vol_orig;
+        if (rel_err > 1e-6f) FAIL("volume mismatch: orig=%g final=%g rel_err=%g", vol_orig, vol_final, rel_err);
         PASS;
     }
 
@@ -664,6 +666,60 @@ static int test_solution_interpolation() {
     return 0;
 }
 
+static int test_amr_disabled_regression() {
+    TEST("CFD-AMR-12 solver converges with AMR disabled");
+    {
+        CfdMesh mesh = generate_structured_cube_mesh(5.0f, 7);
+        compute_mesh_metrics(mesh);
+
+        CfdSolver solver;
+        if (!solver.load_mesh(mesh)) FAIL("load_mesh failed");
+
+        CfdConfig cfg;
+        cfg.max_iter = 50;
+        cfg.cfl = 0.1f;
+        cfg.convergence_tol = 1e-10f;
+        cfg.amr.enabled = false;
+
+        auto summary = solver.solve({2.0f, 0.0f, 0.0f}, cfg);
+        if (summary.failed) FAIL("solver failed: %s",
+            summary.diagnostics.failure.reason.c_str());
+        if (summary.residual_history.empty()) FAIL("no residual history");
+        PASS;
+    }
+    return 0;
+}
+
+static int test_amr_max_level() {
+    TEST("CFD-AMR-13 max_level=1 enforcement limits refinement depth");
+    {
+        CfdMesh mesh = generate_structured_cube_mesh(5.0f, 7);
+        compute_mesh_metrics(mesh);
+
+        CfdSolver solver;
+        if (!solver.load_mesh(mesh)) FAIL("load_mesh failed");
+
+        CfdConfig cfg;
+        cfg.max_iter = 11;
+        cfg.cfl = 0.1f;
+        cfg.convergence_tol = 1e-12f;
+        cfg.amr.enabled = true;
+        cfg.amr.interval = 10;
+        cfg.amr.max_level = 1;
+        cfg.amr.refine_tol = 0.0f;
+
+        auto summary = solver.solve({2.0f, 0.0f, 0.0f}, cfg);
+        if (summary.failed) FAIL("solver failed");
+
+        const CfdMesh& m = solver.mesh();
+        for (int i = 0; i < static_cast<int>(m.cells.size()); ++i) {
+            if (m.cells[i].refinement_level > 1) FAIL("cell %d has refinement_level=%d > 1", i, m.cells[i].refinement_level);
+        }
+        PASS;
+    }
+    return 0;
+}
+
 int main() {
     int result = 0;
     result |= test_cube_mesh();
@@ -677,6 +733,8 @@ int main() {
     result |= test_gradient_sensor();
     result |= test_solution_interpolation();
     result |= test_hanging_faces();
+    result |= test_amr_disabled_regression();
+    result |= test_amr_max_level();
     std::printf("\n%d / %d tests PASSED.\n", pass_count, test_count);
     return result == 0 && pass_count == test_count ? 0 : 1;
 }

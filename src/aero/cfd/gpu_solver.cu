@@ -15,6 +15,9 @@
 #include "aero/cfd/lusgs.hpp"
 #include "aero/cfd/partition.hpp"
 #include "aero/cfd/diagnostics.hpp"
+#include "aero/cfd/amr_types.hpp"
+#include "aero/cfd/amr_sensor.hpp"
+#include "aero/cfd/amr_interpolate.hpp"
 #include <cfloat>
 #include <cmath>
 #include <limits>

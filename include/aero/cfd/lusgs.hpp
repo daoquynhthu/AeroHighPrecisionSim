@@ -19,6 +19,10 @@ public:
     bool allocate(DeviceMesh& mesh, std::string* error = nullptr);
     void release();
 
+    // Rebuild cell coloring after mesh change (AMR).
+    // Call after uploading new mesh to device, before compute_diagonal.
+    bool rebuild_coloring(DeviceMesh& mesh, std::string* error = nullptr);
+
     bool compute_diagonal(DeviceMesh& mesh, const Real* d_dt_cell,
         Real gamma, bool viscous, const Real* d_mu, Real Re,
         std::string* error = nullptr);

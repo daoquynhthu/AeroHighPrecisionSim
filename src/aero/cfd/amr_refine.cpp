@@ -14,6 +14,8 @@ namespace cfd {
 
 namespace {
 
+constexpr int MAX_CHILDREN = 8;
+
 struct Vec3 {
     Real x, y, z;
 };
@@ -80,7 +82,7 @@ void refine_tet4(const CfdCell& parent, int parent_id,
     int m23 = get_or_create_midpoint(n2, n3, old_nodes, new_nodes, edge_map);
 
     // 8 child tets
-    TetLocal children[8] = {
+    TetLocal children[MAX_CHILDREN] = {
         {n0, m01, m02, m03},
         {n1, m01, m13, m12},
         {n2, m02, m12, m23},
@@ -99,7 +101,7 @@ void refine_tet4(const CfdCell& parent, int parent_id,
     rec.parent_face_count = 4;
     for (int i = 0; i < 4; ++i) rec.parent_node[i] = parent.node[i];
 
-    for (int i = 0; i < 8; ++i) {
+    for (int i = 0; i < MAX_CHILDREN; ++i) {
         CfdCell child;
         child.type = ElementType::TET4;
         child.node[0] = children[i].n[0];
@@ -112,7 +114,7 @@ void refine_tet4(const CfdCell& parent, int parent_id,
         new_cells.push_back(child);
         rec.child_cell_ids[i] = child_id;
     }
-    rec.n_children = 8;
+    rec.n_children = MAX_CHILDREN;
     records.push_back(rec);
 }
 
@@ -230,7 +232,7 @@ void refine_hex8(const CfdCell& parent, int parent_id,
             }
         }
     }
-    rec.n_children = 8;
+    rec.n_children = MAX_CHILDREN;
     records.push_back(rec);
 }
 
@@ -267,12 +269,13 @@ bool refine_cells(CfdMesh& mesh,
     // ----- 2. Prepare coarsening groups (children of same parent) -----
     struct CoarsenGroup {
         int parent_id;
-        int children[8];
+        int children[MAX_CHILDREN];
         int n_found = 0;
         RefinementRecord src_record;  // from prev_records
         bool valid = false;
     };
     std::vector<CoarsenGroup> coarsen_groups;
+    int skipped_coarsen_groups = 0;
     if (!to_coarsen.empty()) {
         // Group cells marked for coarsening by parent_id
         std::unordered_map<int, std::vector<int>> parent_groups;
@@ -285,11 +288,14 @@ bool refine_cells(CfdMesh& mesh,
             parent_groups[pid].push_back(ci);
         }
 
-        // Build CoarsenGroup from each complete set of 8 siblings
+        // Build CoarsenGroup from each complete set of MAX_CHILDREN siblings
         for (const auto& pg : parent_groups) {
             int pid = pg.first;
             const auto& children = pg.second;
-            if (static_cast<int>(children.size()) < 8) continue;  // incomplete group — skip
+            if (static_cast<int>(children.size()) < MAX_CHILDREN) {
+                ++skipped_coarsen_groups;
+                continue;
+            }
 
             CoarsenGroup cg;
             cg.parent_id = pid;
@@ -306,14 +312,14 @@ bool refine_cells(CfdMesh& mesh,
                 }
             }
             if (!found_record) continue;  // can't reconstruct parent without record
-            if (cg.src_record.n_children != 8) continue;
+            if (cg.src_record.n_children != MAX_CHILDREN) continue;
 
-            // Mark the 8 children
+            // Mark the MAX_CHILDREN children
             for (int ci : children) {
-                if (cg.n_found >= 8) break;
+                if (cg.n_found >= MAX_CHILDREN) break;
                 cg.children[cg.n_found++] = ci;
             }
-            cg.valid = (cg.n_found == 8);
+            cg.valid = (cg.n_found == MAX_CHILDREN);
             if (cg.valid) coarsen_groups.push_back(cg);
         }
     }
@@ -331,7 +337,7 @@ bool refine_cells(CfdMesh& mesh,
     // Mark cells to be removed (coarsened — absorbed into parent)
     std::vector<bool> removed(mesh.cells.size(), false);
     for (const auto& cg : coarsen_groups) {
-        for (int i = 0; i < 8; ++i) {
+        for (int i = 0; i < MAX_CHILDREN; ++i) {
             // Refinement takes priority over coarsening
             if (!replaced[cg.children[i]]) removed[cg.children[i]] = true;
         }
@@ -370,7 +376,7 @@ bool refine_cells(CfdMesh& mesh,
             ci.new_parent_id = static_cast<int>(new_cells.size()) - 1;
             ci.old_parent_id = cg.src_record.parent_cell_id;
             ci.n_children = cg.src_record.n_children;
-            for (int i = 0; i < ci.n_children && i < 8; ++i)
+            for (int i = 0; i < ci.n_children && i < MAX_CHILDREN; ++i)
                 ci.old_child_ids[i] = cg.src_record.child_cell_ids[i];
             coarsen_info->push_back(ci);
         }
@@ -381,6 +387,8 @@ bool refine_cells(CfdMesh& mesh,
     rebuild_mesh_faces(mesh);
 
     if (records_out) *records_out = std::move(records);
+    if (error && skipped_coarsen_groups > 0)
+        *error += " (" + std::to_string(skipped_coarsen_groups) + " coarsening groups skipped: incomplete sibling sets)";
     return true;
 }
 

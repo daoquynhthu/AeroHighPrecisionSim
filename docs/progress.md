@@ -783,6 +783,28 @@
   - Verification: TestCfdMesh 22/22, TestCfdEuler 9/9 — all PASS.
 
 2026-07-12
+- Phase 12 audit test/doc fixes (PH12-I3 through I8).
+  - PH12-I3: CFD-AMR-1 now checks rep2.negative_jacobian_count == 0 after refine.
+  - PH12-I4: Added CFD-AMR-12 (amr=false regression test).
+  - PH12-I5: Added CFD-AMR-13 (max_level=1 enforcement test).
+  - PH12-I6: Reordered test_hanging_faces so AMR-10 runs before AMR-11.
+  - PH12-I7: EULER-9 now validates solver.mesh() via compute_mesh_metrics (min_volume, negative_jacobian_count).
+  - ISSUES.md: Marked I1-I7 as [RESOLVED], updated I8 with PH12-M4 mitigation, updated summary table.
+  - Files changed: test_cfd_mesh.cpp, test_cfd_euler.cpp, ISSUES.md, progress.md.
+  - Verification: TestCfdMesh 24/24, TestCfdEuler 9/9 — all PASS.
+
+2026-07-12
+- Phase 12 audit test/doc fixes (PH12-I3 through I8).
+  - PH12-I3: CFD-AMR-1 now checks `rep2.negative_jacobian_count == 0` after refine.
+  - PH12-I4: Added CFD-AMR-12 (amr=false regression test).
+  - PH12-I5: Added CFD-AMR-13 (max_level=1 enforcement test).
+  - PH12-I6: Reordered test_hanging_faces so AMR-10 runs before AMR-11.
+  - PH12-I7: EULER-9 now validates solver.mesh() via compute_mesh_metrics (min_volume, negative_jacobian_count).
+  - ISSUES.md: Marked I1-I7 as [RESOLVED], updated I8 with PH12-M4 mitigation, updated summary table.
+  - Files changed: test_cfd_mesh.cpp, test_cfd_euler.cpp, ISSUES.md, progress.md.
+  - Verification: TestCfdMesh 24/24, TestCfdEuler 9/9 — all PASS.
+
+2026-07-12
 - Phase 12 MEDIUM+LOW audit fixes (10 findings → 10 fixed, total 30→19/30 fixed).
   - MEDIUM:
     - PH12-M2: refine_cells int max_level param, solver passes config.amr.max_level.
@@ -811,3 +833,29 @@
   - PH12-H5: 2:1 balance enforced before coarsening — coarsening requests with a face neighbor at a higher non-coarsening level are demoted to Unchanged.
   - Files changed: cfd_solver.cpp (+180 loops/logic), ISSUES.md (summary updated).
   - Verification: TestCfdMesh 22/22, TestCfdEuler 9/9 — all PASS.
+
+2026-07-12
+- Phase 12 remaining code fixes (M1, M3, M6, M7, L6) + test/doc updates (I3-I7) completed via parallel subagents.
+  - PH12-M1: pressure/velocity-magnitude sensors added to amr_sensor.cpp + gamma parameter
+  - PH12-M3: skipped coarsening group counter in amr_refine.cpp
+  - PH12-M6: q_next.assign/residual.assign back to resize in cfd_solver.cpp (avoid dead zero-init)
+  - PH12-M7: n_coarsened_parents parameter to build_old_to_new_map
+  - PH12-L6: constexpr int MAX_CHILDREN = 8 in amr_refine.cpp
+  - PH12-I3: negative_jacobian_count check in CFD-AMR-1
+  - PH12-I4: CFD-AMR-12 regression test (amr=false)
+  - PH12-I5: CFD-AMR-13 test (max_level=1 enforcement)
+  - PH12-I6: AMR-10/AMR-11 reordered
+  - PH12-I7: EULER-9 validates post-AMR mesh
+  - Verification: TestCfdMesh 24/24, TestCfdEuler 9/9 — all PASS.
+
+2026-07-12
+- Three plan-wide limitations addressed (PLAN.md updated + code changes):
+  A) Phase 9-B: Conformal volume mesh generation from STL surface — header + plan defined
+  B) Phase 12.6: AMR + implicit solver integration — rebuild_coloring() added to LUSGS, solve_gpu_dispatch routes explicit+AMR through CPU solver, infrastructure for implicit+AMR in place (rebuild_coloring, JFV realloc stubs)
+  C) Phase 12.5: 2nd-order prolongation + primitive-space hanging face reconstruction:
+    - prolongate_solution_order2() added to amr_interpolate (gradient-based child state reconstruction)
+    - apply_hanging_flux_correction_primitive() replaces the old conservative-space hanging correction in amr_hanging
+    - Old 90-line hanging correction block in cfd_solver.cpp replaced with clean 8-line call
+    - Both use reconstruct_primitive_positive (positive-preserving fallback)
+  - Files changed: PLAN.md (3 new sections), amr_interpolate.hpp/cpp, amr_hanging.hpp/cpp, cfd_solver.cpp, cfd_solver_gpu.cpp, lusgs.hpp, lusgs_gpu.cu, gpu_solver.cu, mesh_gen_stl.hpp (NEW)
+  - Verification: TestCfdMesh 24/24, TestCfdEuler 9/9, TestCfdReconstruction 17/17, TestCfdState 35/35, TestCfdViscous 12/12, TestCfdRans 13/13, TestCfdDiagnostics 5/5, MmsTest 15/15 — all PASS. GPU solver test (TestCfdGpu) also builds clean.

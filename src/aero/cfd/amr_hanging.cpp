@@ -2,6 +2,7 @@
 #include "aero/cfd/cfd_mesh.hpp"
 #include "aero/cfd/cfd_state.hpp"
 #include "aero/cfd/amr_hanging.hpp"
+#include "aero/cfd/reconstruction.hpp"
 
 #include <vector>
 
@@ -80,6 +81,61 @@ void apply_hanging_interpolation(
         } else {
             q_face_right[hf.face_id] = q_interp;
         }
+    }
+}
+
+void apply_hanging_flux_correction_primitive(
+    const CfdMesh& mesh,
+    const std::vector<HangingFaceInfo>& hanging_faces,
+    const std::vector<ConservativeState>& q,
+    const std::vector<PrimitiveState>& w,
+    const std::vector<PrimitiveGradient>& grads,
+    Real gamma,
+    std::vector<EulerFlux>& residual) {
+
+    for (const auto& hf : hanging_faces) {
+        const CfdFace& face = mesh.faces[hf.face_id];
+        int coarse_id = hf.coarse_cell_id;
+        int fine_id = hf.fine_cell_id;
+        const CfdCell& coarse_cell = mesh.cells[coarse_id];
+        const CfdCell& fine_cell = mesh.cells[fine_id];
+
+        Real dx_c = face.cx - coarse_cell.cx;
+        Real dy_c = face.cy - coarse_cell.cy;
+        Real dz_c = face.cz - coarse_cell.cz;
+        Real dx_f = face.cx - fine_cell.cx;
+        Real dy_f = face.cy - fine_cell.cy;
+        Real dz_f = face.cz - fine_cell.cz;
+
+        // Old flux (what the main residual already used):
+        // Reconstruct both sides from cell centers (primitive space)
+        PrimitiveState wl = reconstruct_primitive(w[coarse_id], grads[coarse_id], dx_c, dy_c, dz_c);
+        PrimitiveState wr = reconstruct_primitive(w[fine_id], grads[fine_id], dx_f, dy_f, dz_f);
+        if (wl.rho <= 0.0f || wl.p <= 0.0f) continue;
+        if (wr.rho <= 0.0f || wr.p <= 0.0f) continue;
+        EulerFlux flux_old = hllc_flux(wl, wr, gamma, face.nx, face.ny, face.nz);
+
+        // New flux: reconstruct coarse side with positive-preserving limiter
+        Real theta = 1.0f;
+        wl = reconstruct_primitive_positive(w[coarse_id], grads[coarse_id], dx_c, dy_c, dz_c,
+            static_cast<Real>(1e-8f), static_cast<Real>(1e-10f), &theta);
+        if (wl.rho <= 0.0f || wl.p <= 0.0f) continue;
+        EulerFlux flux_new = hllc_flux(wl, wr, gamma, face.nx, face.ny, face.nz);
+
+        // Adjust residual: replace flux_old with flux_new
+        Real area = face.area;
+        residual[face.left_cell].mass   += (flux_old.mass   - flux_new.mass)   * area;
+        residual[face.left_cell].mom_x  += (flux_old.mom_x  - flux_new.mom_x)  * area;
+        residual[face.left_cell].mom_y  += (flux_old.mom_y  - flux_new.mom_y)  * area;
+        residual[face.left_cell].mom_z  += (flux_old.mom_z  - flux_new.mom_z)  * area;
+        residual[face.left_cell].energy += (flux_old.energy - flux_new.energy) * area;
+        residual[face.left_cell].turbulence += (flux_old.turbulence - flux_new.turbulence) * area;
+        residual[face.right_cell].mass   -= (flux_old.mass   - flux_new.mass)   * area;
+        residual[face.right_cell].mom_x  -= (flux_old.mom_x  - flux_new.mom_x)  * area;
+        residual[face.right_cell].mom_y  -= (flux_old.mom_y  - flux_new.mom_y)  * area;
+        residual[face.right_cell].mom_z  -= (flux_old.mom_z  - flux_new.mom_z)  * area;
+        residual[face.right_cell].energy -= (flux_old.energy - flux_new.energy) * area;
+        residual[face.right_cell].turbulence -= (flux_old.turbulence - flux_new.turbulence) * area;
     }
 }
 

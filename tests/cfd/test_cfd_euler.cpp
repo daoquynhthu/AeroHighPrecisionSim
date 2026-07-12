@@ -209,6 +209,11 @@ static int test_amr_solver_loop() {
         std::printf("  (before=%d after=%d res=%.2e)\n", cells_before, cells_after,
             summary.residual_history.empty() ? -1.0 : summary.residual_history.back());
         if (cells_after <= cells_before) FAIL("AMR did not refine");
+
+        CfdMesh mesh_after = solver.mesh();
+        auto qr = compute_mesh_metrics(mesh_after);
+        if (qr.min_volume <= 0.0f) FAIL("min volume after AMR=%g", qr.min_volume);
+        if (qr.negative_jacobian_count != 0) FAIL("negative_jacobian_count=%d after AMR", qr.negative_jacobian_count);
         PASS;
     }
     return 0;

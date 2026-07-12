@@ -782,6 +782,110 @@ Gate:
 
 ---
 
+## Phase 9-B — Conformal Volume Mesh Generation from STL Surface
+
+Goal: replace the structured-cube-embedding hack in `generate_aero_table` with a body-fitted volume mesh generated directly from the STL surface. Enable production-grade CFD on arbitrary geometries without external mesh tools.
+
+> **Status**: Not started. Phase 0-9 mesh generators (cube, flat plate, hex, prism BL) remain for unit-testing. `generate_aero_table` still uses cube embedding — this phase eliminates that limitation.
+
+### 9-B.1 STL surface parsing & signed-distance field
+
+Files:
+
+| File | Action | Content |
+|------|--------|---------|
+| `include/aero/cfd/mesh_gen_stl.hpp` | NEW | `bool generate_conformal_mesh(const std::string& stl_path, CfdMesh& mesh, const StlMeshConfig& cfg, std::string* err)` |
+| `src/aero/cfd/mesh_gen_stl.cpp` | NEW | Full pipeline: parse STL → SDF → background grid → surface extraction → tet fill → boundary tags |
+
+Tasks:
+
+- [ ] Reuse `AeroSolver::parse_stl` (move to shared utility) or reimplement STL reader in mesh_gen_stl.cpp
+- [ ] Build triangle BVH (bounding volume hierarchy) for fast ray-intersection queries
+- [ ] Compute signed-distance field on a uniform background grid using fast sweeping method (triangle-projection + sign by ray-casting)
+- [ ] BVH enables O(log N) ray-intersection for inside/outside test; fallback: linear scan for small meshes (< 10K triangles)
+
+### 9-B.2 Background grid & hex-cull for arbitrary geometry
+
+Extend the hex-cull approach (currently hard-coded for a unit cube) to arbitrary STL geometry:
+
+1. Compute STL bounding box → inflate by `outer_scale` → create hex background grid
+2. For each hex cell center: ray-cast in random direction, count intersections with STL → inside if odd, outside if even
+3. Mark cells: INSIDE (remove), OUTSIDE (keep), BOUNDARY (SDF=0 crossing)
+4. For BOUNDARY cells: marching tetrahedra decomposition of the hex → clip at SDF=0 iso-surface → keep the OUTSIDE portion
+5. Snap new surface vertices to the STL triangle plane (closest-point projection)
+
+Files:
+
+| File | Action | Content |
+|------|--------|---------|
+| `src/aero/cfd/mesh_gen_stl.cpp` | (cont.) | `compute_sdf_on_grid()`, `classify_cells_by_sdf()`, `march_cut_hex_to_tets()` |
+| `src/aero/cfd/mesh_metrics.cpp` | MODIFY | Add `assign_boundary_from_sdf()` — tag wall faces from SDF=0, farfield faces from outer box |
+
+### 9-B.3 Face reconstruction & boundary assignment
+
+- Wall faces: extracted from SDF=0 iso-surface triangles (one set per cut hex face, merged across shared edges)
+- Farfield faces: outer box boundary faces (inherited from background grid)
+- `rebuild_mesh_faces()` called on the extracted cell set to reconstruct full face adjacency
+- `validate_mesh()` after generation MUST pass without errors
+
+Tasks:
+
+- [ ] Iso-surface extraction from SDF: for each hex edge crossing SDF=0, interpolate vertex to zero → generate triangles
+- [ ] Deduplicate surface vertices within tolerance (1e-8 * bounding_box_diagonal)
+- [ ] Assign boundary kind: SDF=0 face → NoSlipWall, outer box face → Farfield
+- [ ] `rebuild_mesh_faces()` on the combined volume (cells from background grid + cut cells)
+- [ ] `compute_mesh_metrics()` + `validate_mesh()` → pass with zero negative Jacobians
+
+### 9-B.4 Prism boundary-layer extrusion (optional, viscous)
+
+For viscous/RANS use, extrude prism layers from the STL surface inward (growing from wall toward interior):
+
+1. For each wall-adjacent tet, identify the wall-facing triangle
+2. Extrude a prism (PENTA6) along the wall-normal direction with specified first-layer height and growth ratio
+3. Remaining interior volume re-tethedralized (tet fill of the region between prism top and farfield)
+
+Tasks:
+
+- [ ] Wall-normal computation from STL vertex normals (averaged from incident triangle normals)
+- [ ] Prism layer generation: advance each wall vertex along its normal → form PENTA6 cells
+- [ ] Quality check: min prism orthogonality > 30 degrees, min volume > 0
+- [ ] Fallback: if prism quality fails, use all-tet mesh (no boundary layer)
+
+### 9-B.5 Integration with aero_table generation
+
+Files:
+
+| File | Action | Content |
+|------|--------|---------|
+| `src/aero/panel/aero_table_gen.cpp` | MODIFY | Replace cube-embedding path for `use_fvm=true`: call `generate_conformal_mesh()` from STL, then run CFD solver on the result |
+| `include/aero/panel/aero_solver.hpp` | MODIFY | `AeroTableConfig::stl_volume_mesh` flag to enable/disable conformal meshing |
+
+Tasks:
+
+- [ ] When `use_fvm=true` and `stl_volume_mesh=true`: generate conformal mesh from `stl_path`, run CFD, return forces
+- [ ] Cache generated mesh (reuse for multiple Mach/alpha/beta conditions with rigid rotation of farfield)
+- [ ] `use_fvm=true` with `stl_volume_mesh=false` retains old cube-embedding behavior for backward compatibility
+
+Tests:
+
+| # | Test | What | Tolerance |
+|---|------|------|-----------|
+| 1 | `CFD-MESH-STL-1` | Cone STL: generated mesh wall area matches geometric cone area | 1% |
+| 2 | `CFD-MESH-STL-2` | Sphere STL: CY=CZ=0 within machine zero (symmetric mesh) | 1e-8 |
+| 3 | `CFD-MESH-STL-3` | Arbitrary STL: all cell volumes > 0, no negative Jacobian | hard |
+| 4 | `CFD-MESH-STL-4` | Mesh round-trip: SU2 export/import of generated mesh preserves cell and face count | exact |
+| 5 | `CFD-MESH-STL-5` | `use_fvm=true` + conformal mesh: forces differ from cube-embedding result | inequality |
+| 6 | `CFD-MESH-STL-6` | Viscous prism layer: first layer height matches config within 10% | 10% |
+
+Gate:
+
+- Generated mesh passes `validate_mesh()` (zero negative Jacobians, closed surface sum ≤ 1e-10).
+- Wall area matches STL reference area within 1% for convex geometries (cone, sphere).
+- `generate_aero_table` with `stl_volume_mesh=true` produces forces corresponding to the STL shape, not a cube.
+- Cube-embedding code remains available behind `stl_volume_mesh=false` flag (regression).
+
+---
+
 ## Phase 10 — Multi-GPU Distributed Memory
 
 Goal: scale from single GPU to multiple GPUs, multiple nodes. Support NVLink (within node) and InfiniBand/RoCE (across nodes). Implement MPI + CUDA-aware halo exchange.
@@ -1263,6 +1367,160 @@ All 5 HIGH issues fixed (2026-07-12 follow-up):
 
 Files changed: `cfd_solver.cpp` (+180 lines), `ISSUES.md`, `progress.md`
 Verification: TestCfdMesh 22/22, TestCfdEuler 9/9 — all PASS.
+
+### 12.5 — Second-Order Prolongation and Primitive-Space Hanging Face Reconstruction
+
+Goal: eliminate the 1st-order fallback at AMR refinement boundaries. Two improvements:
+
+1. **Prolongation**: replace injection (`q_child = q_parent`) with gradient-based reconstruction to child cell centers
+2. **Hanging face flux**: reconstruct in primitive-variable space (positive-preserving by limiter design) instead of conservative-variable space
+
+#### 12.5.1 Gradient-based prolongation
+
+Files:
+
+| File | Action | Content |
+|------|--------|---------|
+| `include/aero/cfd/amr_interpolate.hpp` | MODIFY | Add `prolongate_solution_order2()` — takes `grad_*` arrays |
+| `src/aero/cfd/amr_interpolate.cpp` | MODIFY | Implement 2nd-order prolongation |
+
+Current: `q_new[child] = q_old[parent]` (injection, 1st-order).
+
+New: before AMR, compute primitive gradients from current state. For each child:
+```
+w_child = w_parent + grad_w_parent · (child_center - parent_center)
+q_child = primitive_to_conservative(w_child, gamma)
+```
+If reconstructed `w_child` has `rho <= 0` or `p <= 0`, fall back to injection for that child only.
+
+Tasks:
+
+- [ ] Add `prolongate_solution_order2()` overload accepting `const std::vector<CellGradient>&` primitive gradients
+- [ ] Implement per-child reconstruction with positivity check
+- [ ] Integration in `cfd_solver.cpp`: compute gradients before AMR block, pass to `prolongate_solution_order2`
+- [ ] Retrofit existing `prolongate_solution` as fallback (1st-order path)
+
+#### 12.5.2 Primitive-space hanging face reconstruction
+
+Files:
+
+| File | Action | Content |
+|------|--------|---------|
+| `include/aero/cfd/amr_hanging.hpp` | MODIFY | Update `apply_hanging_interpolation` signature + add `apply_hanging_flux_correction_primitive` |
+| `src/aero/cfd/amr_hanging.cpp` | MODIFY | Implement primitive-space reconstruction |
+
+Current: `apply_hanging_interpolation` reconstructs in conservative variables using conservative gradients. When the reconstructed conservative state converts to invalid primitives (negative rho/p), the correction is silently skipped → 1st-order flux at that face.
+
+New: pass primitive cell states `w[]` and primitive gradients `pg[]` directly. For each hanging face:
+```
+w_face = w_coarse + pg_coarse · (face_center - cell_center)
+if w_face.rho > 0 && w_face.p > 0:
+    q_face = primitive_to_conservative(w_face, gamma)
+else:
+    // Fallback: use volume-weighted average of fine-cell primitives
+    // as the coarse-side ghost state
+    w_face = Σ(w_fine_i * vol_fine_i) / Σ(vol_fine_i)  over adjacent fine cells
+    q_face = primitive_to_conservative(w_face, gamma)
+```
+Primitive reconstruction is inherently more robust because the limiter (Barth-Jespersen / Venkatakrishnan) bounds each primitive component between its neighbor extrema. The conservative gradient conversion can compound sign errors.
+
+The volume-weighted fine-cell average fallback ensures the coarse-side ghost is always physically valid and makes the interface flux consistent with the fine resolution.
+
+Tasks:
+
+- [ ] Update `apply_hanging_interpolation` signature: accept `const std::vector<PrimitiveState>& w`, `const std::vector<CellGradient>& pg`, `Real gamma`
+- [ ] Reconstruct in primitive space; convert to conservative afterward
+- [ ] Implement fine-cell volume-weighted fallback for invalid reconstructions
+- [ ] Update all call sites in `cfd_solver.cpp`
+
+Tests:
+
+| # | Test | What | Tolerance |
+|---|------|------|-----------|
+| 13 | `CFD-AMR-13` | 2nd-order prolongation: child mass = parent mass after reconstruction | 1e-10 |
+| 14 | `CFD-AMR-14` | Uniform flow: 2nd-order hanging preserves uniform state exactly | 1e-12 |
+| 15 | `CFD-AMR-15` | Smooth flow (isentropic vortex): L2 error with 2nd-order hanging < 1st-order hanging | inequality |
+| 16 | `CFD-AMR-16` | Shocked flow: primitive-space hanging reconstruction avoids negative p | no NaN/Inf |
+
+Gate:
+
+- Prolongation conserves total mass within 1e-10 per AMR cycle.
+- Hanging face flux with `reconstruction_order=2` never silently falls back to 1st-order on smooth flows.
+- Primitive-space reconstruction always produces `rho > 0` and `p > 0` at hanging faces.
+- Uniform flow remains uniform at machine precision after AMR cycle.
+
+### 12.6 — AMR + Implicit Solver Integration
+
+Goal: enable AMR refinement during implicit (Newton-Krylov) time stepping. Currently AMR only runs during the explicit solver branch; `solve_gpu_dispatch` rejects AMR outright.
+
+Files:
+
+| File | Action | Content |
+|------|--------|---------|
+| `src/aero/cfd/gpu_solver.cu` | MODIFY | Add AMR block in implicit branch |
+| `src/aero/cfd/lusgs_gpu.cu` | MODIFY | Add `rebuild_lusgs_coloring()` — recompute cell coloring after mesh change |
+| `src/aero/cfd/jacobian_free.cu` | MODIFY | Add `reallocate_jfv_buffers()` — resize scratch arrays for new cell count |
+| `src/aero/cfd/cfd_solver.cpp` | MODIFY | Add implicit guard in AMR block, call LUSGS rebuild |
+| `include/aero/cfd/gpu_solver_internal.hpp` | MODIFY | Add `rebuild_lusgs_coloring`/`reallocate_jfv_buffers` declarations |
+| `src/aero/cfd/cfd_solver_gpu.cpp` | MODIFY | Remove the GPU AMR rejection (`solve_gpu_dispatch`) — replace with AMR-on-GPU path |
+
+Implicit solver loop with AMR:
+
+```
+for iter in 0..max_iter:
+    if amr && config.amr.enabled && iter % amr_interval == 0 && iter > 0:
+        // AMR cycle (same as explicit path):
+        compute_gradient_sensor → refine_cells → prolongate_solution →
+        rebuild_mesh_faces → compute_mesh_metrics → upload to device
+
+        // Implicit-specific rebuild:
+        if config.implicit:
+            rebuild_lusgs_coloring(d_mesh)          // new cell order → new coloring
+            reallocate_jfv_buffers(d_mesh)           // new cell count → resize d_q_pert, d_res_pert
+            reset FGMRES solver                      // Krylov basis invalid after mesh change
+
+    // Implicit step (unchanged):
+    compute_timestep → compute_residual → [Newton: JFV + FGMRES + line search]
+```
+
+Key design decisions:
+
+1. **Full FGMRES reset after AMR**: The Krylov basis V[m] and Z[m] are mesh-dependent (each vector has one entry per cell). After mesh change, all basis vectors are invalid. FGMRES restarts from scratch on the next outer iteration.
+
+2. **LU-SGS coloring recomputation**: Cell coloring depends on cell adjacency. After mesh change, colors must be recomputed on CPU (host-side greedy coloring, uploaded to device as `d_cell_colors`).
+
+3. **JFV buffer reallocation**: `d_q_pert` and `d_res_pert` have size `NVAR * n_cells`. After AMR changes cell count, these must be freed and reallocated.
+
+4. **CFL continuation**: After mesh change, the CFL value continues from its current ramp position (not reset to start). Local timestep handles the new cell sizes naturally.
+
+5. **No AMR during Newton linesearch**: AMR is triggered only at outer iteration boundaries (before the Newton loop starts), never during inner backtracking.
+
+Tasks:
+
+- [ ] `rebuild_lusgs_coloring()`: recompute host-side greedy coloring from `d_mesh.face()` adjacency, upload `d_cell_colors` and `d_cell_color_count`
+- [ ] `reallocate_jfv_buffers()`: `cudaFree` old + `cudaMalloc` new size = `NVAR * n_cells * sizeof(Real)` for both pert buffers
+- [ ] GPU solver AMR integration: add implicit guard before AMR block, after upload call rebuild functions
+- [ ] `cfd_solver_gpu.cpp`: remove `config.amr.enabled` rejection, add AMR support to GPU dispatch
+- [ ] Verify: all existing explicit+AMR tests still pass
+- [ ] Verify: implicit+AMR produces same converged forces as explicit+AMR on cube mesh
+
+Tests:
+
+| # | Test | What | Tolerance |
+|---|------|------|-----------|
+| 1 | `CFD-IMPLICIT-AMR-1` | Implicit+AMR on cube Mach 2: CX matches explicit+AMR within | 1e-4 |
+| 2 | `CFD-IMPLICIT-AMR-2` | Implicit+AMR on flat plate: convergence residual drops without NaN | no NaN |
+| 3 | `CFD-IMPLICIT-AMR-3` | Rebuild LUSGS coloring: new mesh coloring has valid range [0, color_count) | exact |
+| 4 | `CFD-IMPLICIT-AMR-4` | FGMRES reset: after AMR, FGMRES starts fresh (no stale basis) | implicit |
+| 5 | `CFD-IMPLICIT-AMR-5` | `amr=false` + implicit: zero overhead from AMR code path | regression |
+
+Gate:
+
+- Existing explicit+AMR tests (CFD-AMR-1..12, CFD-EULER-9) pass unchanged.
+- Implicit+AMR on cube: CX differs from explicit+AMR by at most 1e-4 (converged solution independence).
+- No NaN/Inf in any implicit+AMR test case.
+- `amr=false` implicit has zero overhead from AMR rebuild code.
+- Cell coloring is valid: every cell assigned a color, no adjacent cells share a color.
 
 ---
 

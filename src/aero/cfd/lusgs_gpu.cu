@@ -305,6 +305,35 @@ void LusgsPreconditioner::release() {
     n_cell_colors_ = 0;
 }
 
+bool LusgsPreconditioner::rebuild_coloring(DeviceMesh& mesh, std::string* error) {
+    int n_cells_new = static_cast<int>(mesh.cell_count());
+    if (n_cells_new <= 0) { if (error) *error = "rebuild_coloring: empty mesh"; return false; }
+    int nf = static_cast<int>(mesh.face_count());
+    std::vector<int> h_left(nf), h_right(nf);
+    DeviceFaceData fd = mesh.face_data();
+    if (!cuda_check(cudaMemcpyAsync(h_left.data(), fd.left_cell, nf * sizeof(int), cudaMemcpyDeviceToHost, 0), "copy left", error)) return false;
+    if (!cuda_check(cudaMemcpyAsync(h_right.data(), fd.right_cell, nf * sizeof(int), cudaMemcpyDeviceToHost, 0), "copy right", error)) return false;
+    if (!cuda_check(cudaDeviceSynchronize(), "sync left/right", error)) return false;
+
+    std::vector<int> cell_color;
+    int n_colors = greedy_color_cells(h_left, h_right, n_cells_new, cell_color);
+    if (n_colors <= 0) {
+        if (error) *error = "rebuild_coloring: greedy coloring failed";
+        return false;
+    }
+
+    // If cell count changed, reallocate color array
+    if (n_cells_new != n_cells_) {
+        cuda_free_safe(d_cell_color_);
+        if (!cuda_check(cudaMalloc(&d_cell_color_, n_cells_new * sizeof(int)), "cudaMalloc d_cell_color", error)) return false;
+        n_cells_ = n_cells_new;
+    }
+
+    if (!cuda_check(cudaMemcpy(d_cell_color_, cell_color.data(), n_cells_ * sizeof(int), cudaMemcpyHostToDevice), "copy d_cell_color", error)) return false;
+    n_cell_colors_ = n_colors;
+    return true;
+}
+
 bool LusgsPreconditioner::compute_diagonal(DeviceMesh& mesh, const Real* d_dt_cell,
     Real gamma, bool viscous, const Real* d_mu, Real Re,
     std::string* error) {

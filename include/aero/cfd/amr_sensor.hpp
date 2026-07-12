@@ -17,7 +17,8 @@ namespace cfd {
 std::vector<RefinementRequest> compute_gradient_sensor(
     const CfdMesh& mesh,
     const std::vector<ConservativeState>& q,
-    const AmrConfig& config);
+    const AmrConfig& config,
+    Real gamma = 1.4f);
 
 } // namespace cfd
 } // namespace aero

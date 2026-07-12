@@ -459,95 +459,14 @@ CfdSolveSummary CfdSolver::solve_from_state(
         }
 
         // ----- Hanging face flux correction (AMR refinement boundaries) -----
+        // Reconstructs the coarse-side state in primitive space using the limited
+        // gradient (positive-preserving), then replaces the residual flux at each
+        // hanging face with the corrected value.
         if (!amr_records.empty() && need_gradients && !grads.empty()) {
             auto hanging_faces = detect_hanging_faces(mesh_);
             if (!hanging_faces.empty()) {
                 const auto& gsrc = apply_limiting ? limited : grads;
-                std::size_t nc = q.size();
-                std::vector<CellGradient3> grad_rho(nc), grad_rho_u(nc), grad_rho_v(nc), grad_rho_w(nc), grad_rho_E(nc), grad_rho_nu(nc);
-                for (std::size_t i = 0; i < nc; ++i) {
-                    const auto& pg = gsrc[i];
-                    const auto& wi = w[i];
-                    Real rho = q[i].rho;
-                    Real u = wi.u, v = wi.v, ww = wi.w;
-                    Real inv_rho = 1.0f / rho;
-                    Real nu_tilde = q[i].rho_nu_tilde * inv_rho;
-                    Real inv_gm1 = 1.0f / (config.gamma - 1.0f);
-                    Real ke = 0.5f * (u*u + v*v + ww*ww);
-                    Real p = wi.p;
-                    Real E = p * inv_rho * inv_gm1 + ke;
-                    grad_rho[i].gx = pg.drho_dx; grad_rho[i].gy = pg.drho_dy; grad_rho[i].gz = pg.drho_dz;
-                    grad_rho_u[i].gx = u * pg.drho_dx + rho * pg.du_dx;
-                    grad_rho_u[i].gy = u * pg.drho_dy + rho * pg.du_dy;
-                    grad_rho_u[i].gz = u * pg.drho_dz + rho * pg.du_dz;
-                    grad_rho_v[i].gx = v * pg.drho_dx + rho * pg.dv_dx;
-                    grad_rho_v[i].gy = v * pg.drho_dy + rho * pg.dv_dy;
-                    grad_rho_v[i].gz = v * pg.drho_dz + rho * pg.dv_dz;
-                    grad_rho_w[i].gx = ww * pg.drho_dx + rho * pg.dw_dx;
-                    grad_rho_w[i].gy = ww * pg.drho_dy + rho * pg.dw_dy;
-                    grad_rho_w[i].gz = ww * pg.drho_dz + rho * pg.dw_dz;
-                    Real dE_dx = pg.dp_dx * inv_rho * inv_gm1 - p * pg.drho_dx * inv_rho * inv_rho * inv_gm1 + u*pg.du_dx + v*pg.dv_dx + ww*pg.dw_dx;
-                    Real dE_dy = pg.dp_dy * inv_rho * inv_gm1 - p * pg.drho_dy * inv_rho * inv_rho * inv_gm1 + u*pg.du_dy + v*pg.dv_dy + ww*pg.dw_dy;
-                    Real dE_dz = pg.dp_dz * inv_rho * inv_gm1 - p * pg.drho_dz * inv_rho * inv_rho * inv_gm1 + u*pg.du_dz + v*pg.dv_dz + ww*pg.dw_dz;
-                    grad_rho_E[i].gx = E * pg.drho_dx + rho * dE_dx;
-                    grad_rho_E[i].gy = E * pg.drho_dy + rho * dE_dy;
-                    grad_rho_E[i].gz = E * pg.drho_dz + rho * dE_dz;
-                    grad_rho_nu[i].gx = nu_tilde * pg.drho_dx + rho * pg.dnu_tilde_dx;
-                    grad_rho_nu[i].gy = nu_tilde * pg.drho_dy + rho * pg.dnu_tilde_dy;
-                    grad_rho_nu[i].gz = nu_tilde * pg.drho_dz + rho * pg.dnu_tilde_dz;
-                }
-                std::vector<ConservativeState> qf_left(mesh_.faces.size());
-                std::vector<ConservativeState> qf_right(mesh_.faces.size());
-                for (std::size_t fi = 0; fi < mesh_.faces.size(); ++fi) {
-                    const CfdFace& f = mesh_.faces[fi];
-                    qf_left[fi] = q[f.left_cell];
-                    qf_right[fi] = (f.right_cell >= 0 && f.boundary == BoundaryKind::Interior)
-                        ? q[f.right_cell] : ConservativeState{};
-                }
-                apply_hanging_interpolation(mesh_, hanging_faces, q,
-                    grad_rho, grad_rho_u, grad_rho_v, grad_rho_w, grad_rho_E, grad_rho_nu,
-                    qf_left, qf_right);
-                for (const auto& hf : hanging_faces) {
-                    const CfdFace& face = mesh_.faces[hf.face_id];
-                    Real area = face.area;
-                    PrimitiveState wl_corrected, wr_corrected;
-                    if (!conservative_to_primitive(qf_left[hf.face_id], config.gamma, wl_corrected)) continue;
-                    if (!conservative_to_primitive(qf_right[hf.face_id], config.gamma, wr_corrected)) continue;
-                    if (wl_corrected.rho <= 0.0f || wl_corrected.p <= 0.0f) continue;
-                    if (wr_corrected.rho <= 0.0f || wr_corrected.p <= 0.0f) continue;
-                    EulerFlux flux_corrected = hllc_flux(wl_corrected, wr_corrected, config.gamma, face.nx, face.ny, face.nz);
-                    PrimitiveState wl_old, wr_old;
-                    if (config.reconstruction_order == 2) {
-                        const auto& g_l = gsrc[face.left_cell];
-                        wl_old = reconstruct_primitive(w[face.left_cell], g_l,
-                            face.cx - mesh_.cells[face.left_cell].cx,
-                            face.cy - mesh_.cells[face.left_cell].cy,
-                            face.cz - mesh_.cells[face.left_cell].cz);
-                        const auto& g_r = gsrc[face.right_cell];
-                        wr_old = reconstruct_primitive(w[face.right_cell], g_r,
-                            face.cx - mesh_.cells[face.right_cell].cx,
-                            face.cy - mesh_.cells[face.right_cell].cy,
-                            face.cz - mesh_.cells[face.right_cell].cz);
-                    } else {
-                        wl_old = w[face.left_cell];
-                        wr_old = w[face.right_cell];
-                    }
-                    if (wl_old.rho <= 0.0f || wl_old.p <= 0.0f) continue;
-                    if (wr_old.rho <= 0.0f || wr_old.p <= 0.0f) continue;
-                    EulerFlux flux_old = hllc_flux(wl_old, wr_old, config.gamma, face.nx, face.ny, face.nz);
-                    residual[face.left_cell].mass   += (flux_old.mass   - flux_corrected.mass)   * area;
-                    residual[face.left_cell].mom_x  += (flux_old.mom_x  - flux_corrected.mom_x)  * area;
-                    residual[face.left_cell].mom_y  += (flux_old.mom_y  - flux_corrected.mom_y)  * area;
-                    residual[face.left_cell].mom_z  += (flux_old.mom_z  - flux_corrected.mom_z)  * area;
-                    residual[face.left_cell].energy += (flux_old.energy - flux_corrected.energy) * area;
-                    residual[face.left_cell].turbulence += (flux_old.turbulence - flux_corrected.turbulence) * area;
-                    residual[face.right_cell].mass   -= (flux_old.mass   - flux_corrected.mass)   * area;
-                    residual[face.right_cell].mom_x  -= (flux_old.mom_x  - flux_corrected.mom_x)  * area;
-                    residual[face.right_cell].mom_y  -= (flux_old.mom_y  - flux_corrected.mom_y)  * area;
-                    residual[face.right_cell].mom_z  -= (flux_old.mom_z  - flux_corrected.mom_z)  * area;
-                    residual[face.right_cell].energy -= (flux_old.energy - flux_corrected.energy) * area;
-                    residual[face.right_cell].turbulence -= (flux_old.turbulence - flux_corrected.turbulence) * area;
-                }
+                apply_hanging_flux_correction_primitive(mesh_, hanging_faces, q, w, gsrc, config.gamma, residual);
             }
         }
 
@@ -634,7 +553,7 @@ CfdSolveSummary CfdSolver::solve_from_state(
             CfdMesh mesh_old = mesh_;
             std::vector<ConservativeState> q_old = q;
 
-            auto requests = compute_gradient_sensor(mesh_, q, config.amr);
+            auto requests = compute_gradient_sensor(mesh_, q, config.amr, config.gamma);
 
             // Enforce 2:1 balance after coarsening: prevent coarsening a cell if
             // a face neighbor at a higher refinement level is not also being coarsened.
@@ -672,7 +591,12 @@ CfdSolveSummary CfdSolver::solve_from_state(
                 std::string err;
                 const std::vector<RefinementRecord>* prev = amr_records.empty() ? nullptr : &amr_records;
                 if (refine_cells(mesh_, requests, &new_records, &err, prev, &coarsen_info, config.amr.max_level)) {
-                    prolongate_solution(q_old, mesh_old, mesh_, new_records, q);
+                    if (need_gradients && !grads.empty() && !w.empty()) {
+                        const auto& gsrc = apply_limiting ? limited : grads;
+                        prolongate_solution_order2(q_old, w, gsrc, mesh_old, mesh_, new_records, config.gamma, q);
+                    } else {
+                        prolongate_solution(q_old, mesh_old, mesh_, new_records, q);
+                    }
                     for (const auto& ci : coarsen_info) {
                         Real vol_sum = 0.0f;
                         ConservativeState avg;
@@ -712,8 +636,8 @@ CfdSolveSummary CfdSolver::solve_from_state(
                     compute_mesh_metrics(mesh_);
                     compact_mesh_nodes(mesh_);
                     int n_new = static_cast<int>(mesh_.cells.size());
-                    q_next.assign(n_new, ConservativeState{});
-                    residual.assign(n_new, EulerFlux{});
+                    q_next.resize(n_new);
+                    residual.resize(n_new);
                     grads.assign(n_new, PrimitiveGradient{});
                     w.assign(n_new, PrimitiveState{});
                     if (!limited.empty()) limited.assign(n_new, PrimitiveGradient{});
