@@ -2807,7 +2807,8 @@ LU-SGS 核函数中对 `d_q[cell * nvar + k]` 的步长-6 访问，每次 warp �
 
 **PERF2-7** [MEDIUM] `gpu_solver.cu:115`
 尽管所有 GPU 函数已有流参数，求解器仅使用单条流。核函数无法并发执行。建议创建 2-3 条计算流。
-[FIXED 2026-07-13] 双流架构：`stream_pre` 处理 `compute_timestep_gpu`，与 `stream_main` 上的梯度流水线（`compute_gradients_gpu` → `compute_limiters_gpu` → `apply_limiter_gpu`）并发执行。`cudaEventRecord`/`cudaStreamWaitEvent` 确保 `d_min_dt` 在欧拉残差之前就绪。所有 GPU 功能测试通过（176/176）。
+[FIXED 2026-07-13] 双流架构：`stream_pre` 处理 `compute_timestep_gpu`，与 `stream_main` 上的梯度流水线（`compute_gradients_gpu` → `compute_limiters_gpu` → `apply_limiter_gpu`）并发执行。`cudaEventRecord`/`cudaStreamWaitEvent` 确保 `d_min_dt` 在欧拉残差之前就绪。
+[FIXED 2026-07-13-b] 跨迭代数据竞争修复：`stream_pre` 在第 N+1 轮读取的 `d_q` 可能尚未完成第 N 轮 `stream_main` 的 update 写入。新增 `event_update_done`：`cudaEventRecord(event_update_done, stream_main)` 置于 `check_status_kernel` 之后，`cudaStreamWaitEvent(stream_pre, event_update_done, 0)` 置于 `compute_timestep_gpu` 之前。所有 67/67 GPU 测试通过。
 
 **PERF2-8** [LOW] `gpu_diagnostics.cu:88-93`
 `state_bounds_kernel` 使用 `real_atomic_min/max` 将局部极值写入 6 个全局标量。PERF-A1/A2 已修复时间步长和 L2 的类似问题。

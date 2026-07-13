@@ -1051,4 +1051,9 @@
 - ARCH-12 [INFO]: 确认 `CUDA_KERNEL_CHECK` 实际被使用（cfd_residual_gpu.cu:351/369），移除其上的 PERF-C3 注释。
 - 验证：所有 CFD 目标编译通过（9 个测试可执行文件）。GPU 测试 57-58/67 通过——10 项未通过均为 GPU 原子非确定性的已知预存 oracle 比较失败，非本次变更引入。
 
+2026-07-13
+- **诊断修复**: PERF2-7 双流架构存在跨迭代数据竞争。`stream_pre` 在第 N+1 轮读取 `d_q` 时，`stream_main` 可能尚未完成第 N 轮的 update 写入。10 项 GPU oracle 测试因此产生复合性偏差且 `CFD-ORACLE-DISPATCH-1` 硬失败。
+- 修复：新增 `event_update_done`——`cudaEventRecord(event_update_done, stream_main)` 置于 `check_status_kernel` 之后，`cudaStreamWaitEvent(stream_pre, event_update_done, 0)` 置于 `compute_timestep_gpu` 之前。确保 `stream_pre` 每次读取 `d_q` 前等待 `stream_main` 上一轮 update 完成。
+- 验证：`TestCfdGpu.exe` 67/67 PASS。`ctest -R "Cfd|Gpu"` 13/13 suites 100% PASS。
+
 

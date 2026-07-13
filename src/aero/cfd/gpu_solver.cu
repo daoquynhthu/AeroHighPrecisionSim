@@ -124,6 +124,9 @@ static CfdSolveSummary solve_gpu_impl(
     cudaStreamCreate(&stream_pre);
     cudaEvent_t event_timestep_done = nullptr;
     cudaEventCreate(&event_timestep_done);
+    cudaEvent_t event_update_done = nullptr;
+    cudaEventCreate(&event_update_done);
+    cudaEventRecord(event_update_done, stream_main); // signaled for first iter
 
     if (config.implicit) {
         d_dq = nullptr; d_dt_cell = nullptr; d_r_saved = nullptr; d_q_backup = nullptr;
@@ -174,6 +177,7 @@ static CfdSolveSummary solve_gpu_impl(
             }
         }
 
+        cudaStreamWaitEvent(stream_pre, event_update_done, 0);
         if (!compute_timestep_gpu(d_mesh, config.gamma, config.cfl, d_min_dt,
                 config.viscous, config.mu_ref, config.T_ref, config.sutherland_T, config.Re, stream_pre)) {
             if (error) *error = "timestep kernel failed";
@@ -390,6 +394,7 @@ newton_accepted:
             d_failed, d_l2_sum, nvar_ncells,
             config.convergence_tol, d_residual_history + iter);
         if (!cuda_check(cudaGetLastError(), "check_status kernel launch", error)) goto fail;
+        cudaEventRecord(event_update_done, stream_main);
 
 #ifdef MPI_ENABLED
         if (d_mesh.has_halo()) {
@@ -523,6 +528,7 @@ cleanup:
     cuda_free_safe(d_scratch);
     cuda_free_safe(d_newton_accepted);
     cudaEventDestroy(event_timestep_done);
+    cudaEventDestroy(event_update_done);
     cudaStreamDestroy(stream_pre);
     cudaStreamDestroy(stream_main);
 #ifdef MPI_ENABLED
