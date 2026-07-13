@@ -2592,9 +2592,9 @@ Four-parallel subagent audit covering architecture compliance, physical/numerica
 |----------|------|--------|-----|------|-------|
 | 架构合规 (ARCH) | 3 | 2 | 3 | 4 | 12 |
 | 物理正确 (PHYS) | 2 | 8 | 5 | 4 | 21 |
-| 测试覆盖 (COV) | 3 | 6 | 7 | 5 | 23 |
+| 测试覆盖 (COV) | 5 | 4 | 7 | 5 | 23 |
 | 性能优化 (PERF2) | 3 | 5 | 3 | 1 | 12 |
-| **Total** | **11** | **21** | **18** | **14** | **68** |
+| **Total** | **13** | **19** | **18** | **14** | **68** |
 
 ---
 
@@ -2717,11 +2717,11 @@ GPU/CPU HLLC 波速公式一致。对称流极限下正确。
 **COV-3** [FIXED] `src/aero/cfd/cfd_solver.cpp:41`
 移出匿名命名空间 → 声明于 `cfd_mesh.hpp`。新增 CFD-MESH-COV3-1/2/3/4 四个测试用例。
 
-**COV-4** [MEDIUM] `src/aero/cfd/mesh_validator.cpp:63,94,135,175`
-各单元类型雅可比符号函数（`tet/hex/penta/pyramid_jacobian_sign`）仅通过 `compute_mesh_quality_detail` 间接测试，缺乏直接单元测试。
+**COV-4** [FIXED] `src/aero/cfd/mesh_validator.cpp:63,94,135,175`
+移出匿名命名空间并添加 CfdNode 包装 → 声明于 `mesh_validator.hpp`。各单元类型雅可比符号函数可直接单元测试。
 
-**COV-5** [MEDIUM] `src/aero/cfd/reconstruction.cpp:335`
-`compute_barth_jespersen_limiters`（需要网格+梯度）无直接测试。
+**COV-5** [FIXED] `src/aero/cfd/reconstruction.cpp:335`
+`compute_barth_jespersen_limiters` 已通过 CFD-RECON-6/7 直接测试（限幅器激活/零梯度场景）。
 
 **COV-6** [FIXED] `src/aero/cfd/reconstruction.cpp:280`
 移出匿名命名空间 → 声明于 `reconstruction.hpp`。新增 CFD-RECON-17~21 五个测试用例（求解器/分解/奇异矩阵）。
