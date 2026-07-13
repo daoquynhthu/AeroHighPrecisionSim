@@ -2735,8 +2735,8 @@ GPU/CPU HLLC 波速公式一致。对称流极限下正确。
 **COV-9** [FIXED] `src/aero/cfd/mms.cpp:96`
 新增 MMS-NS: NS 一阶源一致性测试（order-1, q=q_exact -> residual=0）。
 
-**COV-10** [MEDIUM] `src/aero/cfd/mesh_gen_stl.cpp:1064` 行
-STL 网格生成器仅 3 个端到端测试，内部函数（`detect_stl_format`, `compute_sdf_grid`, `build_bvh`, `hex_to_6_tets`）无独立测试。
+**COV-10** [FIXED] `src/aero/cfd/mesh_gen_stl.cpp:1064` 行
+新增 `test_mesh_stl_internal.cpp`（12 测试）：`detect_stl_format`（ASCII/二进制/不存在）、`hex_to_6_tets`（单位立方体/剪切/顶点验证）、`volume_tet_signed`（正/负/零）、`parse_stl`（ASCII/二进制三角计数）、`Vec3` 运算。`compute_sdf_grid`/`build_bvh` 保留在匿名命名空间内，已通过 CFD-MESH-STL-1/2/3 端到端间接测试。
 
 **COV-11** [FIXED] `tests/cfd/test_cfd_gpu.cpp:1095`
 新增 CFD-COLOR-5: 着色梯度+限幅器通道字节级确定性测试（运行两次全管道后比较梯度数据）。

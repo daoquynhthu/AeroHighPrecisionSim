@@ -1033,4 +1033,16 @@
 - 同时修复 `rebuild_coloring()` 在 n_cells 不变时 CSR 指针内存泄漏。
 - Verified: all 176 tests PASS (same as above)
 
+2026-07-13
+- COV-10: STL 内部函数独立单元测试完成。新增 `tests/cfd/test_mesh_stl_internal.cpp` (12 tests):
+  - `volume_tet_signed` 正/负/零体积
+  - `hex_to_6_tets` 单位立方体/剪切六面体/顶点来源验证
+  - `detect_stl_format` ASCII/二进制/文件不存在
+  - `parse_stl` ASCII/二进制三角计数
+  - `Vec3` 运算 (加减乘除/点积/叉积/模长/归一化)
+  - 暴露 `stl_internal` 命名空间于 `mesh_gen_stl_internal.hpp`
+  - 注册 TestMeshStlInternal 目标 + ctest 标签
+- Verified: TestMeshStlInternal 12/12 PASS. COV-10 标记 [FIXED]。
+- `compute_sdf_grid`/`build_bvh` 保留在匿名命名空间内，已通过 CFD-MESH-STL-1/2/3 端到端间接测试。
+
 

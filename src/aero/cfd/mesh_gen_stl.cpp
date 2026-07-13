@@ -17,7 +17,7 @@ namespace aerosp {
 namespace aero {
 namespace cfd {
 
-namespace {
+namespace stl_internal {
 
 struct Vec3 {
     Real x, y, z;
@@ -811,7 +811,8 @@ struct WallTri {
     int i0, i1, i2;
 };
 
-} // anonymous namespace
+} // namespace stl_internal
+using namespace stl_internal;
 
 bool generate_conformal_mesh_from_stl(
     const std::string& stl_path,
