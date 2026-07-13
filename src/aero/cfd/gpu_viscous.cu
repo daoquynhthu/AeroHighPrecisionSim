@@ -11,9 +11,12 @@ namespace cfd {
 namespace {
 
 __device__ void primitive_from_q(const Real* d_q, int idx, int nvar, Real gamma,
-    Real& rho, Real& u, Real& v, Real& w, Real& p) {
+    Real& rho, Real& u, Real& v, Real& w, Real& p, int* d_failed = nullptr) {
     rho = d_q[idx * nvar + 0];
-    if (rho <= 0.0f || !real_isfinite(rho)) { rho = -1.0f; return; }
+    if (rho <= 0.0f || !real_isfinite(rho)) {
+        if (d_failed) atomicCAS(d_failed, 0, 1);
+        rho = -1.0f; return;
+    }
     Real inv_rho = 1.0f / rho;
     u = d_q[idx * nvar + 1] * inv_rho;
     v = d_q[idx * nvar + 2] * inv_rho;
@@ -58,7 +61,7 @@ __global__ void __launch_bounds__(128) viscous_flux_kernel_atomic(
         bnd != static_cast<int>(BoundaryKind::NoSlipWall)) return;
 
     Real rho_L, u_L, v_L, w_L, p_L;
-    primitive_from_q(d_q, left, nvar, gamma, rho_L, u_L, v_L, w_L, p_L);
+    primitive_from_q(d_q, left, nvar, gamma, rho_L, u_L, v_L, w_L, p_L, d_failed);
     if (!real_isfinite(rho_L) || rho_L <= 0.0f || !real_isfinite(p_L) || p_L <= 0.0f) return;
 
     Real inv_rho_L = 1.0f / rho_L;
@@ -94,7 +97,7 @@ __global__ void __launch_bounds__(128) viscous_flux_kernel_atomic(
 
     if (right >= 0 && bnd == static_cast<int>(BoundaryKind::Interior)) {
         Real rho_R, u_R, v_R, w_R, p_R;
-        primitive_from_q(d_q, right, nvar, gamma, rho_R, u_R, v_R, w_R, p_R);
+        primitive_from_q(d_q, right, nvar, gamma, rho_R, u_R, v_R, w_R, p_R, d_failed);
         if (!real_isfinite(rho_R) || rho_R <= 0.0f || !real_isfinite(p_R) || p_R <= 0.0f) return;
 
         Real inv_rho_R = 1.0f / rho_R;
@@ -258,7 +261,7 @@ __global__ void __launch_bounds__(128) viscous_flux_kernel_atomic(
 
     if (right >= 0 && bnd == static_cast<int>(BoundaryKind::Interior)) {
         Real rho_R, u_R, v_R, w_R, p_R;
-        primitive_from_q(d_q, right, nvar, gamma, rho_R, u_R, v_R, w_R, p_R);
+        primitive_from_q(d_q, right, nvar, gamma, rho_R, u_R, v_R, w_R, p_R, d_failed);
         if (!real_isfinite(rho_R) || rho_R <= 0.0f || !real_isfinite(p_R) || p_R <= 0.0f) return;
         Real nu_tilde_R = d_q[right * nvar + 5] / rho_R;
         if (!real_isfinite(nu_tilde_R)) return;
@@ -353,7 +356,7 @@ __global__ void __launch_bounds__(128) viscous_flux_kernel_colored(
         bnd != static_cast<int>(BoundaryKind::NoSlipWall)) return;
 
     Real rho_L, u_L, v_L, w_L, p_L;
-    primitive_from_q(d_q, left, nvar, gamma, rho_L, u_L, v_L, w_L, p_L);
+    primitive_from_q(d_q, left, nvar, gamma, rho_L, u_L, v_L, w_L, p_L, d_failed);
     if (!real_isfinite(rho_L) || rho_L <= 0.0f || !real_isfinite(p_L) || p_L <= 0.0f) return;
 
     Real inv_rho_L = 1.0f / rho_L;
@@ -389,7 +392,7 @@ __global__ void __launch_bounds__(128) viscous_flux_kernel_colored(
 
     if (right >= 0 && bnd == static_cast<int>(BoundaryKind::Interior)) {
         Real rho_R, u_R, v_R, w_R, p_R;
-        primitive_from_q(d_q, right, nvar, gamma, rho_R, u_R, v_R, w_R, p_R);
+        primitive_from_q(d_q, right, nvar, gamma, rho_R, u_R, v_R, w_R, p_R, d_failed);
         if (!real_isfinite(rho_R) || rho_R <= 0.0f || !real_isfinite(p_R) || p_R <= 0.0f) return;
 
         Real inv_rho_R = 1.0f / rho_R;
@@ -553,7 +556,7 @@ __global__ void __launch_bounds__(128) viscous_flux_kernel_colored(
 
     if (right >= 0 && bnd == static_cast<int>(BoundaryKind::Interior)) {
         Real rho_R, u_R, v_R, w_R, p_R;
-        primitive_from_q(d_q, right, nvar, gamma, rho_R, u_R, v_R, w_R, p_R);
+        primitive_from_q(d_q, right, nvar, gamma, rho_R, u_R, v_R, w_R, p_R, d_failed);
         if (!real_isfinite(rho_R) || rho_R <= 0.0f || !real_isfinite(p_R) || p_R <= 0.0f) return;
         Real nu_tilde_R = d_q[right * nvar + 5] / rho_R;
         if (!real_isfinite(nu_tilde_R)) return;

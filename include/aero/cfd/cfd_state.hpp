@@ -35,9 +35,9 @@ struct EulerFlux {
     Real turbulence = 0.0f;
 };
 
-inline bool is_valid_primitive(const PrimitiveState& w) {
-    return std::isfinite(w.rho) && std::isfinite(w.u) && std::isfinite(w.v) &&
-           std::isfinite(w.w) && std::isfinite(w.p) && std::isfinite(w.nu_tilde) &&
+AEROSP_REAL_HOST_DEVICE bool is_valid_primitive(const PrimitiveState& w) {
+    return aerosp::real_isfinite(w.rho) && aerosp::real_isfinite(w.u) && aerosp::real_isfinite(w.v) &&
+           aerosp::real_isfinite(w.w) && aerosp::real_isfinite(w.p) && aerosp::real_isfinite(w.nu_tilde) &&
            w.rho > 0.0f && w.p > 0.0f;
 }
 

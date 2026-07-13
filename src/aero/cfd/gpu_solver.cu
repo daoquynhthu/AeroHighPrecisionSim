@@ -381,6 +381,9 @@ newton_accepted:
                 if (error) *error = "update kernel failed";
                 goto fail;
             }
+            if (!dnrm2_gpu(d_mesh.residual_device(), nvar_cells, d_l2_sum, stream_main)) {
+                if (error) *error = "residual L2 norm failed"; goto fail;
+            }
         }
 
         if (diagnostics_enabled) {

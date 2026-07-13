@@ -2677,17 +2677,17 @@ CFL 时间步长使用 `numeric_limits<Real>::min()` (~1.175e-38) 作为 `denom 
 **PHYS-12** [VERIFIED] `src/aero/cfd/gpu_timestep.cu:61`
 粘性时间步长公式已验证正确：`dt_visc = CFL * rho * h^2 * Re / mu`。无量纲化分析确认无误。无需修改。
 
-**PHYS-13** [LOW] `include/aero/cfd/cfd_state.hpp:38-42` vs `cfd_residual_gpu.cu:12-24`
-`is_valid_primitive`（CPU）已定义但未在 GPU 上使用。GPU 内联等价检查。功能一致但存在维护缺口（对 CPU 的修改可能不同步到 GPU）。
+**PHYS-13** [FIXED 2026-07-13] `include/aero/cfd/cfd_state.hpp:38`
+`is_valid_primitive` 改用 `real_isfinite` + `AEROSP_REAL_HOST_DEVICE`，可在 CPU 和 GPU 同时使用，消除维护缺口。
 
-**PHYS-14** [LOW] `src/aero/cfd/gpu_viscous.cu:16`
-`primitive_from_q` 失败时设置 `rho = -1.0f` 但**不**设置 `d_failed` 标志。调用者静默返回，无效状态在粘性核函数中不产生失效信号。
+**PHYS-14** [FIXED 2026-07-13] `src/aero/cfd/gpu_viscous.cu:13`
+`primitive_from_q` 新增 `d_failed` 参数（默认 nullptr），检测到无效 rho 时通过 `atomicCAS` 设置失败标志。6 处调用点均已传入 `d_failed`。
 
-**PHYS-15** [LOW] `src/aero/cfd/gpu_rans.cu:83`
-SA 扩散 `grad_nu2` 添加 `1e-30f` 确保正性，但 CPU 版本（`rans.cpp:46-49`）不添加——零梯度单元存在微小 GPU/CPU 差异。
+**PHYS-15** [FIXED 2026-07-13] `src/aero/cfd/rans.cpp:46-48`
+CPU 版本 `grad_nu2` 添加 `+ 1e-30f` 与 GPU 版本一致，消除零梯度单元差异。
 
-**PHYS-16** [LOW] `src/aero/cfd/gpu_rans.cu:162, 196`
-`dt_over_V = min_dt / (d_volume[idx] + 1e-30f)` 添加 1e-30f 体积底线。极小体积且 h_min 不小可能表明几何错误。功能安全但应验证。
+**PHYS-16** [VERIFIED 2026-07-13] `src/aero/cfd/gpu_rans.cu:162, 196`
+`dt_over_V = min_dt / (d_volume[idx] + 1e-30f)` 添加 1e-30f 体积底线防止除零。极小体积且 h_min 不小表明几何错误，但代码安全。无需修改。
 
 **PHYS-17** [LOW] `src/aero/cfd/gpu_diagnostics.cu:17-25`
 边界初始化使用 `numeric_limits<Real>::max()` 和 `lowest()`。float 为 3.4e38/-3.4e38，在有效 float 范围内正确工作。
@@ -2701,8 +2701,8 @@ SA 扩散 `grad_nu2` 添加 `1e-30f` 确保正性，但 CPU 版本（`rans.cpp:4
 **PHYS-20** [INFO] `src/aero/cfd/cfd_residual_gpu.cu:79-80`
 GPU/CPU HLLC 波速公式一致。对称流极限下正确。
 
-**PHYS-21** [INFO] `src/aero/cfd/cfd_residual_gpu.cu:338`
-`check_status_kernel` 计算的 L2 实际为 `(q_new - q_old)^2`（状态变化量）而非残差 L2。收敛判据 `convergence_tol` 与状态变化量单位不一致。
+**PHYS-21** [FIXED 2026-07-13] `src/aero/cfd/gpu_solver.cu:379`
+显式路径现在使用 `dnrm2_gpu(d_residual, ...)` 计算残差 L2 作为收敛判据。CPU 求解器同步改为残差 L2。`state_delta_l2` 已移除。
 
 ---
 

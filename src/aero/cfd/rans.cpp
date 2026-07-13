@@ -45,7 +45,8 @@ RansSource compute_rans_source(
 
     Real grad_nu2 = grad.dnu_tilde_dx * grad.dnu_tilde_dx
                  + grad.dnu_tilde_dy * grad.dnu_tilde_dy
-                 + grad.dnu_tilde_dz * grad.dnu_tilde_dz;
+                 + grad.dnu_tilde_dz * grad.dnu_tilde_dz
+                 + 1e-30f;
     Real diffusion = (cb2 / sigma) * grad_nu2;
 
     Real cw1 = cb1 / (karman*karman) + (1.0f + cb2) / sigma;

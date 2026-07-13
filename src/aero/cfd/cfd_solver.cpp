@@ -61,15 +61,6 @@ ConservativeState add_scaled(ConservativeState q, EulerFlux f, Real scale) {
     return q;
 }
 
-Real state_delta_l2(const ConservativeState& a, const ConservativeState& b) {
-    Real d0 = a.rho - b.rho;
-    Real d1 = a.rho_u - b.rho_u;
-    Real d2 = a.rho_v - b.rho_v;
-    Real d3 = a.rho_w - b.rho_w;
-    Real d4 = a.rho_E - b.rho_E;
-    Real d5 = a.rho_nu_tilde - b.rho_nu_tilde;
-    return d0*d0 + d1*d1 + d2*d2 + d3*d3 + d4*d4 + d5*d5;
-}
 
 } // namespace
 
@@ -556,7 +547,12 @@ CfdSolveSummary CfdSolver::solve_from_state(
         for (std::size_t i = 0; i < q.size(); ++i) {
             Real scale = min_dt / mesh_.cells[i].volume;
             q_next[i] = add_scaled(q[i], residual[i], scale);
-            l2 += state_delta_l2(q_next[i], q[i]);
+            l2 += residual[i].mass * residual[i].mass
+                + residual[i].mom_x * residual[i].mom_x
+                + residual[i].mom_y * residual[i].mom_y
+                + residual[i].mom_z * residual[i].mom_z
+                + residual[i].energy * residual[i].energy
+                + residual[i].turbulence * residual[i].turbulence;
         }
         Real residual_l2 = std::sqrt(l2 / (static_cast<Real>(CFD_NVAR) * static_cast<Real>(q.size())));
         summary.residual_history.push_back(residual_l2);

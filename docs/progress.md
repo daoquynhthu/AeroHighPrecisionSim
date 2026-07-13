@@ -1056,4 +1056,12 @@
 - 修复：新增 `event_update_done`——`cudaEventRecord(event_update_done, stream_main)` 置于 `check_status_kernel` 之后，`cudaStreamWaitEvent(stream_pre, event_update_done, 0)` 置于 `compute_timestep_gpu` 之前。确保 `stream_pre` 每次读取 `d_q` 前等待 `stream_main` 上一轮 update 完成。
 - 验证：`TestCfdGpu.exe` 67/67 PASS。`ctest -R "Cfd|Gpu"` 13/13 suites 100% PASS。
 
+2026-07-13
+- **PHYS-13** [FIXED]: `is_valid_primitive` 改为 `AEROSP_REAL_HOST_DEVICE` + `real_isfinite`，消除 CPU/GPU 维护缺口。
+- **PHYS-14** [FIXED]: `primitive_from_q` 新增 `d_failed` 参数（默认 nullptr），无效 rho 时通过 `atomicCAS` 设置失败标志。6 处粘性核调用点均已传入。
+- **PHYS-15** [FIXED]: CPU `rans.cpp` `grad_nu2` 添加 `+ 1e-30f` 与 GPU 版本一致。
+- **PHYS-21** [FIXED]: 显式路径收敛判据改为残差 L2（`dnrm2_gpu(d_residual, ...)`）。CPU 求解器同步改为残差 L2。移除 `state_delta_l2`。
+- 验证：所有变更后 `TestCfdGpu` 67/67 PASS，`TestCfdState`/`TestCfdRans`/`TestCfdViscous` 均编译通过。
+
+
 
