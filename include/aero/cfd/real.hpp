@@ -34,6 +34,7 @@ namespace aerosp {
     AEROSP_REAL_HOST_DEVICE Real real_sin(Real x) { return sin(x); }
     AEROSP_REAL_HOST_DEVICE Real real_pow(Real x, Real y) { return pow(x, y); }
     AEROSP_REAL_HOST_DEVICE Real real_exp(Real x) { return exp(x); }
+    AEROSP_REAL_HOST_DEVICE Real real_tanh(Real x) { return tanh(x); }
 
 #ifdef __CUDACC__
     AEROSP_REAL_DEVICE Real real_atomic_add(Real* addr, Real val) {
@@ -83,6 +84,7 @@ namespace aerosp {
     AEROSP_REAL_HOST_DEVICE Real real_sin(Real x) { return sinf(x); }
     AEROSP_REAL_HOST_DEVICE Real real_pow(Real x, Real y) { return powf(x, y); }
     AEROSP_REAL_HOST_DEVICE Real real_exp(Real x) { return expf(x); }
+    AEROSP_REAL_HOST_DEVICE Real real_tanh(Real x) { return tanhf(x); }
 
 #ifdef __CUDACC__
     AEROSP_REAL_DEVICE Real real_atomic_add(Real* addr, Real val) {

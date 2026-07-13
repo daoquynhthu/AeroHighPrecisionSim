@@ -68,8 +68,21 @@ bool compute_jfv_product(DeviceMesh& mesh, const Real* d_v, Real* d_result,
         }
     }
 
+    Real jfv_inf_k = 0.0f, jfv_inf_omega = 0.0f;
+    if (config.turbulence_model == TurbulenceModel::SST) {
+        Real U_inf = real_sqrt(w_inf.u * w_inf.u + w_inf.v * w_inf.v + w_inf.w * w_inf.w);
+        Real tu = 0.001f;
+        jfv_inf_k = 1.5f * (tu * tu) * U_inf * U_inf;
+        Real T_inf = w_inf.p / w_inf.rho;
+        Real t_ratio = T_inf / config.T_ref;
+        Real mu_inf = config.mu_ref * t_ratio * real_sqrt(t_ratio) * (config.T_ref + config.sutherland_T) / (T_inf + config.sutherland_T);
+        Real nu_inf = mu_inf / w_inf.rho;
+        Real mu_t_mu_ratio = 0.1f;
+        Real nu_t_inf = mu_t_mu_ratio * nu_inf;
+        jfv_inf_omega = jfv_inf_k / (0.09f * nu_t_inf + 1e-30f);
+    }
     if (config.turbulence_model != TurbulenceModel::LAMINAR) {
-        if (!compute_turbulence_source_gpu(mesh, config, d_failed, error, stream)) {
+        if (!compute_turbulence_source_gpu(mesh, config, d_failed, error, stream, jfv_inf_k, jfv_inf_omega)) {
             mesh.set_state_device(d_q_orig);
             if (error && error->empty()) *error = "JFV turbulence source failed";
             return false;

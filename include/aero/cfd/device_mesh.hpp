@@ -127,6 +127,16 @@ public:
     bool has_delta_ddes() const { return d_delta_ddes_ != nullptr; }
     Real* delta_ddes_device() const { return d_delta_ddes_; }
 
+    // SST k-omega buffers (separate from main NVAR=6 state)
+    bool allocate_sst();
+    bool has_sst() const { return d_q_k_ != nullptr; }
+    Real* q_k_device() const { return d_q_k_; }
+    Real* q_omega_device() const { return d_q_omega_; }
+    Real* residual_k_device() const { return d_residual_k_; }
+    Real* residual_omega_device() const { return d_residual_omega_; }
+    Real* grad_k_device() const { return d_grad_k_; }
+    Real* grad_omega_device() const { return d_grad_omega_; }
+
 private:
     std::size_t cell_count_ = 0;
     std::size_t face_count_ = 0;
@@ -159,6 +169,12 @@ private:
     Real* d_mu_ = nullptr;
     Real* d_lam_ = nullptr;
     Real* d_delta_ddes_ = nullptr;
+    Real* d_q_k_ = nullptr;
+    Real* d_q_omega_ = nullptr;
+    Real* d_residual_k_ = nullptr;
+    Real* d_residual_omega_ = nullptr;
+    Real* d_grad_k_ = nullptr;
+    Real* d_grad_omega_ = nullptr;
     Real* d_w_ = nullptr;
 
     int n_colors_ = 0;

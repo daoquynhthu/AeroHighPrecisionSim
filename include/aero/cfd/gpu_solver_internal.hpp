@@ -55,8 +55,25 @@ bool compute_rans_source_gpu(DeviceMesh& mesh, Real gamma, Real Re,
     const Real* d_delta_ddes, int* d_failed, std::string* error = nullptr,
     cudaStream_t stream = nullptr);
 
-bool compute_turbulence_source_gpu(DeviceMesh& mesh, const CfdConfig& config,
+bool compute_sst_gradients_gpu(DeviceMesh& mesh, int* d_failed,
+    std::string* error = nullptr, cudaStream_t stream = nullptr);
+bool compute_sst_advection_gpu(DeviceMesh& mesh,
+    Real inf_k, Real inf_omega,
     int* d_failed, std::string* error = nullptr, cudaStream_t stream = nullptr);
+bool compute_sst_source_gpu(DeviceMesh& mesh, Real gamma, Real Re,
+    Real mu_ref, Real T_ref, Real sutherland_T,
+    int* d_failed, std::string* error = nullptr, cudaStream_t stream = nullptr);
+bool compute_sst_update_gpu(DeviceMesh& mesh, const Real* d_min_dt,
+    std::string* error = nullptr, cudaStream_t stream = nullptr);
+bool compute_sst_init_gpu(DeviceMesh& mesh,
+    Real k_val, Real omega_val,
+    std::string* error = nullptr, cudaStream_t stream = nullptr);
+bool clear_sst_residual_gpu(DeviceMesh& mesh,
+    std::string* error = nullptr, cudaStream_t stream = nullptr);
+
+bool compute_turbulence_source_gpu(DeviceMesh& mesh, const CfdConfig& config,
+    int* d_failed, std::string* error = nullptr, cudaStream_t stream = nullptr,
+    Real inf_k = 0.0f, Real inf_omega = 0.0f);
 
 bool apply_rans_implicit_gpu(DeviceMesh& mesh, Real Re,
     const Real* d_min_dt, std::string* error = nullptr,

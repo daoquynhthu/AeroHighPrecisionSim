@@ -42,6 +42,7 @@ if(AEROSIM_USE_CUDA)
         cfd/gpu_diagnostics.cu
         cfd/gpu_ddes.cu
         cfd/gpu_rans.cu
+        cfd/gpu_sst.cu
         cfd/gpu_solver.cu
         cfd/gpu_timestep.cu
         cfd/gpu_update.cu

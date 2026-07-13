@@ -47,6 +47,12 @@ DeviceMesh& DeviceMesh::operator=(DeviceMesh&& other) noexcept {
     d_mu_ = other.d_mu_;
     d_lam_ = other.d_lam_;
     d_delta_ddes_ = other.d_delta_ddes_;
+    d_q_k_ = other.d_q_k_;
+    d_q_omega_ = other.d_q_omega_;
+    d_residual_k_ = other.d_residual_k_;
+    d_residual_omega_ = other.d_residual_omega_;
+    d_grad_k_ = other.d_grad_k_;
+    d_grad_omega_ = other.d_grad_omega_;
     d_w_ = other.d_w_;
     other.cell_count_ = 0;
     other.face_count_ = 0;
@@ -65,6 +71,9 @@ DeviceMesh& DeviceMesh::operator=(DeviceMesh&& other) noexcept {
     other.d_mu_ = nullptr;
     other.d_lam_ = nullptr;
     other.d_delta_ddes_ = nullptr;
+    other.d_q_k_ = other.d_q_omega_ = nullptr;
+    other.d_residual_k_ = other.d_residual_omega_ = nullptr;
+    other.d_grad_k_ = other.d_grad_omega_ = nullptr;
     other.d_w_ = nullptr;
     d_halo_indices_ = other.d_halo_indices_;
     d_halo_send_buf_ = other.d_halo_send_buf_;
@@ -188,6 +197,12 @@ void DeviceMesh::release() {
     cuda_free_safe(d_mu_);
     cuda_free_safe(d_lam_);
     cuda_free_safe(d_delta_ddes_);
+    cuda_free_safe(d_q_k_);
+    cuda_free_safe(d_q_omega_);
+    cuda_free_safe(d_residual_k_);
+    cuda_free_safe(d_residual_omega_);
+    cuda_free_safe(d_grad_k_);
+    cuda_free_safe(d_grad_omega_);
     cuda_free_safe(d_w_);
     cuda_free_safe(d_color_offsets_);
     cuda_free_safe(d_halo_indices_);
@@ -204,6 +219,9 @@ void DeviceMesh::release() {
     d_volume_ = d_h_min_ = d_wall_distance_ = nullptr;
     d_cx_ = d_cy_ = d_cz_ = nullptr;
     d_face_cx_ = d_face_cy_ = d_face_cz_ = nullptr;
+    d_q_k_ = d_q_omega_ = nullptr;
+    d_residual_k_ = d_residual_omega_ = nullptr;
+    d_grad_k_ = d_grad_omega_ = nullptr;
     cell_count_ = 0;
     face_count_ = 0;
     n_colors_ = 0;
@@ -506,6 +524,25 @@ bool DeviceMesh::allocate_ddes() {
     std::size_t nc = static_cast<std::size_t>(cell_count_);
     if (!cuda_check(cudaMalloc(&d_delta_ddes_, nc * sizeof(Real)), "cudaMalloc d_delta_ddes_", nullptr)) return false;
     if (!cuda_check(cudaMemset(d_delta_ddes_, 0, nc * sizeof(Real)), "cudaMemset d_delta_ddes_", nullptr)) return false;
+    return true;
+}
+
+bool DeviceMesh::allocate_sst() {
+    if (cell_count_ == 0) return false;
+    if (d_q_k_ != nullptr) return true;
+    std::size_t nc = static_cast<std::size_t>(cell_count_);
+    if (!cuda_check(cudaMalloc(&d_q_k_, nc * sizeof(Real)), "cudaMalloc d_q_k_", nullptr)) return false;
+    if (!cuda_check(cudaMalloc(&d_q_omega_, nc * sizeof(Real)), "cudaMalloc d_q_omega_", nullptr)) return false;
+    if (!cuda_check(cudaMalloc(&d_residual_k_, nc * sizeof(Real)), "cudaMalloc d_residual_k_", nullptr)) return false;
+    if (!cuda_check(cudaMalloc(&d_residual_omega_, nc * sizeof(Real)), "cudaMalloc d_residual_omega_", nullptr)) return false;
+    if (!cuda_check(cudaMalloc(&d_grad_k_, nc * 3 * sizeof(Real)), "cudaMalloc d_grad_k_", nullptr)) return false;
+    if (!cuda_check(cudaMalloc(&d_grad_omega_, nc * 3 * sizeof(Real)), "cudaMalloc d_grad_omega_", nullptr)) return false;
+    if (!cuda_check(cudaMemset(d_q_k_, 0, nc * sizeof(Real)), "cudaMemset d_q_k_", nullptr)) return false;
+    if (!cuda_check(cudaMemset(d_q_omega_, 0, nc * sizeof(Real)), "cudaMemset d_q_omega_", nullptr)) return false;
+    if (!cuda_check(cudaMemset(d_residual_k_, 0, nc * sizeof(Real)), "cudaMemset d_residual_k_", nullptr)) return false;
+    if (!cuda_check(cudaMemset(d_residual_omega_, 0, nc * sizeof(Real)), "cudaMemset d_residual_omega_", nullptr)) return false;
+    if (!cuda_check(cudaMemset(d_grad_k_, 0, nc * 3 * sizeof(Real)), "cudaMemset d_grad_k_", nullptr)) return false;
+    if (!cuda_check(cudaMemset(d_grad_omega_, 0, nc * 3 * sizeof(Real)), "cudaMemset d_grad_omega_", nullptr)) return false;
     return true;
 }
 

@@ -1557,49 +1557,58 @@ Tasks:
 
 ### 13.2 k-ω SST (2-equation)
 
+**Architecture decision**: SST uses separate device buffers for k and ω (not NVAR=7). NVAR stays 6; k and ω are stored in device-only arrays `d_q_k_`, `d_q_omega_` allocated by `DeviceMesh::allocate_sst()`. This minimizes risk to core solver and avoids NVAR migration cost.
+
 Files:
 
 | File | Action | Content |
 |------|--------|---------|
-| `include/aero/cfd/rans_sst.hpp` | NEW | SST coefficients: `beta_i`, `gamma_i`, `sigma_k1/k2`, `sigma_omega1/omega2`, `alpha1/alpha2` — Menter 2003 |
-| `src/aero/cfd/gpu_sst.cu` | NEW | `sst_source_kernel`: production P_k, P_ω; destruction D_k, D_ω; cross-diffusion F1 term |
-| `src/aero/cfd/cfd_state.hpp` | MODIFY | NVAR=7 (add `rho_k`, `rho_omega`) when `turbulence_model=SST` |
-
-State extension (SST-2eq):
-
-```text
-Q = [rho, rho*u, rho*v, rho*w, rho*E, rho*k, rho*omega]
-W = [rho, u, v, w, p, T, a, k, omega]
-```
+| `include/aero/cfd/rans_sst.hpp` | NEW | SST coefficients (Menter 2003): `sigma_k1/k2`, `sigma_w1/w2`, `beta_1/2`, `gamma_1/2`, `beta_star`, `karman`, `a1`; `compute_sst_blending()` (F1/F2/CD_kw) and `compute_sst_source()` (P_k/D_k/P_w/D_w/cross-diffusion) |
+| `include/aero/cfd/device_mesh.hpp` | MODIFY | Add SST buffer accessors: `allocate_sst()`, `has_sst()`, `q_k_device()`, `q_omega_device()`, `residual_k/omega_device()`, `grad_k/omega_device()` |
+| `src/aero/cfd/device_mesh.cu` | MODIFY | Implement `allocate_sst()`, update `release()` and move constructor for SST pointers |
+| `src/aero/cfd/gpu_sst.cu` | NEW | `sst_gradient_kernel`, `sst_divide_volume_kernel`, `sst_advection_kernel`, `sst_source_kernel`, `sst_update_kernel`, `sst_init_kernel`, `clear_sst_residual_kernel` + wrapper functions |
+| `include/aero/cfd/gpu_solver_internal.hpp` | MODIFY | Declare `compute_sst_*_gpu` functions |
+| `src/aero/aero/CMakeLists.txt` | MODIFY | Add `gpu_sst.cu` |
+| `src/aero/cfd/gpu_rans.cu` | MODIFY | `compute_turbulence_source_gpu` dispatches to SST pipeline |
+| `src/aero/cfd/gpu_solver.cu` | MODIFY | SST buffer allocation + k/ω init before solve loop; pass inf_k/inf_omega to turbulence calls |
+| `src/aero/cfd/jacobian_free.cu` | MODIFY | SST freestream computation for JFV product path |
+| `include/aero/cfd/real.hpp` | MODIFY | Add `real_tanh` (needed by SST blending) |
 
 Tasks:
 
-- [ ] NVAR=7 structural changes: `cfd_state.hpp` (add k/omega fields, update cons_to_prim), `device_mesh.hpp` (NVAR=7), `gpu_update.cu` (L2 norm includes 2 new vars)
-- [ ] k-ω SST production: `P_k = min(τ_ij·S_ij, 10*β*ρkω)`, `P_ω = γ/ν_t * P_k`
-- [ ] k-ω SST destruction: `D_k = β*ρkω`, `D_ω = βρω²`
-- [ ] SST blending function F1: `F1 = tanh(Φ₁⁴)`, where `Φ₁ = min[max(√k/(0.09ωd), 500ν/(ρd²ω)), 4ρσ_ω₂k/(CD_kω·d²)]`
-- [ ] Cross-diffusion: `CD_kω = max(2ρσ_ω₂·∇k·∇ω/ω, 1e-10)`
-- [ ] Stress limiter: `ν_t = a₁k / max(a₁ω, F₂·S)` with `F₂ = tanh[max(√k/(0.09ωd), 500ν/(ρd²ω))]²`
-- [ ] Wall BC: `k_wall = 0`, `ω_wall = 6ν/(β₁y²)` (or Menter's `ω_wall = 60ν/(β₁Δy²)`)
-- [ ] Inlet BC: `k_in = 1.5*(Tu*U_inf)²`, `ω_in = √k/(0.09·L_t)`
+- [x] `rans_sst.hpp`: CPU SST coefficients and blending/source functions
+- [x] SST buffer infrastructure: `device_mesh.hpp/.cu` (allocate_sst, accessors, release)
+- [x] `sst_gradient_kernel`: Green-Gauss gradient for k and ω (separate from main gradient)
+- [x] `sst_divide_volume_kernel`: divide accumulated gradients by cell volume
+- [x] `sst_advection_kernel`: passive-scalar upwind advection for k and ω (face loop)
+- [x] `sst_source_kernel`: production P_k, P_ω; destruction D_k, D_ω; cross-diffusion F1 term; stress limiter ν_t
+- [x] `sst_update_kernel`: forward-Euler update for k and ω with positivity enforcement
+- [x] `sst_init_kernel`: initialize k and ω to freestream values
+- [x] `clear_sst_residual_kernel`: zero out k and ω residual arrays
+- [x] Blending function F1: `F1 = tanh(Φ₁⁴)`, where `Φ₁ = min[max(√k/(0.09ωd), 500ν/(ρd²ω)), 4ρσ_ω₂k/(CD_kω·d²)]`
+- [x] Cross-diffusion: `CD_kω = max(2ρσ_ω₂·∇k·∇ω/ω, 1e-10)`
+- [x] Stress limiter: `ν_t = a₁k / max(a₁ω, F₂·S)` with `F₂ = tanh[max(√k/(0.09ωd), 500ν/(ρd²ω))]²`
+- [x] `compute_turbulence_source_gpu` dispatches to SST (gradients + advection + source per iteration)
+- [x] Solver integration: SST buffer alloc + init before loop, inf_k/inf_omega from 0.1% Tu, mu_t/mu=0.1
+- [ ] Viscous diffusion coupling: add k and ω diffusion to `gpu_viscous.cu` (sigma_k * mu_eff, sigma_w * mu_eff)
+- [ ] `apply_rans_implicit_gpu` for SST: point-implicit treatment of k and ω sources (viscous=false must still diffuse k/ω)
+- [ ] Wall BC: `k_wall = 0`, `ω_wall = 6ν/(β₁y²)` (clamped via SST destruction near wall; no explicit BC change needed)
+- [ ] Farfield BC: k_inf, omega_inf from tu_inf (0.1%) and mu_t/mu ratio (0.1) — completed in solver init
 
-### 13.3 GPU kernels for SST
+### 13.3 GPU kernels for SST (residual coupling — deferred)
 
 Files:
 
 | File | Action | Content |
 |------|--------|---------|
-| `src/aero/cfd/gpu_sst.cu` | NEW | `sst_source_kernel`: per-cell k and ω source terms (production + destruction + cross-diffusion), atomicAdd to residual indices 5,6 |
 | `src/aero/cfd/gpu_viscous.cu` | MODIFY | `viscous_flux_kernel_atomic`: add `k` and `ω` diffusion terms (σ_k * μ_eff for k, σ_ω * μ_eff for ω) |
-| `src/aero/cfd/gpu_update.cu` | MODIFY | `update_and_l2_kernel`: handle NVAR=7, read/write indices 5,6 |
+| `src/aero/cfd/gpu_update.cu` | MODIFY | L2 norm of Q unchanged (separate SST update); but add k/ω validity check |
 
 Tasks:
 
-- [ ] `sst_source_kernel`: read primitive k, ω, velocity gradient tensor S_ij, wall distance; compute P_k, P_ω, D_k, D_ω; atomicAdd to residual[5] (k) and residual[6] (ω)
 - [ ] Viscous kernel extension: `mu_eff_k = mu + sigma_k * mu_t`, `mu_eff_omega = mu + sigma_omega * mu_t`; diffusion flux for k, ω
-- [ ] Update kernel: L2 norm accumulates 7 components; `isfinite` check on k and ω (both must be >= 0)
 - [ ] `viscous=false` with `SST`: viscous terms for k/ω must still be computed (diffusion is essential for turbulence model stability)
-- [ ] Farfield BC: k_inf, omega_inf from freestream turbulence intensity `tu_inf` (default 0.1%) and turbulent length scale ratio `mu_t/mu` (default 0.1)
+- [ ] SST point-implicit (diagonal contribution) for `apply_rans_implicit_gpu`
 
 Tests:
 

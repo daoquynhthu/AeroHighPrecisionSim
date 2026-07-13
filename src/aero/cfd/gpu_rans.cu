@@ -267,11 +267,22 @@ bool compute_rans_source_gpu(DeviceMesh& mesh, Real gamma, Real Re, Real mu_ref,
 }
 
 bool compute_turbulence_source_gpu(DeviceMesh& mesh, const CfdConfig& config,
-    int* d_failed, std::string* error, cudaStream_t stream) {
+    int* d_failed, std::string* error, cudaStream_t stream,
+    Real inf_k, Real inf_omega) {
     if (config.turbulence_model == TurbulenceModel::LAMINAR) return true;
+
     if (config.turbulence_model == TurbulenceModel::SST) {
-        if (error) *error = "SST not yet implemented in compute_turbulence_source_gpu";
-        return false;
+        if (!mesh.has_sst()) {
+            if (error) *error = "SST buffers not allocated";
+            return false;
+        }
+        if (!clear_sst_residual_gpu(mesh, error, stream)) return false;
+        if (!compute_sst_gradients_gpu(mesh, d_failed, error, stream)) return false;
+        if (!compute_sst_advection_gpu(mesh, inf_k, inf_omega, d_failed, error, stream)) return false;
+        if (!compute_sst_source_gpu(mesh, config.gamma, config.Re,
+                config.mu_ref, config.T_ref, config.sutherland_T,
+                d_failed, error, stream)) return false;
+        return true;
     }
 
     const Real* d_delta = nullptr;

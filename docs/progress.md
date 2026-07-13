@@ -1089,3 +1089,6 @@
 - 验证：TestCfdGpu 69/69 PASS, TestCfdEuler 14/14 PASS, all CFD targets build clean.
 
 
+
+2026-07-14
+- Phase 13.2 k-omega SST Phase 3 (GPU solver integration): added sst_init_kernel and clear_sst_residual_kernel to gpu_sst.cu; implemented SST dispatch in compute_turbulence_source_gpu (gpu_rans.cu) that calls clear/residual/advection/gradients/source per iteration; added SST buffer alloc + k/omega init in gpu_solver.cu before solve loop; passed inf_k/inf_omega to both explicit and Newton turbulence calls; added same computation in jacobian_free.cu for JFV product path. All CUDA files compile clean.
