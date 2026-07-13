@@ -4,6 +4,7 @@
 #include "aero/cfd/real_fwd.hpp"
 #include "aero/cfd/cfd_state.hpp"
 #include "aero/cfd/diagnostics.hpp"
+#include "aero/cfd/turbulence_model.hpp"
 
 namespace aerosp {
 namespace aero {
@@ -36,8 +37,8 @@ struct CfdConfig {
     Real sutherland_T = 110.4f;
     Real wall_temperature = 300.0f;
 
-    // RANS SA turbulence
-    bool turbulence = false;
+    // RANS turbulence model (LAMINAR=0, SA=1, SA_DDES=2, SST=3)
+    TurbulenceModel turbulence_model = TurbulenceModel::LAMINAR;
 
     // MMS source term (empty = disabled)
     std::vector<EulerFlux> mms_source;

@@ -2825,6 +2825,30 @@ RANS 核函数每单元重新计算循环不变 SA 常数（cw1、cv1³、cw3⁶
 CUDA Release 编译缺少强制 `-O3` 优化。nvcc 默认 `-O2`。
 [FIXED 2026-07-13] `CMAKE_CUDA_FLAGS` 添加 `-O3`。
 
+## Phase 13 SA-DDES Audit (2026-07-13)
+
+**PH13-1** [CRITICAL] `gpu_ddes.cu:70`
+`rd` 分母缺失 `real_sqrt(uij_sq)`，使用 `uij_sq`（平方和）而非 `real_sqrt(uij_sq)`（Frobenius 范数），导致 SA-DDES 屏蔽失效，退化至标准 SA。
+[FIXED 2026-07-13] `uij_sq` → `real_sqrt(uij_sq)`。
+
+**PH13-2** [CRITICAL] `cfd_solver.cpp:530`
+CPU 半隐式修正使用 `mesh_.cells[i].h_min`（最小边长）而非 `mesh_.cells[i].wall_distance`（到壁面真实距离），且分子多乘 `karman*karman`，与 GPU 端不匹配。
+[FIXED 2026-07-13] `h_min` → `wall_distance`，移除多余 `karman*karman`。
+
+**PH13-3** [MEDIUM] `device_mesh.cu:503`
+`allocate_ddes()` 不防重复分配，连续调用两次会泄漏第一次 `cudaMalloc`。`allocate_viscous()` 存在相同问题。
+[FIXED 2026-07-13] `allocate_ddes()` 增加 `if (d_delta_ddes_ != nullptr) return true;` 守卫。
+
+**PH13-4** [MEDIUM] `gpu_rans.cu:269`
+`compute_turbulence_source_gpu` 对 SST 静默回退到 SA 源项。
+[FIXED 2026-07-13] 添加 `if (SST) return false` + 错误消息。
+
+**PH13-5** [LOW] `turbulence_model.hpp`
+缺少 `constexpr` 字符串映射，字符串逻辑在 `gpu_solver.cu`、`cfd_solver.cpp`、`test_cfd_gpu.cpp` 三处重复。
+
+**PH13-6** [LOW] `gpu_ddes.cu` / `gpu_rans.cu`
+`ddes_sutherland_mu` 与 `d_sutherland_mu` 完全重复，建议统一。
+
 **PERF2-12** [MEDIUM] 多个文件
 多数热点核函数缺 `__launch_bounds__` 标注：`gg_gradient_kernel_*`、`update_minmax_kernel_*`、`bj_limiter_kernel_*`、`viscous_flux_kernel_*`、`wall_force_kernel`、`rans_source_kernel`、`timestep_kernel`、`update_and_l2_kernel`、`compute_diag_kernel`、`sweep_kernel`。建议面级核函数加 `__launch_bounds__(128)`，单元级核函数加 `__launch_bounds__(256)`。
 [FIXED 2026-07-13] 32 个核函数添加 `__launch_bounds__`（128 面级/256 单元级/BLAS），涉及 10 个文件：`reconstruction_gpu.cu`、`gpu_wall.cu`、`gpu_rans.cu`、`gpu_timestep.cu`、`gpu_update.cu`、`jacobian_free.cu`、`lusgs_gpu.cu`、`gpu_diagnostics.cu`、`fgmres_gpu.cu`、`exchange_halo.cu`。

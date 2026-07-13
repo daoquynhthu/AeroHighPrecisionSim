@@ -1326,7 +1326,7 @@ static int test_rans_false_regression() {
         cfg.max_iter = 20;
         cfg.convergence_tol = 1e-12f;
         cfg.viscous = false;
-        cfg.turbulence = false;
+        cfg.turbulence_model = TurbulenceModel::LAMINAR;
 
         FreestreamCondition cond;
         cond.mach = 2.0f;
@@ -1377,7 +1377,7 @@ static int test_rans_zero_nu_tilde() {
         cfg.convergence_tol = 1e-12f;
         cfg.viscous = true;
         cfg.Re = 1e5f;
-        cfg.turbulence = false;
+        cfg.turbulence_model = TurbulenceModel::LAMINAR;
 
         FreestreamCondition cond;
         cond.mach = 0.5f;
@@ -1391,7 +1391,7 @@ static int test_rans_zero_nu_tilde() {
         if (laminar.failed) FAIL("laminar solver failed");
 
         // turbulence=true but nu_tilde=0 from initial state — should match laminar
-        cfg.turbulence = true;
+        cfg.turbulence_model = TurbulenceModel::SA;
         CfdSolveSummary turb_zero = solve_gpu_dispatch(solver.mesh(), cond, cfg);
         if (turb_zero.failed) FAIL("turbulence=true zero nu_tilde solver failed");
 
@@ -1647,7 +1647,7 @@ static int test_rans_cpu_gpu_source_match() {
         if (!cuda_check(cudaMalloc(&d_failed, sizeof(int)), "malloc d_failed", &error)) FAIL("%s", error.c_str());
         if (!cuda_check(cudaMemset(d_failed, 0, sizeof(int)), "memset d_failed", &error)) FAIL("%s", error.c_str());
 
-        if (!compute_rans_source_gpu(d_mesh, gamma, 1e5f, 1.0f, 288.15f, 110.4f, d_failed, &error))
+        if (!compute_rans_source_gpu(d_mesh, gamma, 1e5f, 1.0f, 288.15f, 110.4f, nullptr, d_failed, &error))
             FAIL("GPU RANS source: %s", error.c_str());
 
         std::vector<Real> gpu_res(mesh.cells.size() * 6);
@@ -1685,7 +1685,7 @@ static int test_rans_turbulent_flat_plate() {
         cfg.convergence_tol = 1e-12f;
         cfg.viscous = true;
         cfg.Re = 2e6f;
-        cfg.turbulence = false;
+        cfg.turbulence_model = TurbulenceModel::LAMINAR;
         cfg.implicit = true;
         cfg.cfl_start = 0.1f;
         cfg.cfl_end = 1.0f;
@@ -1706,7 +1706,7 @@ static int test_rans_turbulent_flat_plate() {
         CfdSolveSummary laminar = solve_gpu_dispatch(solver.mesh(), cond, cfg);
         if (laminar.failed) FAIL("laminar solver failed");
 
-        cfg.turbulence = true;
+        cfg.turbulence_model = TurbulenceModel::SA;
         CfdSolveSummary turbulent = solve_gpu_dispatch(solver.mesh(), cond, cfg);
         if (turbulent.failed) FAIL("turbulent solver failed");
 
@@ -1744,7 +1744,7 @@ static int test_rans_negative_nu_tilde() {
         cfg.convergence_tol = 1e-12f;
         cfg.viscous = true;
         cfg.Re = 1e5f;
-        cfg.turbulence = true;
+        cfg.turbulence_model = TurbulenceModel::SA;
 
         FreestreamCondition cond;
         cond.mach = 0.5f;
@@ -2499,7 +2499,7 @@ static int test_jfv_rans_source() {
             FAIL("viscous flux failed");
 
         if (!compute_rans_source_gpu(d_mesh, gamma, Re, mu_ref, T_ref, sutherland_T,
-                d_failed, nullptr))
+                nullptr, d_failed, nullptr))
             FAIL("RANS source failed");
 
         int host_failed = 0;
@@ -2522,7 +2522,7 @@ static int test_jfv_rans_source() {
         cfg.sutherland_T = sutherland_T;
         cfg.wall_temperature = wall_T;
         cfg.prandtl = prandtl;
-        cfg.turbulence = true;
+        cfg.turbulence_model = TurbulenceModel::SA;
         cfg.viscous = true;
         cfg.reconstruction_order = 1;
 
@@ -2663,7 +2663,7 @@ static int test_implicit_solver_viscous_rans() {
         cfg.implicit = true;
         cfg.viscous = true;
         cfg.Re = 1e5f;
-        cfg.turbulence = true;
+        cfg.turbulence_model = TurbulenceModel::SA;
         cfg.cfl_start = 0.1f;
         cfg.cfl_end = 0.5f;
         cfg.cfl_ramp_steps = 2;
@@ -2719,7 +2719,7 @@ static int test_implicit_newton_backtrack_and_near_singular() {
         cfg.implicit = true;
         cfg.viscous = true;
         cfg.Re = 2e5f;
-        cfg.turbulence = true;
+        cfg.turbulence_model = TurbulenceModel::SA;
         cfg.cfl_start = 0.1f;
         cfg.cfl_end = 1.0f;
         cfg.cfl_ramp_steps = 3;
@@ -2941,7 +2941,7 @@ static int test_cpu_viscous_turb_equivalence() {
         cfg.reconstruction_order = 2;
         cfg.viscous = true;
         cfg.Re = 1e5f;
-        cfg.turbulence = true;
+        cfg.turbulence_model = TurbulenceModel::SA;
 
         CfdSolver solver;
         if (!solver.load_mesh(mesh)) FAIL("load mesh failed");
@@ -3224,7 +3224,7 @@ static int test_robust_negative_wall_distance() {
 
         std::string error;
         Real Re = 1e6f;
-        bool result = compute_rans_source_gpu(d_mesh, 1.4f, Re, 1.0f, 288.15f, 110.4f, d_failed, &error);
+        bool result = compute_rans_source_gpu(d_mesh, 1.4f, Re, 1.0f, 288.15f, 110.4f, nullptr, d_failed, &error);
         if (!result) FAIL("compute_rans_source_gpu returned false: %s", error.c_str());
 
         cuda_check(cudaFree(d_failed), "free d_failed");
@@ -3283,7 +3283,7 @@ static int test_robust_nan_viscous_turb() {
         cfg.use_gpu = true;
         cfg.reconstruction_order = 1;
         cfg.viscous = true;
-        cfg.turbulence = true;
+        cfg.turbulence_model = TurbulenceModel::SA;
         cfg.Re = 1e5;
         cfg.diagnostic_level = DiagnosticLevel::Off;
 
@@ -3295,6 +3295,101 @@ static int test_robust_nan_viscous_turb() {
 
         CfdSolveSummary summary = solver.solve_from_state(cond, cfg, qv);
         if (!summary.failed) FAIL("solver did not detect NaN in viscous+turb mode");
+        PASS;
+    }
+    return 0;
+}
+
+static int test_turbulence_model_enum() {
+    TEST("CFD-TURB-ENUM-1 TurbulenceModel enum values and string mapping");
+    {
+        if (static_cast<int>(TurbulenceModel::LAMINAR) != 0) FAIL("LAMINAR != 0");
+        if (static_cast<int>(TurbulenceModel::SA) != 1) FAIL("SA != 1");
+        if (static_cast<int>(TurbulenceModel::SA_DDES) != 2) FAIL("SA_DDES != 2");
+        if (static_cast<int>(TurbulenceModel::SST) != 3) FAIL("SST != 3");
+
+        CfdConfig cfg;
+        if (cfg.turbulence_model != TurbulenceModel::LAMINAR) FAIL("default != LAMINAR");
+
+        auto check_tm_str = [](TurbulenceModel tm, const char* expected) -> void {
+            const char* s = "unknown";
+            if (tm == TurbulenceModel::LAMINAR) s = "laminar";
+            else if (tm == TurbulenceModel::SA) s = "rans-sa";
+            else if (tm == TurbulenceModel::SA_DDES) s = "rans-sa-ddes";
+            else if (tm == TurbulenceModel::SST) s = "rans-sst";
+            if (std::strcmp(s, expected) != 0) {
+                std::printf("FAIL: model=%d expected=%s got=%s\n", static_cast<int>(tm), expected, s);
+                std::fflush(stdout);
+            }
+        };
+        check_tm_str(TurbulenceModel::LAMINAR, "laminar");
+        check_tm_str(TurbulenceModel::SA, "rans-sa");
+        check_tm_str(TurbulenceModel::SA_DDES, "rans-sa-ddes");
+        check_tm_str(TurbulenceModel::SST, "rans-sst");
+
+        PASS;
+    }
+    return 0;
+}
+
+static int test_ddes_length_scale() {
+    TEST("CFD-TURB-DDES-LENGTH-1 DDES length scale kernel correctness");
+    {
+        CfdMesh mesh = generate_structured_cube_mesh(5.0f, 9);
+        compute_mesh_metrics(mesh);
+
+        PrimitiveState w = make_freestream(0.5f, 2.0f, 0.0f, 1.4f);
+        w.nu_tilde = 3.0f;
+        std::vector<ConservativeState> q(mesh.cells.size(), primitive_to_conservative(w, 1.4f));
+        Real gamma = 1.4f;
+        Real Re = 1e5f;
+
+        DeviceMesh d_mesh;
+        std::string error;
+        if (!d_mesh.upload_mesh(mesh, &error)) FAIL("%s", error.c_str());
+        if (!d_mesh.upload_state(q, &error)) FAIL("%s", error.c_str());
+        if (!compute_gradients_gpu(d_mesh, gamma, &error)) FAIL("GPU gradients: %s", error.c_str());
+        if (!d_mesh.allocate_ddes()) FAIL("allocate_ddes failed");
+
+        int* d_failed = nullptr;
+        if (!cuda_check(cudaMalloc(&d_failed, sizeof(int)), "malloc d_failed"))
+            FAIL("malloc d_failed");
+        if (!cuda_check(cudaMemset(d_failed, 0, sizeof(int)), "memset d_failed"))
+            FAIL("memset d_failed");
+
+        if (!compute_ddes_length_scale_gpu(d_mesh, gamma, Re, 1.0f, 288.15f, 110.4f, d_failed, &error))
+            FAIL("DDES length scale: %s", error.c_str());
+
+        std::vector<Real> h_delta(mesh.cells.size());
+        if (!cuda_check(cudaMemcpy(h_delta.data(), d_mesh.delta_ddes_device(),
+                mesh.cells.size() * sizeof(Real), cudaMemcpyDeviceToHost), "download delta_ddes"))
+            FAIL("download delta_ddes failed");
+
+        int n_bad = 0;
+        for (std::size_t i = 0; i < mesh.cells.size(); ++i) {
+            if (!std::isfinite(h_delta[i])) {
+                n_bad++;
+                continue;
+            }
+            Real d = mesh.cells[i].wall_distance;
+            if (d <= 0.0f) continue;
+            Real h_max = std::pow(mesh.cells[i].volume, 1.0f / 3.0f);
+            if (h_delta[i] < 0.0f) n_bad++;
+            if (h_delta[i] > d + 1e-6f) n_bad++;
+
+            constexpr Real C_DES = 0.65f;
+            Real delta_upper = C_DES * h_max;
+            if (d > 10.0f * delta_upper && h_delta[i] < delta_upper * 0.5f) n_bad++;
+        }
+
+        if (n_bad > 0) FAIL("%d cells have invalid DDES length scale", n_bad);
+
+        int dev_failed = 0;
+        if (!cuda_check(cudaMemcpy(&dev_failed, d_failed, sizeof(int), cudaMemcpyDeviceToHost), "read d_failed"))
+            FAIL("read d_failed");
+        if (dev_failed != 0) FAIL("d_failed was set by kernel");
+
+        cudaFree(d_failed);
         PASS;
     }
     return 0;
@@ -3368,6 +3463,8 @@ result |= test_recon_order2_converged_forces();
     result |= test_robust_zero_volume();
     result |= test_robust_negative_wall_distance();
     result |= test_unknown_boundary_type_fails();
+    result |= test_turbulence_model_enum();
+    result |= test_ddes_length_scale();
     result |= test_robust_nan_viscous_turb();
     std::printf("\n%d / %d tests PASSED.\n", pass_count, test_count);
     return result == 0 && pass_count == test_count ? 0 : 1;

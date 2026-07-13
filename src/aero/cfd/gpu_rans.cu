@@ -1,5 +1,6 @@
 #include "aero/cfd/cuda_utils.hpp"
 #include "aero/cfd/real.hpp"
+#include "aero/cfd/cfd_config.hpp"
 #include "aero/cfd/device_mesh.hpp"
 #include "aero/cfd/gpu_solver_internal.hpp"
 #include <cuda_runtime.h>
@@ -28,6 +29,7 @@ __global__ void __launch_bounds__(256) rans_source_kernel(
     const Real* d_gradients,
     const Real* d_volume,
     const Real* d_wall_distance,
+    const Real* d_delta_ddes,
     int n_cells, int nvar,
     Real gamma, Real Re,
     Real mu_ref, Real T_ref, Real sutherland_T,
@@ -58,6 +60,11 @@ __global__ void __launch_bounds__(256) rans_source_kernel(
     Real wall_distance = d_wall_distance[idx];
     if (wall_distance <= 0.0f || !real_isfinite(wall_distance)) {
         wall_distance = 1e30f;
+    }
+
+    Real dest_len_scale = (d_delta_ddes != nullptr) ? d_delta_ddes[idx] : wall_distance;
+    if (!real_isfinite(dest_len_scale) || dest_len_scale <= 0.0f) {
+        dest_len_scale = wall_distance;
     }
 
     const PrimitiveGradient* g = reinterpret_cast<const PrimitiveGradient*>(d_gradients) + idx;
@@ -102,20 +109,20 @@ __global__ void __launch_bounds__(256) rans_source_kernel(
 
         Real production = cb1 * omega_tilde * nu_tilde;
 
-        Real r = nu_tilde / (omega_tilde * karman * karman * wall_distance * wall_distance + 1e-30f);
+        Real r = nu_tilde / (omega_tilde * karman * karman * dest_len_scale * dest_len_scale + 1e-30f);
         if (r > 10.0f) r = 10.0f;
         Real r6 = r*r*r*r*r*r;
         Real fw_g = r + cw2 * (r6 - r);
         Real fw_num = 1.0f + cw3_6;
         Real fw_den = fw_g*fw_g*fw_g*fw_g*fw_g*fw_g + cw3_6 + 1e-30f;
         Real fw = fw_g * real_pow(fw_num / fw_den, Real(1.0 / 6.0));
-        Real destruction = cw1_val * fw * (nu_tilde / wall_distance) * (nu_tilde / wall_distance);
+        Real destruction = cw1_val * fw * (nu_tilde / dest_len_scale) * (nu_tilde / dest_len_scale);
 
         source = production - destruction + diffusion;
     } else {
         Real vort = d_sa_vorticity(*g);
         source = cb1 * (1.0f - ct3) * vort * nu_tilde
-               + cw1_val * (nu_tilde / wall_distance) * (nu_tilde / wall_distance)
+               + cw1_val * (nu_tilde / dest_len_scale) * (nu_tilde / dest_len_scale)
                + diffusion;
     }
 
@@ -234,7 +241,7 @@ bool apply_rans_implicit_per_cell_gpu(DeviceMesh& mesh, Real Re,
     return true;
 }
 
-bool compute_rans_source_gpu(DeviceMesh& mesh, Real gamma, Real Re, Real mu_ref, Real T_ref, Real sutherland_T, int* d_failed, std::string* error, cudaStream_t stream) {
+bool compute_rans_source_gpu(DeviceMesh& mesh, Real gamma, Real Re, Real mu_ref, Real T_ref, Real sutherland_T, const Real* d_delta_ddes, int* d_failed, std::string* error, cudaStream_t stream) {
     if (mesh.cell_count() == 0) return true;
     if (!mesh.gradients_device()) {
         if (error) *error = "gradients not allocated for RANS source";
@@ -251,10 +258,41 @@ bool compute_rans_source_gpu(DeviceMesh& mesh, Real gamma, Real Re, Real mu_ref,
         mesh.residual_device(),
         mesh.gradients_device(),
         cd.volume, cd.wall_distance,
+        d_delta_ddes,
         nc, DeviceMesh::NVAR, gamma, Re,
         mu_ref, T_ref, sutherland_T,
         d_failed);
     if (!cuda_check(cudaGetLastError(), "rans_source_kernel launch")) return false;
+    return true;
+}
+
+bool compute_turbulence_source_gpu(DeviceMesh& mesh, const CfdConfig& config,
+    int* d_failed, std::string* error, cudaStream_t stream) {
+    if (config.turbulence_model == TurbulenceModel::LAMINAR) return true;
+    if (config.turbulence_model == TurbulenceModel::SST) {
+        if (error) *error = "SST not yet implemented in compute_turbulence_source_gpu";
+        return false;
+    }
+
+    const Real* d_delta = nullptr;
+    if (config.turbulence_model == TurbulenceModel::SA_DDES) {
+        if (!mesh.has_delta_ddes() && !mesh.allocate_ddes()) {
+            if (error) *error = "allocate_ddes failed in turbulence source dispatch";
+            return false;
+        }
+        if (!compute_ddes_length_scale_gpu(mesh, config.gamma, config.Re,
+                config.mu_ref, config.T_ref, config.sutherland_T, d_failed, error, stream)) {
+            return false;
+        }
+        d_delta = mesh.delta_ddes_device();
+    }
+
+    if (!compute_rans_source_gpu(mesh, config.gamma, config.Re,
+            config.mu_ref, config.T_ref, config.sutherland_T,
+            d_delta, d_failed, error, stream)) {
+        return false;
+    }
+
     return true;
 }
 

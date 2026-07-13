@@ -122,6 +122,11 @@ public:
     Real* mu_device() const { return d_mu_; }
     Real* lam_device() const { return d_lam_; }
 
+    // DDES buffer
+    bool allocate_ddes();
+    bool has_delta_ddes() const { return d_delta_ddes_ != nullptr; }
+    Real* delta_ddes_device() const { return d_delta_ddes_; }
+
 private:
     std::size_t cell_count_ = 0;
     std::size_t face_count_ = 0;
@@ -153,6 +158,7 @@ private:
     Real* d_minmax_ = nullptr;
     Real* d_mu_ = nullptr;
     Real* d_lam_ = nullptr;
+    Real* d_delta_ddes_ = nullptr;
     Real* d_w_ = nullptr;
 
     int n_colors_ = 0;

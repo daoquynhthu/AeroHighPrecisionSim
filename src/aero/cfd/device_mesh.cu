@@ -46,6 +46,7 @@ DeviceMesh& DeviceMesh::operator=(DeviceMesh&& other) noexcept {
     d_minmax_ = other.d_minmax_;
     d_mu_ = other.d_mu_;
     d_lam_ = other.d_lam_;
+    d_delta_ddes_ = other.d_delta_ddes_;
     d_w_ = other.d_w_;
     other.cell_count_ = 0;
     other.face_count_ = 0;
@@ -63,6 +64,7 @@ DeviceMesh& DeviceMesh::operator=(DeviceMesh&& other) noexcept {
     other.d_minmax_ = nullptr;
     other.d_mu_ = nullptr;
     other.d_lam_ = nullptr;
+    other.d_delta_ddes_ = nullptr;
     other.d_w_ = nullptr;
     d_halo_indices_ = other.d_halo_indices_;
     d_halo_send_buf_ = other.d_halo_send_buf_;
@@ -185,6 +187,7 @@ void DeviceMesh::release() {
     cuda_free_safe(d_minmax_);
     cuda_free_safe(d_mu_);
     cuda_free_safe(d_lam_);
+    cuda_free_safe(d_delta_ddes_);
     cuda_free_safe(d_w_);
     cuda_free_safe(d_color_offsets_);
     cuda_free_safe(d_halo_indices_);
@@ -494,6 +497,15 @@ bool DeviceMesh::allocate_viscous() {
     if (!cuda_check(cudaMalloc(&d_lam_, nc * sizeof(Real)), "cudaMalloc d_lam_", nullptr)) return false;
     if (!cuda_check(cudaMemset(d_mu_, 0, nc * sizeof(Real)), "cudaMemset d_mu_", nullptr)) return false;
     if (!cuda_check(cudaMemset(d_lam_, 0, nc * sizeof(Real)), "cudaMemset d_lam_", nullptr)) return false;
+    return true;
+}
+
+bool DeviceMesh::allocate_ddes() {
+    if (cell_count_ == 0) return false;
+    if (d_delta_ddes_ != nullptr) return true;
+    std::size_t nc = static_cast<std::size_t>(cell_count_);
+    if (!cuda_check(cudaMalloc(&d_delta_ddes_, nc * sizeof(Real)), "cudaMalloc d_delta_ddes_", nullptr)) return false;
+    if (!cuda_check(cudaMemset(d_delta_ddes_, 0, nc * sizeof(Real)), "cudaMemset d_delta_ddes_", nullptr)) return false;
     return true;
 }
 

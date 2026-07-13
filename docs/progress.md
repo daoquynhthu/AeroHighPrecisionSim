@@ -1063,5 +1063,29 @@
 - **PHYS-21** [FIXED]: 显式路径收敛判据改为残差 L2（`dnrm2_gpu(d_residual, ...)`）。CPU 求解器同步改为残差 L2。移除 `state_delta_l2`。
 - 验证：所有变更后 `TestCfdGpu` 67/67 PASS，`TestCfdState`/`TestCfdRans`/`TestCfdViscous` 均编译通过。
 
+2026-07-13 — Phase 13 Step 1: TurbulenceModel enum + config migration
+- 创建 `include/aero/cfd/turbulence_model.hpp`：`enum TurbulenceModel { LAMINAR=0, SA=1, SA_DDES=2, SST=3 }`
+- `cfd_config.hpp`: `bool turbulence` → `TurbulenceModel turbulence_model`（默认 LAMINAR）
+- 所有 `config.turbulence` 引用迁移为枚举比较，`? 1 : 0` 参数迁移为 `static_cast<int>(...)`
+- 涉及文件：`cfd_solver.cpp`(7处)、`gpu_solver.cu`(8处)、`mms.cpp`(4处)、`jacobian_free.cu`(2处)、测试文件(16处)
+- 验证：`TestCfdGpu` 67/67 PASS，全部 CFD 目标编译通过
+
+2026-07-13
+- Phase 13 Step 1 (TurbulenceModel enum + config migration): implemented `TurbulenceModel` enum (`LAMINAR=0, SA=1, SA_DDES=2, SST=3`) in `turbulence_model.hpp`, modified `cfd_config.hpp` with `turbulence_model` field replacing `bool turbulence`, backwards compat in `CfdConfig::from_json()`.
+- Phase 13 Step 2 (SA-DDES length scale kernel): `gpu_ddes.cu` — `compute_ddes_length_scale_kernel` computes `fd` shielding function from velocity gradient tensor, then `Δ_DDES = d - fd * max(0, d - C_DES * h_max)`. Exposed via `compute_ddes_length_scale_gpu()` in `gpu_solver_internal.hpp`. Added `d_delta_ddes` array in `DeviceMesh`.
+- Tests: `CFD-TURB-ENUM-1` (enum values + string mapping), `CFD-TURB-DDES-LENGTH-1` (DDES length scale: finite, bounded by [0, wall distance], far-field fallback to C_DES*h_max).
+- 验证：`TestCfdGpu` 69/69 PASS (`test_turbulence_model_enum`, `test_ddes_length_scale` added).
+
+2026-07-13
+- Phase 13 Step 3 (SA residual kernel DDES integration): modified `rans_source_kernel` in `gpu_rans.cu` to accept `const Real* d_delta_ddes`; uses `dest_len_scale = delta_ddes` for destruction term (r, fw, destruction) when available, keeps `wall_distance` for production (fv2). Modified `compute_rans_source_gpu` signature with new `d_delta_ddes` param (nullptr = standard SA). Updated `gpu_solver.cu` (explicit + Newton paths) to allocate DDES buffer and call `compute_ddes_length_scale_gpu` before `compute_rans_source_gpu` when `turbulence_model == SA_DDES`. Updated `jacobian_free.cu` similarly. All 3 test calls updated.
+- 验证：`TestCfdGpu` 69/69 PASS, `TestCfdEuler`/`TestCfdViscous`/`TestCfdReconstruction` all build clean.
+
+2026-07-13
+- Phase 13 Step 4 (`compute_turbulence_source_gpu` dispatch): added dispatch function in `gpu_rans.cu` that selects LAMINAR (no-op), SA (`compute_rans_source_gpu` with nullptr), or SA_DDES (compute length scale + source with delta_ddes). Replaced all duplicated dispatch logic in `gpu_solver.cu` (explicit + Newton) and `jacobian_free.cu` with single calls to `compute_turbulence_source_gpu`. Forward-declared `CfdConfig` in `gpu_solver_internal.hpp`.
+- 验证：`TestCfdGpu` 69/69 PASS.
+
+2026-07-13
+- Phase 13 SA-DDES audit: 4 bugs fixed — PH13-1 (gpu_ddes.cu: rd missing real_sqrt, critical), PH13-2 (cfd_solver.cpp: CPU h_min vs wall_distance + extra karman^2, critical), PH13-3 (device_mesh.cu: allocate_ddes double-allocation leak), PH13-4 (gpu_rans.cu: SST silent fallback to SA). Added ISSUES.md entries for PH13-5 (constexpr string mapping) and PH13-6 (duplicated Sutherland function) as future tasks.
+- 验证：TestCfdGpu 69/69 PASS, TestCfdEuler 14/14 PASS, all CFD targets build clean.
 
 

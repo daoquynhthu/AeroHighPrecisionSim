@@ -11,6 +11,7 @@ namespace aero {
 namespace cfd {
 
 class GpuCommunicator;
+struct CfdConfig;
 
 bool compute_timestep_gpu(DeviceMesh& mesh, Real gamma, Real cfl, Real* d_min_dt,
     cudaStream_t stream = nullptr);
@@ -45,10 +46,17 @@ bool compute_viscous_flux_gpu(DeviceMesh& mesh, Real gamma, Real prandtl,
     Real mu_ref, Real T_ref, Real sutherland_T, Real Re, Real wall_T,
     int turbulence, int* d_failed, cudaStream_t stream = nullptr);
 
+bool compute_ddes_length_scale_gpu(DeviceMesh& mesh, Real gamma, Real Re,
+    Real mu_ref, Real T_ref, Real sutherland_T, int* d_failed,
+    std::string* error = nullptr, cudaStream_t stream = nullptr);
+
 bool compute_rans_source_gpu(DeviceMesh& mesh, Real gamma, Real Re,
     Real mu_ref, Real T_ref, Real sutherland_T,
-    int* d_failed, std::string* error = nullptr,
+    const Real* d_delta_ddes, int* d_failed, std::string* error = nullptr,
     cudaStream_t stream = nullptr);
+
+bool compute_turbulence_source_gpu(DeviceMesh& mesh, const CfdConfig& config,
+    int* d_failed, std::string* error = nullptr, cudaStream_t stream = nullptr);
 
 bool apply_rans_implicit_gpu(DeviceMesh& mesh, Real Re,
     const Real* d_min_dt, std::string* error = nullptr,

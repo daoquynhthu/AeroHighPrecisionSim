@@ -149,7 +149,7 @@ static int test_fuzz_nu_tilde_ratio() {
         cfg.max_iter = 10;
         cfg.reconstruction_order = 1;
         cfg.use_gpu = true;
-        cfg.turbulence = true;
+        cfg.turbulence_model = TurbulenceModel::SA;
         cfg.viscous = true;
 
         for (int i = 0; i < 10; ++i) {

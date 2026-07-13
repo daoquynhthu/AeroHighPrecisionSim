@@ -139,7 +139,7 @@ static int test_mms_sa_consistency() {
     cfg.reconstruction_order = 2;
     cfg.viscous = true;
     cfg.Re = 1e4;
-    cfg.turbulence = true;
+    cfg.turbulence_model = TurbulenceModel::SA;
     cfg.diagnostic_level = DiagnosticLevel::Basic;
     cfg.use_gpu = false;
 
@@ -289,7 +289,7 @@ static int test_mms_sa_order1_consistency() {
     cfg.reconstruction_order = 1;
     cfg.viscous = true;
     cfg.Re = 1e4;
-    cfg.turbulence = true;
+    cfg.turbulence_model = TurbulenceModel::SA;
     cfg.use_gpu = false;
 
     std::vector<ConservativeState> q_exact;
@@ -497,7 +497,7 @@ static int test_mms_sa_fixed_point() {
     cfg.reconstruction_order = 2;
     cfg.viscous = true;
     cfg.Re = 1e4;
-    cfg.turbulence = true;
+    cfg.turbulence_model = TurbulenceModel::SA;
     cfg.use_gpu = false;
     cfg.mms_solution = &mms;
 

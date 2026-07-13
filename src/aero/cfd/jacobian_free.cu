@@ -61,19 +61,17 @@ bool compute_jfv_product(DeviceMesh& mesh, const Real* d_v, Real* d_result,
     if (config.viscous) {
         if (!compute_viscous_flux_gpu(mesh, config.gamma, config.prandtl,
                 config.mu_ref, config.T_ref, config.sutherland_T,
-                config.Re, config.wall_temperature, config.turbulence ? 1 : 0, d_failed, stream)) {
+                config.Re, config.wall_temperature, static_cast<int>(config.turbulence_model), d_failed, stream)) {
             mesh.set_state_device(d_q_orig);
             if (error) *error = "JFV viscous flux failed";
             return false;
         }
     }
 
-    if (config.turbulence) {
-        if (!compute_rans_source_gpu(mesh, config.gamma, config.Re,
-                config.mu_ref, config.T_ref, config.sutherland_T,
-                d_failed, error, stream)) {
+    if (config.turbulence_model != TurbulenceModel::LAMINAR) {
+        if (!compute_turbulence_source_gpu(mesh, config, d_failed, error, stream)) {
             mesh.set_state_device(d_q_orig);
-            if (error) *error = "JFV RANS source failed";
+            if (error && error->empty()) *error = "JFV turbulence source failed";
             return false;
         }
     }

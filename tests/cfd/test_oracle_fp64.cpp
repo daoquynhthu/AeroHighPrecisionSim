@@ -124,7 +124,7 @@ static int test_fp64_rans_flat_plate() {
         cfg.T_ref = 288.15;
         cfg.mu_ref = 1.0;
         cfg.sutherland_T = 110.4;
-        cfg.turbulence = true;
+        cfg.turbulence_model = TurbulenceModel::SA;
 
         CfdSolver solver;
         if (!solver.load_mesh(mesh)) FAIL("load mesh failed");

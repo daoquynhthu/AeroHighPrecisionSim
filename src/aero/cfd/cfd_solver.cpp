@@ -408,9 +408,9 @@ CfdSolveSummary CfdSolver::solve_from_state(
             summary.diagnostics.state_bounds_history.push_back(iter_bounds);
         }
 
-        bool need_gradients = (config.reconstruction_order == 2) || config.viscous || config.turbulence;
+        bool need_gradients = (config.reconstruction_order == 2) || config.viscous || (config.turbulence_model != TurbulenceModel::LAMINAR);
         std::vector<PrimitiveLimiter> limiters_vec;
-        bool apply_limiting = config.reconstruction_order == 2 || config.turbulence;
+        bool apply_limiting = config.reconstruction_order == 2 || (config.turbulence_model != TurbulenceModel::LAMINAR);
 
         if (need_gradients) {
             grads = compute_green_gauss_gradients(mesh_, q, config.gamma, &w);
@@ -479,7 +479,7 @@ CfdSolveSummary CfdSolver::solve_from_state(
             if (!compute_viscous_flux_cpu(mesh_, q, visc_grads, config.gamma,
                     config.prandtl, config.mu_ref, config.T_ref,
                     config.sutherland_T, config.Re, config.wall_temperature,
-                    config.turbulence ? 1 : 0, residual, &w)) {
+                    static_cast<int>(config.turbulence_model), residual, &w)) {
                 summary.failed = true;
                 if (diagnostics_enabled) {
                     summary.diagnostics.failure.reason = "viscous flux failed";
@@ -490,7 +490,7 @@ CfdSolveSummary CfdSolver::solve_from_state(
             }
         }
 
-        if (config.turbulence) {
+        if (config.turbulence_model != TurbulenceModel::LAMINAR) {
             sources = compute_rans_sources(mesh_, q, limited, config.gamma, config.Re, &w);
             if (sources.size() != mesh_.cells.size()) {
                 summary.failed = true;
@@ -525,15 +525,14 @@ CfdSolveSummary CfdSolver::solve_from_state(
         // after MMS subtraction would break source consistency since the correction
         // transforms residual as R' = q*(f-1)/dtv + R*f, making it impossible for
         // S_mms to cancel R when q=q_exact.
-        if (config.turbulence && config.mms_source.empty()) {
+        if (config.turbulence_model != TurbulenceModel::LAMINAR && config.mms_source.empty()) {
             for (std::size_t i = 0; i < q.size(); ++i) {
-                Real wall_distance = mesh_.cells[i].h_min;
-                if (wall_distance <= 0.0f) wall_distance = 1e30f;
+                Real wall_distance = mesh_.cells[i].wall_distance;
+                if (wall_distance <= 0.0f || !std::isfinite(wall_distance)) wall_distance = 1e30f;
                 Real nu_tilde = q[i].rho_nu_tilde / q[i].rho;
                 if (!std::isfinite(nu_tilde)) continue;
                 constexpr Real cw1 = 0.1355f / (0.41f * 0.41f) + (1.0f + 0.622f) / (2.0f / 3.0f);
-                constexpr Real karman = 0.41f;
-                Real d_dest = 2.0f * cw1 * nu_tilde / (karman * karman * wall_distance * wall_distance + 1e-30f);
+                Real d_dest = 2.0f * cw1 * nu_tilde / (wall_distance * wall_distance + 1e-30f);
                 Real dt_over_V = min_dt / (mesh_.cells[i].volume + 1e-30f);
                 Real implicit_factor = 1.0f / (1.0f + dt_over_V * d_dest + 1e-30f);
                 Real old_rhont = q[i].rho_nu_tilde;
@@ -688,7 +687,7 @@ CfdSolveSummary CfdSolver::solve_from_state(
 
     {
         bool need_grads_at_end = config.viscous && !grads.empty();
-        bool use_limited = config.reconstruction_order == 2 || config.turbulence;
+        bool use_limited = config.reconstruction_order == 2 || (config.turbulence_model != TurbulenceModel::LAMINAR);
         const std::vector<PrimitiveGradient>* wall_grads = nullptr;
         if (need_grads_at_end)
             wall_grads = (use_limited && !limited.empty()) ? &limited : &grads;
@@ -697,7 +696,11 @@ CfdSolveSummary CfdSolver::solve_from_state(
     summary.forces.iterations = static_cast<int>(summary.residual_history.size());
     summary.forces.residual = summary.residual_history.empty() ? 0.0f : summary.residual_history.back();
     summary.final_state = q;
-    summary.forces.turbulence_model = config.turbulence ? "rans-sa" : "laminar";
+    const char* tm_str = "laminar";
+    if (config.turbulence_model == TurbulenceModel::SA) tm_str = "rans-sa";
+    else if (config.turbulence_model == TurbulenceModel::SA_DDES) tm_str = "rans-sa-ddes";
+    else if (config.turbulence_model == TurbulenceModel::SST) tm_str = "rans-sst";
+    summary.forces.turbulence_model = tm_str;
     summary.forces.fidelity = "cfd-cpu";
     return summary;
 }

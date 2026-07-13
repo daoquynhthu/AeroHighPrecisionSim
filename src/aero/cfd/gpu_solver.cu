@@ -161,6 +161,10 @@ static CfdSolveSummary solve_gpu_impl(
         if (error) *error = "allocate_viscous failed";
         goto fail;
     }
+    if (config.turbulence_model == TurbulenceModel::SA_DDES && !d_mesh.has_delta_ddes() && !d_mesh.allocate_ddes()) {
+        if (error) *error = "allocate_ddes failed";
+        goto fail;
+    }
 
     for (int iter = 0; iter < config.max_iter; ++iter) {
 #ifdef MPI_ENABLED
@@ -169,9 +173,9 @@ static CfdSolveSummary solve_gpu_impl(
             cudaStreamSynchronize(stream_comm);
         }
 #endif
-        if (config.reconstruction_order == 2 || config.viscous || config.turbulence) {
+        if (config.reconstruction_order == 2 || config.viscous || (config.turbulence_model != TurbulenceModel::LAMINAR)) {
             if (!compute_gradients_gpu(d_mesh, config.gamma, error, d_failed, stream_main)) goto fail;
-            if (config.reconstruction_order == 2 || config.turbulence) {
+            if (config.reconstruction_order == 2 || (config.turbulence_model != TurbulenceModel::LAMINAR)) {
                 if (!compute_limiters_gpu(d_mesh, config.gamma, error, d_failed, stream_main)) goto fail;
                 if (!apply_limiter_gpu(d_mesh, false, error, stream_main)) goto fail;
             }
@@ -194,23 +198,20 @@ static CfdSolveSummary solve_gpu_impl(
 if (config.viscous) {
             if (!compute_viscous_flux_gpu(d_mesh, config.gamma, config.prandtl,
                     config.mu_ref, config.T_ref, config.sutherland_T,
-                    config.Re, config.wall_temperature, config.turbulence ? 1 : 0, d_failed, stream_main)) {
+                    config.Re, config.wall_temperature, static_cast<int>(config.turbulence_model), d_failed, stream_main)) {
                 if (error) *error = "viscous flux kernel failed";
                 goto fail;
             }
         }
 
-        if (config.turbulence) {
-            if (!compute_rans_source_gpu(d_mesh, config.gamma, config.Re,
-                    config.mu_ref, config.T_ref, config.sutherland_T, d_failed, error, stream_main)) {
-                if (error && error->empty()) *error = "RANS source kernel failed";
+        if (!compute_turbulence_source_gpu(d_mesh, config, d_failed, error, stream_main)) {
+            if (error && error->empty()) *error = "turbulence source kernel failed";
+            goto fail;
+        }
+        if (config.turbulence_model != TurbulenceModel::LAMINAR && !config.implicit) {
+            if (!apply_rans_implicit_gpu(d_mesh, config.Re, d_min_dt, error, stream_main)) {
+                if (error && error->empty()) *error = "RANS implicit kernel failed";
                 goto fail;
-            }
-            if (!config.implicit) {
-                if (!apply_rans_implicit_gpu(d_mesh, config.Re, d_min_dt, error, stream_main)) {
-                    if (error && error->empty()) *error = "RANS implicit kernel failed";
-                    goto fail;
-                }
             }
         }
 
@@ -233,7 +234,7 @@ if (config.viscous) {
             if (!cuda_check(cudaMemcpy(d_r_saved, d_mesh.residual_device(),
                     nvar_cells * sizeof(Real), cudaMemcpyDeviceToDevice), "save raw R(Q^n)", error)) goto fail;
 
-            if (config.turbulence) {
+            if (config.turbulence_model != TurbulenceModel::LAMINAR) {
                 if (!apply_rans_implicit_per_cell_gpu(d_mesh, config.Re, d_dt_cell, error, stream_main)) {
                     if (error && error->empty()) *error = "RANS implicit per-cell kernel failed";
                     goto fail;
@@ -320,18 +321,14 @@ if (config.viscous) {
                         if (config.viscous) {
                             if (!compute_viscous_flux_gpu(d_mesh, config.gamma, config.prandtl,
                                     config.mu_ref, config.T_ref, config.sutherland_T,
-                                    config.Re, config.wall_temperature, config.turbulence ? 1 : 0, d_failed, stream_main)) {
+                    config.Re, config.wall_temperature, static_cast<int>(config.turbulence_model), d_failed, stream_main)) {
                                 if (error) *error = "Newton viscous flux failed";
                                 goto fail;
                             }
                         }
-                        if (config.turbulence) {
-                            if (!compute_rans_source_gpu(d_mesh, config.gamma, config.Re,
-                                    config.mu_ref, config.T_ref, config.sutherland_T,
-                                    d_failed, error, stream_main)) {
-                                if (error) *error = "Newton RANS source failed";
-                                goto fail;
-                            }
+                        if (!compute_turbulence_source_gpu(d_mesh, config, d_failed, error, stream_main)) {
+                            if (error && error->empty()) *error = "Newton turbulence source failed";
+                            goto fail;
                         }
 
                         if (!dnrm2_gpu(d_mesh.residual_device(), nvar_cells, d_l2_sum, stream_main)) {
@@ -510,7 +507,11 @@ newton_accepted:
 
         summary.forces.iterations = static_cast<int>(summary.residual_history.size());
         summary.forces.residual = summary.residual_history.empty() ? 0.0f : summary.residual_history.back();
-        summary.forces.turbulence_model = config.turbulence ? "rans-sa" : "laminar";
+        const char* tm_str = "laminar";
+        if (config.turbulence_model == TurbulenceModel::SA) tm_str = "rans-sa";
+        else if (config.turbulence_model == TurbulenceModel::SA_DDES) tm_str = "rans-sa-ddes";
+        else if (config.turbulence_model == TurbulenceModel::SST) tm_str = "rans-sst";
+        summary.forces.turbulence_model = tm_str;
         summary.forces.fidelity = "cfd-gpu";
     }
 

@@ -104,7 +104,7 @@ bool compute_mms_source(const CfdMesh& mesh,
         if (!conservative_to_primitive(q_exact[i], config.gamma, w_exact[i]))
             return false;
 
-    if (config.reconstruction_order == 2 || config.viscous || config.turbulence) {
+    if (config.reconstruction_order == 2 || config.viscous || (config.turbulence_model != TurbulenceModel::LAMINAR)) {
         auto grads = compute_green_gauss_gradients(mesh, q_exact, config.gamma, &w_exact);
         if (grads.size() != mesh.cells.size()) return false;
 
@@ -121,10 +121,10 @@ bool compute_mms_source(const CfdMesh& mesh,
             if (config.viscous) {
                 if (!compute_viscous_flux_cpu(mesh, q_exact, limited, config.gamma,
                         config.prandtl, config.mu_ref, config.T_ref, config.sutherland_T,
-                        config.Re, config.wall_temperature, config.turbulence ? 1 : 0, source, &w_exact))
+                        config.Re, config.wall_temperature, static_cast<int>(config.turbulence_model), source, &w_exact))
                     return false;
             }
-            if (config.turbulence) {
+            if (config.turbulence_model != TurbulenceModel::LAMINAR) {
                 auto rans = compute_rans_sources(mesh, q_exact, limited, config.gamma, config.Re, &w_exact);
                 if (rans.size() != mesh.cells.size()) return false;
                 for (std::size_t i = 0; i < q_exact.size(); ++i)
@@ -136,10 +136,10 @@ bool compute_mms_source(const CfdMesh& mesh,
             if (config.viscous) {
                 if (!compute_viscous_flux_cpu(mesh, q_exact, grads, config.gamma,
                         config.prandtl, config.mu_ref, config.T_ref, config.sutherland_T,
-                        config.Re, config.wall_temperature, config.turbulence ? 1 : 0, source, &w_exact))
+                        config.Re, config.wall_temperature, static_cast<int>(config.turbulence_model), source, &w_exact))
                     return false;
             }
-            if (config.turbulence) {
+            if (config.turbulence_model != TurbulenceModel::LAMINAR) {
                 auto rans = compute_rans_sources(mesh, q_exact, grads, config.gamma, config.Re, &w_exact);
                 if (rans.size() != mesh.cells.size()) return false;
                 for (std::size_t i = 0; i < q_exact.size(); ++i)

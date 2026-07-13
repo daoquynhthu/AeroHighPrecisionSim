@@ -1550,10 +1550,10 @@ SA-DDES details:
 
 Tasks:
 
-- [ ] Implement `fd` computation per cell from local velocity gradient tensor `U_ij`
-- [ ] Implement DDES length scale `Δ_DDES` per cell (device array `d_delta_ddes`)
-- [ ] Modify SA residual kernel: replace `d` (wall distance) with `Δ_DDES` in destruction term when `SA_DDES` active
-- [ ] `compute_turbulence_source_gpu` dispatch by `turbulence_model`
+- [x] Implement `fd` computation per cell from local velocity gradient tensor `U_ij`
+- [x] Implement DDES length scale `Δ_DDES` per cell (device array `d_delta_ddes`)
+- [x] Modify SA residual kernel: replace `d` (wall distance) with `Δ_DDES` in destruction term when `SA_DDES` active
+- [x] `compute_turbulence_source_gpu` dispatch by `turbulence_model`
 
 ### 13.2 k-ω SST (2-equation)
 
@@ -1605,6 +1605,8 @@ Tests:
 
 | # | Test | What | Tolerance |
 |---|------|------|-----------|
+| 0a | `CFD-TURB-ENUM-1` | TurbulenceModel enum values (0,1,2,3) and string mapping | n/a |
+| 0b | `CFD-TURB-DDES-LENGTH-1` | DDES length scale kernel: finite, bounded by [0, d], far-field fallback to C_DES*h_max | n/a |
 | 1 | `CFD-TURB-SST-1` | Flat plate SST: Cf vs Coles profile correlation (Cf difference < 10%) | 10% |
 | 2 | `CFD-TURB-SST-2` | `turbulence_model=LAMINAR` regression to Phase 5 laminar (NVAR=5 path) | 1e-12 |
 | 3 | `CFD-TURB-SST-3` | `turbulence_model=SA_SST` (forcing SA via SST? no) — separate test: SST zero k, omega laminar regression | 1e-6 |
