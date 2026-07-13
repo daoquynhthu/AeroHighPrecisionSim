@@ -2593,7 +2593,7 @@ Four-parallel subagent audit covering architecture compliance, physical/numerica
 | 架构合规 (ARCH) | 3 | 2 | 3 | 4 | 12 |
 | 物理正确 (PHYS) | 2 | 8 | 5 | 4 | 21 |
 | 测试覆盖 (COV) | 18 | 2 | 0 | 3 | 23 |
-| 性能优化 (PERF2) | 3 | 5 | 3 | 1 | 12 |
+| 性能优化 (PERF2) | 4 | 0 | 8 | 0 | 12 |
 | **Total** | **24** | **15** | **11** | **14** | **68** |
 
 ---
@@ -2783,21 +2783,26 @@ CGNS 测试仅测试库不可用回退，无实际 CGNS 文件读写。
 
 **PERF2-1** [HIGH] `gpu_solver.cu:214, 229, 308`
 隐式 Newton 回溯循环中 L2 范数通过 `cudaMemcpy DeviceToHost` 回读。每轮外迭代至少 3 次同步，最坏情况每轮 Newton 迭代最多 19 次。建议使用设备端核函数检查收敛性。
+[FIXED 2026-07-13] 新增 `newton_l2_check_kernel` + `init_l2_old_kernel` 设备端核函数。`l2_old` 存储在 `d_l2_sum[1]` 避免 D2H 回读。Newton 回溯中 L2 比较完全在 GPU 上完成，host 仅读取单个 int 接受标志。`d_l2_sum` 分配从 1 扩至 2 Real。
 
 **PERF2-2** [HIGH] `gpu_viscous.cu:32, 317`
 两个粘性通量核函数均缺 `__launch_bounds__`，~70+ 局部变量可能导致寄存器溢出至 local memory。`euler_residual_kernel` 已有 `__launch_bounds__(128)`。
+[FIXED 2026-07-13] `viscous_flux_kernel_atomic` 和 `viscous_flux_kernel_colored` 添加 `__launch_bounds__(128)`。
 
 **PERF2-3** [HIGH] `lusgs_gpu.cu:84-120, 160-192, 224-256`
 `compute_diag_kernel`/`forward_sweep_kernel`/`backward_sweep_kernel` 各自迭代所有面来搜索每个单元的邻接点。`O(N_cells * N_faces)` 复杂度，对大规模网格极为低效。建议构建 CSR 格式的单元-面邻接列表。
+[FIXED 2026-07-13] `LusgsPreconditioner` 新增 `d_cell_face_start_`/`d_cell_faces_`/`d_cell_face_nbr_` CSR 邻接表。`allocate()`/`rebuild_coloring()` 在 host 端构建 CSR。三个核函数改为迭代 `d_cell_face_start[cell]:d_cell_face_start[cell+1]`，从 O(N_cells*N_faces) 降至 O(N_cells*avg_degree)。`release()` 释放 CSR 数组。
 
 **PERF2-4** [MEDIUM] `lusgs_gpu.cu:70, 95-106, 143-184, 214-248`
 LU-SGS 核函数中对 `d_q[cell * nvar + k]` 的步长-6 访问，每次 warp 命中 6 条缓存线，实际利用的 L2 带宽约 1/6。建议 `float4`/`float2` 向量化加载。
+[FIXED 2026-07-13] `compute_diag_kernel`/`forward_sweep_kernel`/`backward_sweep_kernel` 的 `d_q` 自状态和邻接状态访问改为 `float4`+`float2` 向量化加载，全局加载指令从 6→2 条。
 
 **PERF2-5** [MEDIUM] `reconstruction_gpu.cu:75-78, 89-91, 186-205, 220-222`
 梯度核函数对每个面冗余进行保守→原始转换。六面体网格上每个单元被 6 个面共享，每轮梯度计算中每个单元被转换多达 6 次（GPU 版的 PERF-D1 问题）。建议预转换 `d_q`。
 
 **PERF2-6** [MEDIUM] `gpu_wall.cu:79-84, 145-155`
 壁面力核函数始终使用原子操作，7 个力/力矩计数器上的冲突。PERF-A4 尝试着色路径但回退。建议每块共享内存部分归约，每块仅一次 atomicAdd。
+[FIXED 2026-07-13] `wall_force_kernel` 改为每个活跃面先归约到 per-thread 局部累加器，再写入共享内存，块内规约后每块仅一次 `real_atomic_add`。
 
 **PERF2-7** [MEDIUM] `gpu_solver.cu:115`
 尽管所有 GPU 函数已有流参数，求解器仅使用单条流。核函数无法并发执行。建议创建 2-3 条计算流。
@@ -2810,10 +2815,13 @@ LU-SGS 核函数中对 `d_q[cell * nvar + k]` 的步长-6 访问，每次 warp �
 
 **PERF2-10** [LOW] `gpu_rans.cu:105, 108, 115`
 RANS 核函数每单元重新计算循环不变 SA 常数（cw1、cv1³、cw3⁶ 等）。建议提升至 `constexpr` 或 `__constant__` 内存。
+[FIXED 2026-07-13] `rans_source_kernel` 中 `cv13`/`cw1_val`/`cw3_6` 提升为 `constexpr` 预计算值。
 
 **PERF2-11** [INFO] `CMakeLists.txt:67`
 CUDA Release 编译缺少强制 `-O3` 优化。nvcc 默认 `-O2`。
+[FIXED 2026-07-13] `CMAKE_CUDA_FLAGS` 添加 `-O3`。
 
 **PERF2-12** [MEDIUM] 多个文件
 多数热点核函数缺 `__launch_bounds__` 标注：`gg_gradient_kernel_*`、`update_minmax_kernel_*`、`bj_limiter_kernel_*`、`viscous_flux_kernel_*`、`wall_force_kernel`、`rans_source_kernel`、`timestep_kernel`、`update_and_l2_kernel`、`compute_diag_kernel`、`sweep_kernel`。建议面级核函数加 `__launch_bounds__(128)`，单元级核函数加 `__launch_bounds__(256)`。
+[FIXED 2026-07-13] 32 个核函数添加 `__launch_bounds__`（128 面级/256 单元级/BLAS），涉及 10 个文件：`reconstruction_gpu.cu`、`gpu_wall.cu`、`gpu_rans.cu`、`gpu_timestep.cu`、`gpu_update.cu`、`jacobian_free.cu`、`lusgs_gpu.cu`、`gpu_diagnostics.cu`、`fgmres_gpu.cu`、`exchange_halo.cu`。
 

@@ -47,7 +47,7 @@ __device__ PrimitiveGradient d_apply_limiter(PrimitiveGradient gradient, Primiti
     return gradient;
 }
 
-__global__ void apply_limiter_kernel(PrimitiveGradient* gradients, const PrimitiveLimiter* limiters, int cell_count) {
+__global__ void __launch_bounds__(256) apply_limiter_kernel(PrimitiveGradient* gradients, const PrimitiveLimiter* limiters, int cell_count) {
     int idx = blockIdx.x * blockDim.x + threadIdx.x;
     if (idx >= cell_count) return;
     gradients[idx] = d_apply_limiter(gradients[idx], limiters[idx]);
@@ -55,7 +55,7 @@ __global__ void apply_limiter_kernel(PrimitiveGradient* gradients, const Primiti
 
 
 
-__global__ void gg_gradient_kernel_atomic(
+__global__ void __launch_bounds__(128) gg_gradient_kernel_atomic(
     const Real* d_q,
     int nvar, int n_cells, int n_faces,
     const int* d_left_cell, const int* d_right_cell, const int* d_boundary,
@@ -166,7 +166,7 @@ __global__ void gg_gradient_kernel_atomic(
     real_atomic_add(&gL[17], dnu * nz * left_scale);
 }
 
-__global__ void gg_gradient_kernel_colored(
+__global__ void __launch_bounds__(128) gg_gradient_kernel_colored(
     const Real* d_q,
     int nvar, int n_cells,
     const int* d_left_cell, const int* d_right_cell, const int* d_boundary,
@@ -308,7 +308,7 @@ __global__ void init_minmax_kernel(
     m[10] = nu_tilde; m[11] = nu_tilde;
 }
 
-__global__ void update_minmax_kernel(
+__global__ void __launch_bounds__(128) update_minmax_kernel(
     const Real* d_q, int nvar, int n_cells, int n_faces,
     const int* d_left_cell, const int* d_right_cell, const int* d_boundary,
     Real gamma,
@@ -358,7 +358,7 @@ __global__ void update_minmax_kernel(
     update(&mR[10], &mR[11], nu_tildeL);
 }
 
-__global__ void update_minmax_kernel_colored(
+__global__ void __launch_bounds__(128) update_minmax_kernel_colored(
     const Real* d_q, int nvar, int n_cells,
     const int* d_left_cell, const int* d_right_cell, const int* d_boundary,
     Real gamma,
@@ -420,7 +420,7 @@ __device__ Real limiter_theta_device(Real center, Real reconstructed, Real min_v
     return 1.0f;
 }
 
-__global__ void bj_limiter_kernel(
+__global__ void __launch_bounds__(128) bj_limiter_kernel(
     const Real* d_q, int nvar, int n_cells, int n_faces,
     const int* d_left_cell, const int* d_right_cell, const int* d_boundary,
     const Real* d_face_cx, const Real* d_face_cy, const Real* d_face_cz,
@@ -514,7 +514,7 @@ __global__ void bj_limiter_kernel(
     }
 }
 
-__global__ void bj_limiter_kernel_colored(
+__global__ void __launch_bounds__(128) bj_limiter_kernel_colored(
     const Real* d_q, int nvar, int n_cells,
     const int* d_left_cell, const int* d_right_cell, const int* d_boundary,
     const Real* d_face_cx, const Real* d_face_cy, const Real* d_face_cz,

@@ -29,7 +29,7 @@ __device__ Real sutherland_mu(Real T, Real T_ref, Real S, Real mu_ref) {
     return mu_ref * t_ratio * real_sqrt(t_ratio) * (T_ref + S) / (T + S);
 }
 
-__global__ void viscous_flux_kernel_atomic(
+__global__ void __launch_bounds__(128) viscous_flux_kernel_atomic(
     const Real* d_q, int nvar, Real gamma,
     const Real* d_nx, const Real* d_ny, const Real* d_nz,
     const Real* d_area,
@@ -324,7 +324,7 @@ __global__ void viscous_flux_kernel_atomic(
     }
 }
 
-__global__ void viscous_flux_kernel_colored(
+__global__ void __launch_bounds__(128) viscous_flux_kernel_colored(
     const Real* d_q, int nvar, Real gamma,
     const Real* d_nx, const Real* d_ny, const Real* d_nz,
     const Real* d_area,

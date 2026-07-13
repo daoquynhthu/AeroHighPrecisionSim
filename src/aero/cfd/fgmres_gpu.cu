@@ -36,7 +36,7 @@ static bool ensure_partial_buf(int min_blocks) {
 }
 
 // Stage 1: each block writes its partial dot-product to d_partial[blockIdx.x].
-__global__ void ddot_kernel(const Real* x, const Real* y, int n, Real* d_partial) {
+__global__ void __launch_bounds__(256) ddot_kernel(const Real* x, const Real* y, int n, Real* d_partial) {
     __shared__ Real sdata[kBlockSize];
     int tid = threadIdx.x;
     int idx = blockIdx.x * blockDim.x + tid;
@@ -56,7 +56,7 @@ __global__ void ddot_kernel(const Real* x, const Real* y, int n, Real* d_partial
 }
 
 // Stage 2: single-block kernel sums the partials from every block.
-__global__ void reduce_sum_kernel(const Real* d_partial, int num_blocks, Real* result) {
+__global__ void __launch_bounds__(256) reduce_sum_kernel(const Real* d_partial, int num_blocks, Real* result) {
     Real sum = 0;
     for (int i = 0; i < num_blocks; ++i) {
         sum += d_partial[i];
@@ -64,14 +64,14 @@ __global__ void reduce_sum_kernel(const Real* d_partial, int num_blocks, Real* r
     *result = sum;
 }
 
-__global__ void daxpy_kernel(Real a, const Real* x, Real* y, int n) {
+__global__ void __launch_bounds__(256) daxpy_kernel(Real a, const Real* x, Real* y, int n) {
     int idx = blockIdx.x * blockDim.x + threadIdx.x;
     for (int i = idx; i < n; i += gridDim.x * blockDim.x) {
         y[i] = a * x[i] + y[i];
     }
 }
 
-__global__ void daxpy_device_kernel(Real mul, const Real* d_a, const Real* x, Real* y, int n) {
+__global__ void __launch_bounds__(256) daxpy_device_kernel(Real mul, const Real* d_a, const Real* x, Real* y, int n) {
     Real alpha = mul * (*d_a);
     int idx = blockIdx.x * blockDim.x + threadIdx.x;
     for (int i = idx; i < n; i += gridDim.x * blockDim.x) {
@@ -79,21 +79,21 @@ __global__ void daxpy_device_kernel(Real mul, const Real* d_a, const Real* x, Re
     }
 }
 
-__global__ void dscal_kernel(Real a, Real* x, int n) {
+__global__ void __launch_bounds__(256) dscal_kernel(Real a, Real* x, int n) {
     int idx = blockIdx.x * blockDim.x + threadIdx.x;
     for (int i = idx; i < n; i += gridDim.x * blockDim.x) {
         x[i] = a * x[i];
     }
 }
 
-__global__ void dcopy_kernel(const Real* src, Real* dst, int n) {
+__global__ void __launch_bounds__(256) dcopy_kernel(const Real* src, Real* dst, int n) {
     int idx = blockIdx.x * blockDim.x + threadIdx.x;
     for (int i = idx; i < n; i += gridDim.x * blockDim.x) {
         dst[i] = src[i];
     }
 }
 
-__global__ void daxpby_kernel(Real a, const Real* x, Real b, Real* y, int n) {
+__global__ void __launch_bounds__(256) daxpby_kernel(Real a, const Real* x, Real b, Real* y, int n) {
     int idx = blockIdx.x * blockDim.x + threadIdx.x;
     for (int i = idx; i < n; i += gridDim.x * blockDim.x) {
         y[i] = a * x[i] + b * y[i];

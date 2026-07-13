@@ -24,7 +24,7 @@ __global__ void init_bounds_slot_kernel(Real* slot) {
     }
 }
 
-__global__ void state_bounds_kernel(
+__global__ void __launch_bounds__(256) state_bounds_kernel(
     const Real* d_q, int n_cells, int nvar, Real gamma,
     Real* d_min_rho, Real* d_max_rho,
     Real* d_min_p, Real* d_max_p,
@@ -94,7 +94,7 @@ __global__ void state_bounds_kernel(
     }
 }
 
-__global__ void failure_snapshot_kernel(
+__global__ void __launch_bounds__(256) failure_snapshot_kernel(
     const Real* d_q, int n_cells, int nvar, Real gamma,
     int* d_failure_cell, Real* d_failure_state) {
     int idx = blockIdx.x * blockDim.x + threadIdx.x;

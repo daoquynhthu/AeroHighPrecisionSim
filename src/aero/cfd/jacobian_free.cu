@@ -16,14 +16,14 @@ namespace cfd {
 
 namespace {
 
-__global__ void perturb_kernel(Real* d_q_pert, const Real* d_q,
+__global__ void __launch_bounds__(256) perturb_kernel(Real* d_q_pert, const Real* d_q,
     const Real* d_v, Real eps, int n, int nvar) {
     int idx = blockIdx.x * blockDim.x + threadIdx.x;
     if (idx >= n * nvar) return;
     d_q_pert[idx] = d_q[idx] + eps * d_v[idx];
 }
 
-__global__ void jfv_result_kernel(Real* d_result, const Real* d_residual_pert,
+__global__ void __launch_bounds__(256) jfv_result_kernel(Real* d_result, const Real* d_residual_pert,
     const Real* d_residual, Real inv_eps, int n, int nvar) {
     int idx = blockIdx.x * blockDim.x + threadIdx.x;
     if (idx >= n * nvar) return;

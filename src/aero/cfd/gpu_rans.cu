@@ -22,7 +22,7 @@ __device__ Real d_sutherland_mu(Real T, Real T_ref, Real S) {
     return t_ratio * real_sqrt(t_ratio) * (T_ref + S) / (T + S);
 }
 
-__global__ void rans_source_kernel(
+__global__ void __launch_bounds__(256) rans_source_kernel(
     Real* d_q,
     Real* d_residual,
     const Real* d_gradients,
@@ -77,6 +77,9 @@ __global__ void rans_source_kernel(
     constexpr Real cv1 = 7.1f;
     constexpr Real ct3 = 1.2f;
     constexpr Real ct4 = 0.5f;
+    constexpr Real cv13 = cv1 * cv1 * cv1;
+    constexpr Real cw1_val = cb1 / (karman * karman) + (1.0f + cb2) / sigma;
+    constexpr Real cw3_6 = cw3 * cw3 * cw3 * cw3 * cw3 * cw3;
 
     Real grad_nu2 = g->dnu_tilde_dx * g->dnu_tilde_dx
                  + g->dnu_tilde_dy * g->dnu_tilde_dy
@@ -89,7 +92,6 @@ __global__ void rans_source_kernel(
     Real source;
     if (chi >= 0.0f) {
         Real chi3 = chi*chi*chi;
-        Real cv13 = cv1*cv1*cv1;
         Real fv1 = chi3 / (chi3 + cv13 + 1e-30f);
 
         Real vort = d_sa_vorticity(*g);
@@ -103,19 +105,17 @@ __global__ void rans_source_kernel(
         Real r = nu_tilde / (omega_tilde * karman * karman * wall_distance * wall_distance + 1e-30f);
         if (r > 10.0f) r = 10.0f;
         Real r6 = r*r*r*r*r*r;
-        Real cw1 = cb1 / (karman*karman) + (1.0f + cb2) / sigma;
         Real fw_g = r + cw2 * (r6 - r);
-        Real fw_num = 1.0f + cw3*cw3*cw3*cw3*cw3*cw3;
-        Real fw_den = fw_g*fw_g*fw_g*fw_g*fw_g*fw_g + cw3*cw3*cw3*cw3*cw3*cw3 + 1e-30f;
+        Real fw_num = 1.0f + cw3_6;
+        Real fw_den = fw_g*fw_g*fw_g*fw_g*fw_g*fw_g + cw3_6 + 1e-30f;
         Real fw = fw_g * real_pow(fw_num / fw_den, Real(1.0 / 6.0));
-        Real destruction = cw1 * fw * (nu_tilde / wall_distance) * (nu_tilde / wall_distance);
+        Real destruction = cw1_val * fw * (nu_tilde / wall_distance) * (nu_tilde / wall_distance);
 
         source = production - destruction + diffusion;
     } else {
         Real vort = d_sa_vorticity(*g);
-        Real cw1 = cb1 / (karman*karman) + (1.0f + cb2) / sigma;
         source = cb1 * (1.0f - ct3) * vort * nu_tilde
-               + cw1 * (nu_tilde / wall_distance) * (nu_tilde / wall_distance)
+               + cw1_val * (nu_tilde / wall_distance) * (nu_tilde / wall_distance)
                + diffusion;
     }
 
@@ -133,7 +133,7 @@ __global__ void rans_source_kernel(
 // Modifies d_residual[5] so the explicit update produces an implicit result:
 //   q_new[5] = (q_old[5] + dtv * residual[5]) / (1 + dtv * d_dest)
 // Applied as: residual[5] = (q_old[5] * (implicit - 1)) / dtv + residual[5] * implicit
-__global__ void apply_rans_implicit_kernel(
+__global__ void __launch_bounds__(256) apply_rans_implicit_kernel(
     const Real* d_q,
     Real* d_residual,
     const Real* d_volume,
@@ -167,7 +167,7 @@ __global__ void apply_rans_implicit_kernel(
                                + old_residual * implicit_factor;
 }
 
-__global__ void apply_rans_implicit_per_cell_kernel(
+__global__ void __launch_bounds__(256) apply_rans_implicit_per_cell_kernel(
     const Real* d_q,
     Real* d_residual,
     const Real* d_volume,

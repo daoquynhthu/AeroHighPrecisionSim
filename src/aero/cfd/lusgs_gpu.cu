@@ -53,12 +53,13 @@ int greedy_color_cells(
     return n_colors;
 }
 
-__global__ void compute_diag_kernel(
+__global__ void __launch_bounds__(256) compute_diag_kernel(
     Real* d_D, Real* d_srad, int n_cells, int nvar, Real gamma,
     const Real* d_q, const Real* d_volume,
     const Real* d_nx, const Real* d_ny, const Real* d_nz,
-    const Real* d_area, const int* d_left, const int* d_right,
-    int n_faces, const Real* d_dt_cell, Real* d_inv_vol,
+    const Real* d_area,
+    const int* d_cell_face_start, const int* d_cell_faces, const int* d_cell_face_nbr,
+    const Real* d_dt_cell, Real* d_inv_vol,
     const Real* d_mu, Real Re) {
     int cell = blockIdx.x * blockDim.x + threadIdx.x;
     if (cell >= n_cells) return;
@@ -67,13 +68,15 @@ __global__ void compute_diag_kernel(
     Real inv_vol = 1.0f / vol;
     if (d_inv_vol) d_inv_vol[cell] = inv_vol;
 
-    Real rho = d_q[cell * nvar + 0];
+    float4 q4 = reinterpret_cast<const float4*>(d_q + cell * nvar)[0];
+    Real rho = q4.x;
     if (!real_isfinite(rho) || rho <= 0) { d_D[cell] = 1e10f; if (d_srad) d_srad[cell] = 0; return; }
     Real inv_rho = 1.0f / rho;
-    Real u = d_q[cell * nvar + 1] * inv_rho;
-    Real v = d_q[cell * nvar + 2] * inv_rho;
-    Real w = d_q[cell * nvar + 3] * inv_rho;
-    Real E = d_q[cell * nvar + 4];
+    Real u = q4.y * inv_rho;
+    Real v = q4.z * inv_rho;
+    Real w = q4.w * inv_rho;
+    float2 q2 = reinterpret_cast<const float2*>(d_q + cell * nvar + 4)[0];
+    Real E = q2.x;
     Real kinetic = 0.5f * (u*u + v*v + w*w);
     Real p = (gamma - 1.0f) * (E - rho * kinetic);
     if (!real_isfinite(p) || p <= 0) { d_D[cell] = 1e10f; if (d_srad) d_srad[cell] = 0; return; }
@@ -81,25 +84,26 @@ __global__ void compute_diag_kernel(
     Real mu_local = (d_mu) ? d_mu[cell] : 0;
 
     Real diag = 0;
-    for (int f = 0; f < n_faces; ++f) {
-        int left = d_left[f];
-        int right = d_right[f];
-        if (left != cell && right != cell) continue;
-
-        int nbr = (left == cell) ? right : left;
+    int face_start = d_cell_face_start[cell];
+    int face_end = d_cell_face_start[cell + 1];
+    for (int fi = face_start; fi < face_end; ++fi) {
+        int f = d_cell_faces[fi];
+        int nbr = d_cell_face_nbr[fi];
         Real area = d_area[f];
         if (nbr < 0 || nbr >= n_cells) {
             diag += (real_fabs(u * d_nx[f] + v * d_ny[f] + w * d_nz[f]) + a) * area;
         } else {
             Real vn_self = u * d_nx[f] + v * d_ny[f] + w * d_nz[f];
-            Real rho_n = d_q[nbr * nvar + 0];
+            float4 qn4 = reinterpret_cast<const float4*>(d_q + nbr * nvar)[0];
+            Real rho_n = qn4.x;
             Real lambda_nbr = 0;
             if (rho_n > 0) {
                 Real inv_rho_n = 1.0f / rho_n;
-                Real u_n = d_q[nbr * nvar + 1] * inv_rho_n;
-                Real v_n = d_q[nbr * nvar + 2] * inv_rho_n;
-                Real w_n = d_q[nbr * nvar + 3] * inv_rho_n;
-                Real E_n = d_q[nbr * nvar + 4];
+                Real u_n = qn4.y * inv_rho_n;
+                Real v_n = qn4.z * inv_rho_n;
+                Real w_n = qn4.w * inv_rho_n;
+                float2 qn2 = reinterpret_cast<const float2*>(d_q + nbr * nvar + 4)[0];
+                Real E_n = qn2.x;
                 Real kin_n = 0.5f * (u_n*u_n + v_n*v_n + w_n*w_n);
                 Real p_n = (gamma - 1.0f) * (E_n - rho_n * kin_n);
                 Real a_n = p_n > 0 ? real_sqrt(gamma * p_n / rho_n) : a;
@@ -129,27 +133,30 @@ __global__ void compute_diag_kernel(
     if (d_srad) d_srad[cell] = diag;
 }
 
-__global__ void forward_sweep_kernel(
+__global__ void __launch_bounds__(256) forward_sweep_kernel(
     Real* d_dz, const Real* d_D, const Real* d_r,
     const Real* d_q, int n_cells, int nvar, Real gamma,
     const Real* d_nx, const Real* d_ny, const Real* d_nz,
-    const Real* d_area, const int* d_left, const int* d_right,
-    int n_faces, const Real* d_inv_vol,
+    const Real* d_area,
+    const int* d_cell_face_start, const int* d_cell_faces, const int* d_cell_face_nbr,
+    const Real* d_inv_vol,
     int color_num, const int* d_cell_color) {
     int cell = blockIdx.x * blockDim.x + threadIdx.x;
     if (cell >= n_cells) return;
     if (d_cell_color[cell] != color_num) return;
 
-    Real rho = d_q[cell * nvar + 0];
+    float4 q4 = reinterpret_cast<const float4*>(d_q + cell * nvar)[0];
+    Real rho = q4.x;
     if (!real_isfinite(rho) || rho <= 0) {
         for (int iv = 0; iv < nvar; ++iv) d_dz[cell * nvar + iv] = 0;
         return;
     }
     Real inv_rho = 1.0f / rho;
-    Real u = d_q[cell * nvar + 1] * inv_rho;
-    Real v = d_q[cell * nvar + 2] * inv_rho;
-    Real w = d_q[cell * nvar + 3] * inv_rho;
-    Real E = d_q[cell * nvar + 4];
+    Real u = q4.y * inv_rho;
+    Real v = q4.z * inv_rho;
+    Real w = q4.w * inv_rho;
+    float2 q2 = reinterpret_cast<const float2*>(d_q + cell * nvar + 4)[0];
+    Real E = q2.x;
     Real kin = 0.5f * (u*u + v*v + w*w);
     Real p = (gamma - 1.0f) * (E - rho * kin);
     Real a = p > 0 ? real_sqrt(gamma * p / rho) : 1e-8f;
@@ -157,26 +164,27 @@ __global__ void forward_sweep_kernel(
     Real res[6] = {0};
     for (int iv = 0; iv < nvar; ++iv) res[iv] = d_r[cell * nvar + iv];
 
-    for (int f = 0; f < n_faces; ++f) {
-        int left = d_left[f];
-        int right = d_right[f];
-        int nbr = -1;
-        if (left == cell) nbr = right;
-        else if (right == cell) nbr = left;
+    int face_start = d_cell_face_start[cell];
+    int face_end = d_cell_face_start[cell + 1];
+    for (int fi = face_start; fi < face_end; ++fi) {
+        int nbr = d_cell_face_nbr[fi];
         if (nbr < 0 || nbr >= n_cells) continue;
 
         int nbr_color = d_cell_color[nbr];
         if (nbr_color >= color_num) continue;
 
+        int f = d_cell_faces[fi];
         Real vn_self = u * d_nx[f] + v * d_ny[f] + w * d_nz[f];
-        Real rho_n = d_q[nbr * nvar + 0];
+        float4 qn4 = reinterpret_cast<const float4*>(d_q + nbr * nvar)[0];
+        Real rho_n = qn4.x;
         Real lambda;
         if (rho_n > 0) {
             Real inv_rho_n = 1.0f / rho_n;
-            Real u_n = d_q[nbr * nvar + 1] * inv_rho_n;
-            Real v_n = d_q[nbr * nvar + 2] * inv_rho_n;
-            Real w_n = d_q[nbr * nvar + 3] * inv_rho_n;
-            Real E_n = d_q[nbr * nvar + 4];
+            Real u_n = qn4.y * inv_rho_n;
+            Real v_n = qn4.z * inv_rho_n;
+            Real w_n = qn4.w * inv_rho_n;
+            float2 qn2 = reinterpret_cast<const float2*>(d_q + nbr * nvar + 4)[0];
+            Real E_n = qn2.x;
             Real kin_n = 0.5f * (u_n*u_n + v_n*v_n + w_n*w_n);
             Real p_n = (gamma - 1.0f) * (E_n - rho_n * kin_n);
             Real a_n = p_n > 0 ? real_sqrt(gamma * p_n / rho_n) : a;
@@ -195,52 +203,56 @@ __global__ void forward_sweep_kernel(
     for (int iv = 0; iv < nvar; ++iv) d_dz[cell * nvar + iv] = res[iv] * inv_D;
 }
 
-__global__ void backward_sweep_kernel(
+__global__ void __launch_bounds__(256) backward_sweep_kernel(
     Real* d_z, const Real* d_dz, const Real* d_D,
     const Real* d_q, int n_cells, int nvar, Real gamma,
     const Real* d_nx, const Real* d_ny, const Real* d_nz,
-    const Real* d_area, const int* d_left, const int* d_right,
-    int n_faces, const Real* d_inv_vol,
+    const Real* d_area,
+    const int* d_cell_face_start, const int* d_cell_faces, const int* d_cell_face_nbr,
+    const Real* d_inv_vol,
     int color_num, const int* d_cell_color) {
     int cell = blockIdx.x * blockDim.x + threadIdx.x;
     if (cell >= n_cells) return;
     if (d_cell_color[cell] != color_num) return;
 
-    Real rho = d_q[cell * nvar + 0];
+    float4 q4 = reinterpret_cast<const float4*>(d_q + cell * nvar)[0];
+    Real rho = q4.x;
     if (!real_isfinite(rho) || rho <= 0) {
         for (int iv = 0; iv < nvar; ++iv) d_z[cell * nvar + iv] = 0;
         return;
     }
     Real inv_rho = 1.0f / rho;
-    Real u = d_q[cell * nvar + 1] * inv_rho;
-    Real v = d_q[cell * nvar + 2] * inv_rho;
-    Real w = d_q[cell * nvar + 3] * inv_rho;
-    Real E = d_q[cell * nvar + 4];
+    Real u = q4.y * inv_rho;
+    Real v = q4.z * inv_rho;
+    Real w = q4.w * inv_rho;
+    float2 q2 = reinterpret_cast<const float2*>(d_q + cell * nvar + 4)[0];
+    Real E = q2.x;
     Real kin = 0.5f * (u*u + v*v + w*w);
     Real p = (gamma - 1.0f) * (E - rho * kin);
     Real a = p > 0 ? real_sqrt(gamma * p / rho) : 1e-8f;
 
     Real correction[6] = {0};
-    for (int f = 0; f < n_faces; ++f) {
-        int left = d_left[f];
-        int right = d_right[f];
-        int nbr = -1;
-        if (left == cell) nbr = right;
-        else if (right == cell) nbr = left;
+    int face_start = d_cell_face_start[cell];
+    int face_end = d_cell_face_start[cell + 1];
+    for (int fi = face_start; fi < face_end; ++fi) {
+        int nbr = d_cell_face_nbr[fi];
         if (nbr < 0 || nbr >= n_cells) continue;
 
         int nbr_color = d_cell_color[nbr];
         if (nbr_color <= color_num) continue;
 
+        int f = d_cell_faces[fi];
         Real vn_self = u * d_nx[f] + v * d_ny[f] + w * d_nz[f];
-        Real rho_n = d_q[nbr * nvar + 0];
+        float4 qn4 = reinterpret_cast<const float4*>(d_q + nbr * nvar)[0];
+        Real rho_n = qn4.x;
         Real lambda;
         if (rho_n > 0) {
             Real inv_rho_n = 1.0f / rho_n;
-            Real u_n = d_q[nbr * nvar + 1] * inv_rho_n;
-            Real v_n = d_q[nbr * nvar + 2] * inv_rho_n;
-            Real w_n = d_q[nbr * nvar + 3] * inv_rho_n;
-            Real E_n = d_q[nbr * nvar + 4];
+            Real u_n = qn4.y * inv_rho_n;
+            Real v_n = qn4.z * inv_rho_n;
+            Real w_n = qn4.w * inv_rho_n;
+            float2 qn2 = reinterpret_cast<const float2*>(d_q + nbr * nvar + 4)[0];
+            Real E_n = qn2.x;
             Real kin_n = 0.5f * (u_n*u_n + v_n*v_n + w_n*w_n);
             Real p_n = (gamma - 1.0f) * (E_n - rho_n * kin_n);
             Real a_n = p_n > 0 ? real_sqrt(gamma * p_n / rho_n) : a;
@@ -292,6 +304,42 @@ bool LusgsPreconditioner::allocate(DeviceMesh& mesh, std::string* error) {
     if (!cuda_check(cudaMalloc(&d_cell_color_, n_cells_ * sizeof(int)), "cudaMalloc d_cell_color", error)) return false;
     if (!cuda_check(cudaMemcpy(d_cell_color_, cell_color.data(), n_cells_ * sizeof(int), cudaMemcpyHostToDevice), "copy d_cell_color", error)) return false;
 
+    // Build CSR cell-face adjacency
+    // Count incidences (each non-boundary face appears for both cells)
+    std::vector<int> incidence_count(n_cells_, 0);
+    for (int f = 0; f < nf; ++f) {
+        int l = h_left[f];
+        int r = h_right[f];
+        if (l >= 0 && l < n_cells_) incidence_count[l]++;
+        if (r >= 0 && r < n_cells_) incidence_count[r]++;
+    }
+
+    std::vector<int> h_cell_face_start(n_cells_ + 1, 0);
+    int total = 0;
+    for (int i = 0; i < n_cells_; ++i) {
+        h_cell_face_start[i] = total;
+        total += incidence_count[i];
+    }
+    h_cell_face_start[n_cells_] = total;
+    n_incidence_ = total;
+
+    std::vector<int> h_cell_faces(total);
+    std::vector<int> h_cell_face_nbr(total);
+    std::vector<int> cursor = h_cell_face_start;
+    for (int f = 0; f < nf; ++f) {
+        int l = h_left[f];
+        int r = h_right[f];
+        if (l >= 0 && l < n_cells_) { int pos = cursor[l]++; h_cell_faces[pos] = f; h_cell_face_nbr[pos] = r; }
+        if (r >= 0 && r < n_cells_) { int pos = cursor[r]++; h_cell_faces[pos] = f; h_cell_face_nbr[pos] = l; }
+    }
+
+    if (!cuda_check(cudaMalloc(&d_cell_face_start_, (n_cells_ + 1) * sizeof(int)), "cudaMalloc d_cell_face_start", error)) return false;
+    if (!cuda_check(cudaMalloc(&d_cell_faces_, total * sizeof(int)), "cudaMalloc d_cell_faces", error)) return false;
+    if (!cuda_check(cudaMalloc(&d_cell_face_nbr_, total * sizeof(int)), "cudaMalloc d_cell_face_nbr", error)) return false;
+    if (!cuda_check(cudaMemcpy(d_cell_face_start_, h_cell_face_start.data(), (n_cells_ + 1) * sizeof(int), cudaMemcpyHostToDevice), "copy cell_face_start", error)) return false;
+    if (!cuda_check(cudaMemcpy(d_cell_faces_, h_cell_faces.data(), total * sizeof(int), cudaMemcpyHostToDevice), "copy cell_faces", error)) return false;
+    if (!cuda_check(cudaMemcpy(d_cell_face_nbr_, h_cell_face_nbr.data(), total * sizeof(int), cudaMemcpyHostToDevice), "copy cell_face_nbr", error)) return false;
+
     return true;
 }
 
@@ -301,8 +349,12 @@ void LusgsPreconditioner::release() {
     cuda_free_safe(d_inv_vol_);
     cuda_free_safe(d_spectral_radius_);
     cuda_free_safe(d_cell_color_);
+    cuda_free_safe(d_cell_face_start_);
+    cuda_free_safe(d_cell_faces_);
+    cuda_free_safe(d_cell_face_nbr_);
     n_cells_ = 0;
     n_cell_colors_ = 0;
+    n_incidence_ = 0;
 }
 
 bool LusgsPreconditioner::rebuild_coloring(DeviceMesh& mesh, std::string* error) {
@@ -322,22 +374,62 @@ bool LusgsPreconditioner::rebuild_coloring(DeviceMesh& mesh, std::string* error)
         return false;
     }
 
-    // If cell count changed, reallocate color array
+    // If cell count changed, reallocate color and CSR arrays
     if (n_cells_new != n_cells_) {
         cuda_free_safe(d_cell_color_);
+        cuda_free_safe(d_cell_face_start_);
+        cuda_free_safe(d_cell_faces_);
+        cuda_free_safe(d_cell_face_nbr_);
         if (!cuda_check(cudaMalloc(&d_cell_color_, n_cells_new * sizeof(int)), "cudaMalloc d_cell_color", error)) return false;
         n_cells_ = n_cells_new;
     }
 
     if (!cuda_check(cudaMemcpy(d_cell_color_, cell_color.data(), n_cells_ * sizeof(int), cudaMemcpyHostToDevice), "copy d_cell_color", error)) return false;
     n_cell_colors_ = n_colors;
+
+    // Rebuild CSR cell-face adjacency
+    {
+        std::vector<int> incidence_count(n_cells_, 0);
+        for (int f = 0; f < nf; ++f) {
+            int l = h_left[f];
+            int r = h_right[f];
+            if (l >= 0 && l < n_cells_) incidence_count[l]++;
+            if (r >= 0 && r < n_cells_) incidence_count[r]++;
+        }
+
+        std::vector<int> h_cell_face_start(n_cells_ + 1, 0);
+        int total = 0;
+        for (int i = 0; i < n_cells_; ++i) {
+            h_cell_face_start[i] = total;
+            total += incidence_count[i];
+        }
+        h_cell_face_start[n_cells_] = total;
+
+        std::vector<int> h_cell_faces(total);
+        std::vector<int> h_cell_face_nbr(total);
+        std::vector<int> cursor = h_cell_face_start;
+        for (int f = 0; f < nf; ++f) {
+            int l = h_left[f];
+            int r = h_right[f];
+            if (l >= 0 && l < n_cells_) { int pos = cursor[l]++; h_cell_faces[pos] = f; h_cell_face_nbr[pos] = r; }
+            if (r >= 0 && r < n_cells_) { int pos = cursor[r]++; h_cell_faces[pos] = f; h_cell_face_nbr[pos] = l; }
+        }
+
+        if (!cuda_check(cudaMalloc(&d_cell_face_start_, (n_cells_ + 1) * sizeof(int)), "cudaMalloc d_cell_face_start", error)) return false;
+        if (!cuda_check(cudaMalloc(&d_cell_faces_, total * sizeof(int)), "cudaMalloc d_cell_faces", error)) return false;
+        if (!cuda_check(cudaMalloc(&d_cell_face_nbr_, total * sizeof(int)), "cudaMalloc d_cell_face_nbr", error)) return false;
+        if (!cuda_check(cudaMemcpy(d_cell_face_start_, h_cell_face_start.data(), (n_cells_ + 1) * sizeof(int), cudaMemcpyHostToDevice), "copy cell_face_start", error)) return false;
+        if (!cuda_check(cudaMemcpy(d_cell_faces_, h_cell_faces.data(), total * sizeof(int), cudaMemcpyHostToDevice), "copy cell_faces", error)) return false;
+        if (!cuda_check(cudaMemcpy(d_cell_face_nbr_, h_cell_face_nbr.data(), total * sizeof(int), cudaMemcpyHostToDevice), "copy cell_face_nbr", error)) return false;
+        n_incidence_ = total;
+    }
+
     return true;
 }
 
 bool LusgsPreconditioner::compute_diagonal(DeviceMesh& mesh, const Real* d_dt_cell,
     Real gamma, bool viscous, const Real* d_mu, Real Re,
     std::string* error) {
-    int n_faces = static_cast<int>(mesh.face_count());
     int block = kBlockSize;
     int grid = (n_cells_ + block - 1) / block;
     if (grid < 1) grid = 1;
@@ -348,8 +440,9 @@ bool LusgsPreconditioner::compute_diagonal(DeviceMesh& mesh, const Real* d_dt_ce
     compute_diag_kernel<<<grid, block>>>(
         d_D_, d_spectral_radius_, n_cells_, nvar_, gamma,
         mesh.state_device(), cd.volume,
-        fd.nx, fd.ny, fd.nz, fd.area, fd.left_cell, fd.right_cell,
-        n_faces, d_dt_cell, d_inv_vol_,
+        fd.nx, fd.ny, fd.nz, fd.area,
+        d_cell_face_start_, d_cell_faces_, d_cell_face_nbr_,
+        d_dt_cell, d_inv_vol_,
         viscous ? d_mu : nullptr, Re);
     if (!cuda_check(cudaGetLastError(), "compute_diag_kernel", error)) return false;
     return true;
@@ -357,7 +450,6 @@ bool LusgsPreconditioner::compute_diagonal(DeviceMesh& mesh, const Real* d_dt_ce
 
 bool LusgsPreconditioner::apply(DeviceMesh& mesh, const Real* d_r, Real* d_z,
     Real gamma, std::string* error) {
-    int n_faces = static_cast<int>(mesh.face_count());
     int block = kBlockSize;
     int grid = (n_cells_ + block - 1) / block;
     if (grid < 1) grid = 1;
@@ -368,8 +460,9 @@ bool LusgsPreconditioner::apply(DeviceMesh& mesh, const Real* d_r, Real* d_z,
         forward_sweep_kernel<<<grid, block>>>(
             d_dz_, d_D_, d_r, mesh.state_device(),
             n_cells_, nvar_, gamma,
-            fd.nx, fd.ny, fd.nz, fd.area, fd.left_cell, fd.right_cell,
-            n_faces, d_inv_vol_, c, d_cell_color_);
+            fd.nx, fd.ny, fd.nz, fd.area,
+            d_cell_face_start_, d_cell_faces_, d_cell_face_nbr_,
+            d_inv_vol_, c, d_cell_color_);
         if (!cuda_check(cudaGetLastError(), "forward_sweep_kernel", error)) return false;
     }
 
@@ -377,8 +470,9 @@ bool LusgsPreconditioner::apply(DeviceMesh& mesh, const Real* d_r, Real* d_z,
         backward_sweep_kernel<<<grid, block>>>(
             d_z, d_dz_, d_D_, mesh.state_device(),
             n_cells_, nvar_, gamma,
-            fd.nx, fd.ny, fd.nz, fd.area, fd.left_cell, fd.right_cell,
-            n_faces, d_inv_vol_, c, d_cell_color_);
+            fd.nx, fd.ny, fd.nz, fd.area,
+            d_cell_face_start_, d_cell_faces_, d_cell_face_nbr_,
+            d_inv_vol_, c, d_cell_color_);
         if (!cuda_check(cudaGetLastError(), "backward_sweep_kernel", error)) return false;
     }
 

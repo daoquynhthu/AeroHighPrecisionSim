@@ -38,9 +38,13 @@ private:
     Real* d_inv_vol_ = nullptr;
     Real* d_spectral_radius_ = nullptr;
     int* d_cell_color_ = nullptr;
+    int* d_cell_face_start_ = nullptr;
+    int* d_cell_faces_ = nullptr;
+    int* d_cell_face_nbr_ = nullptr;
     int n_cell_colors_ = 0;
     int n_cells_ = 0;
     int nvar_ = 0;
+    int n_incidence_ = 0;
 };
 
 } // namespace cfd

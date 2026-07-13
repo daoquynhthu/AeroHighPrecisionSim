@@ -64,7 +64,7 @@ if(AEROSIM_USE_CUDA)
     message(STATUS "CUDA architectures: ${CMAKE_CUDA_ARCHITECTURES}")
 
     find_package(CUDAToolkit REQUIRED)
-    set(CMAKE_CUDA_FLAGS "${CMAKE_CUDA_FLAGS} --expt-relaxed-constexpr")
+    set(CMAKE_CUDA_FLAGS "${CMAKE_CUDA_FLAGS} --expt-relaxed-constexpr -O3")
 
     if(AEROSIM_USE_CCACHE AND CCACHE_PROGRAM)
         set(CMAKE_CUDA_COMPILER_LAUNCHER "${CCACHE_PROGRAM}")

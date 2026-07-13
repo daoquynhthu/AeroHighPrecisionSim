@@ -44,6 +44,27 @@ __global__ void check_status_kernel(
     *d_residual_history_slot = l2;
 }
 
+__global__ void newton_l2_check_kernel(
+    Real* d_l2_sum,
+    int nvar_ncells,
+    Real sufficient_decrease,
+    int* d_newton_accepted) {
+    if (threadIdx.x != 0 || blockIdx.x != 0) return;
+    Real l2_new = real_sqrt(d_l2_sum[0] / static_cast<Real>(nvar_ncells));
+    int accepted = (l2_new < sufficient_decrease * d_l2_sum[1]) ? 1 : 0;
+    if (accepted) {
+        d_l2_sum[1] = l2_new;
+    }
+    *d_newton_accepted = accepted;
+}
+
+__global__ void init_l2_old_kernel(
+    Real* d_l2_sum,
+    int nvar_ncells) {
+    if (threadIdx.x != 0 || blockIdx.x != 0) return;
+    d_l2_sum[1] = real_sqrt(d_l2_sum[0] / static_cast<Real>(nvar_ncells));
+}
+
 } // namespace
 
 static void solve_gpu_free(int* d_failed, Real* d_min_dt, Real* d_l2_sum, Real* d_forces,
@@ -96,6 +117,7 @@ static CfdSolveSummary solve_gpu_impl(
     Real* d_r_saved = nullptr;
     Real* d_q_backup = nullptr;
     Real* d_scratch = nullptr;
+    int* d_newton_accepted = nullptr;
 
     if (config.implicit) {
         d_dq = nullptr; d_dt_cell = nullptr; d_r_saved = nullptr; d_q_backup = nullptr;
@@ -106,6 +128,7 @@ static CfdSolveSummary solve_gpu_impl(
         if (!cuda_check(cudaMalloc(&d_r_saved, nvar_cells * sizeof(Real)), "cudaMalloc d_r_saved", error)) goto fail;
         if (!cuda_check(cudaMalloc(&d_q_backup, nvar_cells * sizeof(Real)), "cudaMalloc d_q_backup", error)) goto fail;
         if (!cuda_check(cudaMalloc(&d_scratch, 4 * nvar_cells * sizeof(Real)), "cudaMalloc d_scratch", error)) goto fail;
+        if (!cuda_check(cudaMalloc(&d_newton_accepted, sizeof(int)), "cudaMalloc d_newton_accepted", error)) goto fail;
 
         fgmres = new FgmresSolver(nvar_cells, config.fgmres_restart, config.fgmres_max_iter, config.fgmres_tol);
         if (!fgmres->allocate(error)) goto fail;
@@ -210,10 +233,9 @@ if (config.viscous) {
             if (!dcopy_gpu(d_mesh.residual_device(), d_neg_r, nvar_cells, stream)) { if (error) *error = "copy R failed"; goto fail; }
             if (!dscal_gpu(-1, d_neg_r, nvar_cells, stream)) { if (error) *error = "negate R failed"; goto fail; }
 
-            Real l2_old = 0;
             if (!dnrm2_gpu(d_r_saved, nvar_cells, d_l2_sum, stream)) { if (error) *error = "L2 norm failed"; goto fail; }
-            if (!cuda_check(cudaMemcpy(&l2_old, d_l2_sum, sizeof(Real), cudaMemcpyDeviceToHost), "read L2", error)) goto fail;
-            l2_old = real_sqrt(l2_old / static_cast<Real>(nvar_ncells > 0 ? nvar_ncells : 1));
+            init_l2_old_kernel<<<1, 1, 0, stream>>>(d_l2_sum, nvar_ncells);
+            if (!cuda_check(cudaGetLastError(), "init_l2_old kernel launch", error)) goto fail;
 
             // Adaptive JFV epsilon: eps = sqrt(machine_eps) * max(1, ||q||_RMS)
             // Krylov vectors are L2-unit-normalized by FGMRES, so ||v||_2 ≈ 1,
@@ -302,18 +324,19 @@ if (config.viscous) {
                             }
                         }
 
-                        Real l2_new = 0;
                         if (!dnrm2_gpu(d_mesh.residual_device(), nvar_cells, d_l2_sum, stream)) {
                             if (error) *error = "new L2 norm failed"; goto fail;
                         }
-                        if (!cuda_check(cudaMemcpy(&l2_new, d_l2_sum, sizeof(Real), cudaMemcpyDeviceToHost), "read new L2", error)) goto fail;
-                        l2_new = real_sqrt(l2_new / static_cast<Real>(nvar_ncells > 0 ? nvar_ncells : 1));
+                        newton_l2_check_kernel<<<1, 1, 0, stream>>>(
+                            d_l2_sum, nvar_ncells, config.newton_sufficient_decrease, d_newton_accepted);
+                        if (!cuda_check(cudaGetLastError(), "newton L2 check kernel launch", error)) goto fail;
+                        int accepted = 0;
+                        if (!cuda_check(cudaMemcpy(&accepted, d_newton_accepted, sizeof(int), cudaMemcpyDeviceToHost), "read accepted", error)) goto fail;
 
-                        if (l2_new < config.newton_sufficient_decrease * l2_old) {
+                        if (accepted) {
                             if (!dcopy_gpu(d_mesh.residual_device(), d_r_saved, nvar_cells, stream)) {
                                 if (error) *error = "update saved R failed"; goto fail;
                             }
-                            l2_old = l2_new;
                             newt_converged = true;
                             goto newton_accepted;
                         }
@@ -492,6 +515,7 @@ cleanup:
     cuda_free_safe(d_r_saved);
     cuda_free_safe(d_q_backup);
     cuda_free_safe(d_scratch);
+    cuda_free_safe(d_newton_accepted);
     cudaStreamDestroy(stream);
 #ifdef MPI_ENABLED
     cudaStreamDestroy(stream_comm);
@@ -524,7 +548,7 @@ CfdSolveSummary solve_gpu(
 
     if (!cuda_check(cudaMalloc(&d_failed, sizeof(int)), "cudaMalloc d_failed", error)) { solve_gpu_free(d_failed, d_min_dt, d_l2_sum, d_forces, d_residual_history, d_state_bounds_history, d_failure_cell, d_failure_state); CfdSolveSummary s; s.failed = true; return s; }
     if (!cuda_check(cudaMalloc(&d_min_dt, sizeof(Real)), "cudaMalloc d_min_dt", error)) { solve_gpu_free(d_failed, d_min_dt, d_l2_sum, d_forces, d_residual_history, d_state_bounds_history, d_failure_cell, d_failure_state); CfdSolveSummary s; s.failed = true; return s; }
-    if (!cuda_check(cudaMalloc(&d_l2_sum, sizeof(Real)), "cudaMalloc d_l2_sum", error)) { solve_gpu_free(d_failed, d_min_dt, d_l2_sum, d_forces, d_residual_history, d_state_bounds_history, d_failure_cell, d_failure_state); CfdSolveSummary s; s.failed = true; return s; }
+    if (!cuda_check(cudaMalloc(&d_l2_sum, 2 * sizeof(Real)), "cudaMalloc d_l2_sum", error)) { solve_gpu_free(d_failed, d_min_dt, d_l2_sum, d_forces, d_residual_history, d_state_bounds_history, d_failure_cell, d_failure_state); CfdSolveSummary s; s.failed = true; return s; }
     if (!cuda_check(cudaMalloc(&d_forces, 7 * sizeof(Real)), "cudaMalloc d_forces", error)) { solve_gpu_free(d_failed, d_min_dt, d_l2_sum, d_forces, d_residual_history, d_state_bounds_history, d_failure_cell, d_failure_state); CfdSolveSummary s; s.failed = true; return s; }
     if (!cuda_check(cudaMalloc(&d_residual_history, config.max_iter * sizeof(Real)), "cudaMalloc d_residual_history", error)) { solve_gpu_free(d_failed, d_min_dt, d_l2_sum, d_forces, d_residual_history, d_state_bounds_history, d_failure_cell, d_failure_state); CfdSolveSummary s; s.failed = true; return s; }
 

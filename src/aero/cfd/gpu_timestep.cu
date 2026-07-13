@@ -26,7 +26,7 @@ static bool ensure_partial_buf(int min_blocks) {
     return true;
 }
 
-__global__ void timestep_kernel(
+__global__ void __launch_bounds__(256) timestep_kernel(
     const Real* d_q, int n_cells, int nvar, Real gamma, Real cfl,
     const Real* d_volume, const Real* d_h_min,
     Real* d_partial,
@@ -79,7 +79,7 @@ __global__ void timestep_kernel(
     }
 }
 
-__global__ void reduce_min_kernel(const Real* d_partial, Real* d_result, int n_blocks) {
+__global__ void __launch_bounds__(256) reduce_min_kernel(const Real* d_partial, Real* d_result, int n_blocks) {
     Real m = std::numeric_limits<Real>::max();
     for (int i = 0; i < n_blocks; ++i) {
         if (d_partial[i] < m) m = d_partial[i];
@@ -87,7 +87,7 @@ __global__ void reduce_min_kernel(const Real* d_partial, Real* d_result, int n_b
     *d_result = m;
 }
 
-__global__ void local_timestep_kernel(
+__global__ void __launch_bounds__(256) local_timestep_kernel(
     const Real* d_q, int n_cells, int nvar, Real gamma, Real cfl,
     const Real* d_volume, const Real* d_h_min,
     Real* d_dt_cell,

@@ -997,4 +997,22 @@
 - COV-23: Added CFD-EULER-12 — tet-only mesh (structured cube) solver convergence test (test_cfd_euler.cpp)
 - Verified: TestCfdState 36/36, TestCfdEuler 14/14, TestCfdGpu 67/67, TestGpuTopology 7/7 — all PASS
 
+2026-07-13
+- PERF2-4: LU-SGS 三个核函数 d_q 访问改为 float4+float2 向量化加载（全局加载指令 6→2）。
+- PERF2-12: 32 个核函数添加 __launch_bounds__（128 面级/256 单元级），涉 10 个文件。
+- PERF2-6: wall_force_kernel 改为共享内存归约 + 每块仅一次 atomicAdd。
+- PERF2-10: rans_source_kernel SA 常数（cv13/cw1_val/cw3_6）提升为 constexpr。
+- PERF2-11: CMAKE_CUDA_FLAGS 添加 -O3。
+- Verified: all 176 tests PASS (TestCfdGpu 67/67, TestCfdState 36/36, TestCfdEuler 14/14, TestGpuTopology 7/7, TestCfdDiagnostics 4/4, TestCfdReconstruction 21/21, TestCfdViscous 11/11, TestCfdRans 16/16)
+
+2026-07-13
+- PERF2-2: 给 `viscous_flux_kernel_atomic` 和 `viscous_flux_kernel_colored` 添加 `__launch_bounds__(128)`。
+- PERF2-1: 新增 `newton_l2_check_kernel`/`init_l2_old_kernel` 设备端收敛检查核函数。
+  `l2_old` 存储在 `d_l2_sum[1]` 消除 D2H 回读。Newton 回溯 L2 比较完全 GPU 端完成。
+  `d_l2_sum` 从 1 扩至 2 Real。
+- PERF2-3: `LusgsPreconditioner` 新增 CSR 单元-面邻接表 (`d_cell_face_start_`/`d_cell_faces_`/`d_cell_face_nbr_`)。
+  三个 LU-SGS 核函数 (`compute_diag_kernel`/`forward_sweep_kernel`/`backward_sweep_kernel`) 改为
+  迭代 CSR 邻接，复杂度从 O(N_cells*N_faces) 降至 O(N_cells*avg_degree)。
+- Verified: TestCfdState 36/36, TestCfdEuler 14/14, TestCfdGpu 67/67, TestGpuTopology 7/7 — all PASS
+
 

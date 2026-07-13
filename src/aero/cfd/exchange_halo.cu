@@ -12,7 +12,7 @@ namespace cfd {
 
 namespace {
 
-__global__ void pack_halo_kernel(
+__global__ void __launch_bounds__(256) pack_halo_kernel(
     const Real* d_q, int nvar,
     const int* d_ghost_indices, int n_ghost,
     Real* d_send_buf) {
@@ -24,7 +24,7 @@ __global__ void pack_halo_kernel(
     }
 }
 
-__global__ void unpack_halo_kernel(
+__global__ void __launch_bounds__(256) unpack_halo_kernel(
     Real* d_q, int nvar,
     const int* d_ghost_indices, int n_ghost,
     const Real* d_recv_buf) {

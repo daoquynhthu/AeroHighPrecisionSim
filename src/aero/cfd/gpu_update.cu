@@ -33,7 +33,7 @@ static bool ensure_partial_buf(int min_blocks) {
     return true;
 }
 
-__global__ void reduce_sum_kernel(const Real* d_partial, int num_blocks, Real* result) {
+__global__ void __launch_bounds__(256) reduce_sum_kernel(const Real* d_partial, int num_blocks, Real* result) {
     Real sum = 0;
     for (int i = 0; i < num_blocks; ++i) {
         sum += d_partial[i];
@@ -41,7 +41,7 @@ __global__ void reduce_sum_kernel(const Real* d_partial, int num_blocks, Real* r
     *result = sum;
 }
 
-__global__ void update_and_l2_kernel(
+__global__ void __launch_bounds__(256) update_and_l2_kernel(
     Real* d_q,
     const Real* d_residual,
     const Real* d_volume,
