@@ -1,6 +1,7 @@
 #include "aero/cfd/gpu_topology.hpp"
 #include "aero/cfd/partition.hpp"
 #include "aero/cfd/cfd_mesh.hpp"
+#include "aero/cfd/cuda_utils.hpp"
 #include <cstdio>
 #include <cstdlib>
 
@@ -100,6 +101,70 @@ static void test_partition_linear_multi() {
     PASS();
 }
 
+static void test_partition_linear_three() {
+    TEST("linear partition n_ranks=3: all cells accounted for");
+    CfdMesh mesh;
+    mesh.cells.resize(100);
+    for (int i = 0; i < 100; ++i) {
+        mesh.cells[i].cx = static_cast<Real>(i) * 1.0f;
+        mesh.cells[i].cy = 0.0f;
+        mesh.cells[i].cz = 0.0f;
+    }
+    mesh.faces.resize(99);
+    for (int i = 0; i < 99; ++i) {
+        mesh.faces[i].left_cell = i;
+        mesh.faces[i].right_cell = i + 1;
+    }
+    PartitionInfo info;
+    if (!partition_linear(mesh, 3, info)) FAIL("partition_linear failed");
+    if (info.n_ranks != 3) FAIL("expected 3 ranks");
+    if (info.owned_cells.empty()) FAIL("expected some owned cells");
+    if (info.ghost_cells.empty()) FAIL("expected ghost cells for n_ranks>1");
+    int total_owned = 0;
+    for (int i = 0; i < 100; ++i)
+        if (info.partition_owner[i] == 0) total_owned++;
+    if (total_owned != static_cast<int>(info.owned_cells.size()))
+        FAIL("owned_cells count %zu != partition_owner count %d", info.owned_cells.size(), total_owned);
+    PASS();
+}
+
+static void test_upload_partition_to_device() {
+    TEST("upload_partition_to_device allocates and uploads GpuPartition");
+    CfdMesh mesh;
+    mesh.cells.resize(50);
+    for (int i = 0; i < 50; ++i) {
+        mesh.cells[i].cx = static_cast<Real>(i) * 1.0f;
+        mesh.cells[i].cy = 0.0f;
+        mesh.cells[i].cz = 0.0f;
+    }
+    mesh.faces.resize(49);
+    for (int i = 0; i < 49; ++i) {
+        mesh.faces[i].left_cell = i;
+        mesh.faces[i].right_cell = i + 1;
+    }
+    PartitionInfo info;
+    if (!partition_linear(mesh, 2, info)) FAIL("partition_linear failed");
+    GpuPartition gpu_part;
+    std::string error;
+    if (!upload_partition_to_device(info, gpu_part, &error))
+        FAIL("upload_partition_to_device: %s", error.c_str());
+    if (gpu_part.n_ghost <= 0) FAIL("expected ghost cells");
+    if (gpu_part.d_partition_owner == nullptr) FAIL("d_partition_owner is null");
+    if (gpu_part.d_ghost_indices == nullptr) FAIL("d_ghost_indices is null");
+    if (gpu_part.d_ghost_owner == nullptr) FAIL("d_ghost_owner is null");
+    std::vector<int> host_owners(50);
+    std::string cer_err;
+    if (!cuda_check(cudaMemcpy(host_owners.data(), gpu_part.d_partition_owner, 50 * sizeof(int), cudaMemcpyDeviceToHost), "cudaMemcpy partition_owner", &cer_err))
+        FAIL("cudaMemcpy: %s", cer_err.c_str());
+    for (int i = 0; i < 50; ++i) {
+        if (host_owners[i] != info.partition_owner[i])
+            FAIL("owner[%d] = %d, expected %d", i, host_owners[i], info.partition_owner[i]);
+    }
+    gpu_part.release();
+    if (gpu_part.d_partition_owner != nullptr) FAIL("release did not null pointer");
+    PASS();
+}
+
 int main() {
     std::printf("[GPU Topology Test]\n");
     test_topology_detection();
@@ -108,6 +173,8 @@ int main() {
     std::printf("[Partition Test]\n");
     test_partition_linear_single();
     test_partition_linear_multi();
+    test_partition_linear_three();
+    test_upload_partition_to_device();
     std::printf("All PASS\n");
     return 0;
 }

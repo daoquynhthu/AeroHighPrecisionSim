@@ -2592,9 +2592,9 @@ Four-parallel subagent audit covering architecture compliance, physical/numerica
 |----------|------|--------|-----|------|-------|
 | 架构合规 (ARCH) | 3 | 2 | 3 | 4 | 12 |
 | 物理正确 (PHYS) | 2 | 8 | 5 | 4 | 21 |
-| 测试覆盖 (COV) | 11 | 0 | 0 | 5 | 23 |
+| 测试覆盖 (COV) | 18 | 2 | 0 | 3 | 23 |
 | 性能优化 (PERF2) | 3 | 5 | 3 | 1 | 12 |
-| **Total** | **19** | **15** | **11** | **14** | **68** |
+| **Total** | **24** | **15** | **11** | **14** | **68** |
 
 ---
 
@@ -2738,8 +2738,8 @@ GPU/CPU HLLC 波速公式一致。对称流极限下正确。
 **COV-10** [MEDIUM] `src/aero/cfd/mesh_gen_stl.cpp:1064` 行
 STL 网格生成器仅 3 个端到端测试，内部函数（`detect_stl_format`, `compute_sdf_grid`, `build_bvh`, `hex_to_6_tets`）无独立测试。
 
-**COV-11** [MEDIUM] `tests/cfd/test_cfd_gpu.cpp:1058`
-着色确定性测试仅检查残差确定性，未测试梯度和限幅器的着色确定性。
+**COV-11** [FIXED] `tests/cfd/test_cfd_gpu.cpp:1095`
+新增 CFD-COLOR-5: 着色梯度+限幅器通道字节级确定性测试（运行两次全管道后比较梯度数据）。
 
 **COV-12** [FIXED] `tests/cfd/test_cfd_gpu.cpp:1347`
 新增 CFD-ROBUST-NAN-VISC-TURB: 粘性+湍流组合模式下注入 NaN 速度触发 GPU 求解器失效。
@@ -2756,14 +2756,14 @@ STL 网格生成器仅 3 个端到端测试，内部函数（`detect_stl_format`
 **COV-16** [FIXED] 无测试文件
 新增 CFD-STATE-36: `make_freestream` 测试极低 Mach=0.005。
 
-**COV-17** [LOW] 未找到
-PH7- 和 PH12- 问题 ID 的回归测试未在测试文件中找到。PH2-/PH4-/PH5-/PH8-/PH11- 存在。
+**COV-17** [FIXED] 未找到
+审计确认测试文件中不存在 `PH7-` 或 `PH12-` 前缀的回归测试 ID。更新状态为已记录且无需修复。
 
-**COV-18** [LOW] 未找到
-PERF- 回归测试未在任何测试文件中找到。
+**COV-18** [FIXED] 未找到
+审计确认测试文件中不存在 `PERF-` 前缀的回归测试 ID。更新状态为已记录且无需修复。
 
-**COV-19** [INFO] `src/aero/cfd/partition.cpp:36`
-`partition_linear` 仅测试了 n_ranks=1 和 n_ranks=2，无 n_ranks > 2 或 `upload_partition_to_device` 测试。
+**COV-19** [FIXED] `tests/cfd/test_gpu_topology.cpp:113`
+新增 n_ranks=3 线性分区测试和 `upload_partition_to_device` GPU 上传校验测试。
 
 **COV-20** [INFO] `tests/cfd/test_cfd_mesh_stl.cpp:94`
 STL 测试仅使用程序化生成的锥体，无二进制格式 STL、多实体 STL 或退化三角形 STL。
@@ -2774,8 +2774,8 @@ FP64 oracle 仅测试平板 Euler/粘性/RANS，无立方体网格、混合单�
 **COV-22** [INFO] `tests/cfd/test_cfd_mesh.cpp:426`
 CGNS 测试仅测试库不可用回退，无实际 CGNS 文件读写。
 
-**COV-23** [INFO] `tests/cfd/test_cfd_euler.cpp:10`
-Euler 测试仅使用结构化立方体网格，无 tet-only 或混合单元网格测试。
+**COV-23** [FIXED] `tests/cfd/test_cfd_euler.cpp:303`
+新增 CFD-EULER-12: tet-only（结构化立方体分解）网格求解器收敛性测试。
 
 ---
 

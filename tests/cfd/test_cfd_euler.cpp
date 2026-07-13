@@ -1,5 +1,6 @@
 #include "aero/cfd/cfd_solver.hpp"
 #include "aero/cfd/cfd_residual.hpp"
+#include "aero/cfd/diagnostics.hpp"
 #include "aero/cfd/real.hpp"
 
 #include <cmath>
@@ -300,6 +301,33 @@ static int test_edge_case_meshes() {
     return 0;
 }
 
+static int test_tet_mesh_solver() {
+    TEST("CFD-EULER-12 tet-only mesh (structured cube) solver produces finite forces");
+    {
+        CfdMesh mesh = generate_structured_cube_mesh(5.0f, 7);
+        compute_mesh_metrics(mesh);
+        FreestreamCondition cond;
+        cond.mach = 2.0f; cond.alpha_deg = 0.0f; cond.beta_deg = 0.0f;
+        CfdConfig cfg;
+        cfg.max_iter = 3;
+        cfg.cfl = 0.1f;
+        cfg.use_gpu = false;
+        cfg.diagnostic_level = DiagnosticLevel::Verbose;
+        CfdSolver solver;
+        if (!solver.load_mesh(mesh)) FAIL("load_mesh failed");
+        auto summary = solver.solve(cond, cfg);
+        if (summary.failed) {
+            std::string reason = summary.diagnostics.failure.valid
+                ? summary.diagnostics.failure.reason : "unknown";
+            FAIL("solver failed: %s", reason.c_str());
+        }
+        for (auto f : {summary.forces.CX, summary.forces.CY, summary.forces.CZ})
+            if (!std::isfinite(f) || std::fabs(f) > 1e6f) FAIL("non-finite force component");
+        PASS;
+    }
+    return 0;
+}
+
 int main() {
     int result = 0;
     result |= test_state_roundtrip();
@@ -310,6 +338,7 @@ int main() {
     result |= test_amr_solver_loop();
     result |= test_euler_residual_cpu_uniform();
     result |= test_edge_case_meshes();
+    result |= test_tet_mesh_solver();
     std::printf("\n%d / %d tests PASSED.\n", pass_count, test_count);
     return result == 0 && pass_count == test_count ? 0 : 1;
 }

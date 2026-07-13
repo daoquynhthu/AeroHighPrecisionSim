@@ -989,4 +989,12 @@
 - COV-16: Added CFD-STATE-36 make_freestream Mach=0.005 test (test_cfd_state.cpp)
 - Verified: TestCfdState 36/36, TestCfdEuler 13/13, TestMms 10/10, TestCfdGpu 66/66 — all PASS
 
+2026-07-13
+- COV-11: Added CFD-COLOR-5 — gradient+limiter pipeline byte-level determinism test (test_cfd_gpu.cpp)
+- COV-17: Confirmed no PH7- or PH12- regression tests exist in codebase (documented)
+- COV-18: Confirmed no PERF- regression tests exist in codebase (documented)
+- COV-19: Added n_ranks=3 partition test + upload_partition_to_device GPU verification (test_gpu_topology.cpp)
+- COV-23: Added CFD-EULER-12 — tet-only mesh (structured cube) solver convergence test (test_cfd_euler.cpp)
+- Verified: TestCfdState 36/36, TestCfdEuler 14/14, TestCfdGpu 67/67, TestGpuTopology 7/7 — all PASS
+
 

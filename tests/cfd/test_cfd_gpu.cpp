@@ -1087,6 +1087,66 @@ static int test_color_deterministic_residual() {
         if (std::memcmp(res1.data(), res2.data(), residual_bytes) != 0)
             FAIL("residual differs between runs (non-deterministic)");
 
+    cudaFree(d_failed);
+        PASS;
+    }
+    return 0;
+}
+
+static int test_color_deterministic_gradient_limiter() {
+    TEST("CFD-COLOR-5 colored gradient+limiter pipeline is deterministic byte-level");
+    {
+        CfdMesh mesh = generate_structured_cube_mesh(5.0f, 7);
+        compute_mesh_metrics(mesh);
+
+        Real gamma = 1.4f;
+        std::vector<ConservativeState> q(mesh.cells.size());
+        for (std::size_t i = 0; i < mesh.cells.size(); ++i) {
+            Real x = mesh.cells[i].cx;
+            Real y = mesh.cells[i].cy;
+            Real rho = 1.0f + 0.1f * x;
+            Real u = 2.0f + 0.05f * y;
+            Real v = -0.1f * x;
+            Real p = 1.0f / gamma + 0.05f * x - 0.02f * y;
+            Real e = p / (gamma - 1.0f) + 0.5f * rho * (u*u + v*v);
+            q[i].rho = rho;
+            q[i].rho_u = rho * u;
+            q[i].rho_v = rho * v;
+            q[i].rho_w = 0.0f;
+            q[i].rho_E = e;
+        }
+
+        std::string error;
+        DeviceMesh d_mesh;
+        if (!d_mesh.upload_mesh(mesh, &error)) FAIL("upload: %s", error.c_str());
+        if (!d_mesh.upload_state(q, &error)) FAIL("state: %s", error.c_str());
+
+        int* d_failed = nullptr;
+        if (!cuda_check(cudaMalloc(&d_failed, sizeof(int)), "cudaMalloc d_failed", &error)) FAIL("%s", error.c_str());
+        if (!cuda_check(cudaMemset(d_failed, 0, sizeof(int)), "clear d_failed", &error)) FAIL("%s", error.c_str());
+
+        if (!compute_gradients_gpu(d_mesh, gamma, &error, d_failed)) FAIL("1st gradients: %s", error.c_str());
+        if (!compute_limiters_gpu(d_mesh, gamma, &error, d_failed)) FAIL("1st limiters: %s", error.c_str());
+        if (!apply_limiter_gpu(d_mesh, &error)) FAIL("1st apply: %s", error.c_str());
+
+        std::size_t grad_bytes = d_mesh.cell_count() * DeviceMesh::NGRAD * sizeof(Real);
+        std::vector<PrimitiveGradient> g1(d_mesh.cell_count());
+        if (!d_mesh.download_gradients(g1, &error)) FAIL("1st download: %s", error.c_str());
+
+        // On second run, need to zero gradients and redo full pipeline
+        if (!cuda_check(cudaMemset(d_mesh.gradients_device(), 0, grad_bytes), "clear gradients", &error)) FAIL("%s", error.c_str());
+        if (!cuda_check(cudaMemset(d_failed, 0, sizeof(int)), "clear d_failed", &error)) FAIL("%s", error.c_str());
+
+        if (!compute_gradients_gpu(d_mesh, gamma, &error, d_failed)) FAIL("2nd gradients: %s", error.c_str());
+        if (!compute_limiters_gpu(d_mesh, gamma, &error, d_failed)) FAIL("2nd limiters: %s", error.c_str());
+        if (!apply_limiter_gpu(d_mesh, &error)) FAIL("2nd apply: %s", error.c_str());
+
+        std::vector<PrimitiveGradient> g2(d_mesh.cell_count());
+        if (!d_mesh.download_gradients(g2, &error)) FAIL("2nd download: %s", error.c_str());
+
+        if (std::memcmp(g1.data(), g2.data(), grad_bytes) != 0)
+            FAIL("gradients differ between runs (non-deterministic)");
+
         cudaFree(d_failed);
         PASS;
     }
@@ -3269,6 +3329,7 @@ result |= test_recon_order2_converged_forces();
     result |= test_color_residual_matches_uncolored();
     result |= test_color_gradient_matches_uncolored();
     result |= test_color_deterministic_residual();
+    result |= test_color_deterministic_gradient_limiter();
     result |= test_viscous_false_regression();
     result |= test_viscous_finite_flat_plate();
     result |= test_viscous_differs_from_inviscid();
