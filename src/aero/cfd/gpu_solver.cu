@@ -119,6 +119,12 @@ static CfdSolveSummary solve_gpu_impl(
     Real* d_scratch = nullptr;
     int* d_newton_accepted = nullptr;
 
+    cudaStream_t stream_main = nullptr, stream_pre = nullptr;
+    cudaStreamCreate(&stream_main);
+    cudaStreamCreate(&stream_pre);
+    cudaEvent_t event_timestep_done = nullptr;
+    cudaEventCreate(&event_timestep_done);
+
     if (config.implicit) {
         d_dq = nullptr; d_dt_cell = nullptr; d_r_saved = nullptr; d_q_backup = nullptr;
         if (!cuda_check(cudaMalloc(&d_dq, nvar_cells * sizeof(Real)), "cudaMalloc d_dq", error)) goto fail;
@@ -137,8 +143,6 @@ static CfdSolveSummary solve_gpu_impl(
         if (!lusgs->allocate(d_mesh, error)) goto fail;
     }
 
-    cudaStream_t stream = nullptr;
-    cudaStreamCreate(&stream);
 #ifdef MPI_ENABLED
     cudaStream_t stream_comm;
     cudaStreamCreate(&stream_comm);
@@ -163,28 +167,30 @@ static CfdSolveSummary solve_gpu_impl(
         }
 #endif
         if (config.reconstruction_order == 2 || config.viscous || config.turbulence) {
-            if (!compute_gradients_gpu(d_mesh, config.gamma, error, d_failed, stream)) goto fail;
+            if (!compute_gradients_gpu(d_mesh, config.gamma, error, d_failed, stream_main)) goto fail;
             if (config.reconstruction_order == 2 || config.turbulence) {
-                if (!compute_limiters_gpu(d_mesh, config.gamma, error, d_failed, stream)) goto fail;
-                if (!apply_limiter_gpu(d_mesh, false, error, stream)) goto fail;
+                if (!compute_limiters_gpu(d_mesh, config.gamma, error, d_failed, stream_main)) goto fail;
+                if (!apply_limiter_gpu(d_mesh, false, error, stream_main)) goto fail;
             }
         }
 
         if (!compute_timestep_gpu(d_mesh, config.gamma, config.cfl, d_min_dt,
-                config.viscous, config.mu_ref, config.T_ref, config.sutherland_T, config.Re, stream)) {
+                config.viscous, config.mu_ref, config.T_ref, config.sutherland_T, config.Re, stream_pre)) {
             if (error) *error = "timestep kernel failed";
             goto fail;
         }
+        cudaEventRecord(event_timestep_done, stream_pre);
+        cudaStreamWaitEvent(stream_main, event_timestep_done, 0);
 
         if (!launch_euler_residual_kernel(d_mesh, w_inf, config.gamma, d_failed, nullptr, error,
-                config.reconstruction_order, stream)) {
+                config.reconstruction_order, stream_main)) {
             goto fail;
         }
 
 if (config.viscous) {
             if (!compute_viscous_flux_gpu(d_mesh, config.gamma, config.prandtl,
                     config.mu_ref, config.T_ref, config.sutherland_T,
-                    config.Re, config.wall_temperature, config.turbulence ? 1 : 0, d_failed, stream)) {
+                    config.Re, config.wall_temperature, config.turbulence ? 1 : 0, d_failed, stream_main)) {
                 if (error) *error = "viscous flux kernel failed";
                 goto fail;
             }
@@ -192,12 +198,12 @@ if (config.viscous) {
 
         if (config.turbulence) {
             if (!compute_rans_source_gpu(d_mesh, config.gamma, config.Re,
-                    config.mu_ref, config.T_ref, config.sutherland_T, d_failed, error, stream)) {
+                    config.mu_ref, config.T_ref, config.sutherland_T, d_failed, error, stream_main)) {
                 if (error && error->empty()) *error = "RANS source kernel failed";
                 goto fail;
             }
             if (!config.implicit) {
-                if (!apply_rans_implicit_gpu(d_mesh, config.Re, d_min_dt, error, stream)) {
+                if (!apply_rans_implicit_gpu(d_mesh, config.Re, d_min_dt, error, stream_main)) {
                     if (error && error->empty()) *error = "RANS implicit kernel failed";
                     goto fail;
                 }
@@ -211,7 +217,7 @@ if (config.viscous) {
             cfl_ramp *= cfl_multiplier;
 
             if (!compute_local_timestep_gpu(d_mesh, config.gamma, cfl_ramp, d_dt_cell,
-                    config.viscous, config.mu_ref, config.T_ref, config.sutherland_T, config.Re, error, stream)) {
+                    config.viscous, config.mu_ref, config.T_ref, config.sutherland_T, config.Re, error, stream_main)) {
                 goto fail;
             }
 
@@ -224,17 +230,17 @@ if (config.viscous) {
                     nvar_cells * sizeof(Real), cudaMemcpyDeviceToDevice), "save raw R(Q^n)", error)) goto fail;
 
             if (config.turbulence) {
-                if (!apply_rans_implicit_per_cell_gpu(d_mesh, config.Re, d_dt_cell, error, stream)) {
+                if (!apply_rans_implicit_per_cell_gpu(d_mesh, config.Re, d_dt_cell, error, stream_main)) {
                     if (error && error->empty()) *error = "RANS implicit per-cell kernel failed";
                     goto fail;
                 }
             }
 
-            if (!dcopy_gpu(d_mesh.residual_device(), d_neg_r, nvar_cells, stream)) { if (error) *error = "copy R failed"; goto fail; }
-            if (!dscal_gpu(-1, d_neg_r, nvar_cells, stream)) { if (error) *error = "negate R failed"; goto fail; }
+            if (!dcopy_gpu(d_mesh.residual_device(), d_neg_r, nvar_cells, stream_main)) { if (error) *error = "copy R failed"; goto fail; }
+            if (!dscal_gpu(-1, d_neg_r, nvar_cells, stream_main)) { if (error) *error = "negate R failed"; goto fail; }
 
-            if (!dnrm2_gpu(d_r_saved, nvar_cells, d_l2_sum, stream)) { if (error) *error = "L2 norm failed"; goto fail; }
-            init_l2_old_kernel<<<1, 1, 0, stream>>>(d_l2_sum, nvar_ncells);
+            if (!dnrm2_gpu(d_r_saved, nvar_cells, d_l2_sum, stream_main)) { if (error) *error = "L2 norm failed"; goto fail; }
+            init_l2_old_kernel<<<1, 1, 0, stream_main>>>(d_l2_sum, nvar_ncells);
             if (!cuda_check(cudaGetLastError(), "init_l2_old kernel launch", error)) goto fail;
 
             // Adaptive JFV epsilon: eps = sqrt(machine_eps) * max(1, ||q||_RMS)
@@ -244,7 +250,7 @@ if (config.viscous) {
             // different flow regimes (e.g., low-density vs high-enthalpy).
             Real eps_jfv = real_sqrt(std::numeric_limits<Real>::epsilon());
             {
-                if (!dnrm2_gpu(d_mesh.state_device(), nvar_cells, d_l2_sum, stream)) {
+                if (!dnrm2_gpu(d_mesh.state_device(), nvar_cells, d_l2_sum, stream_main)) {
                     if (error) *error = "JFV norm_q failed"; goto fail;
                 }
                 Real state_norm_sq = 0;
@@ -256,7 +262,7 @@ if (config.viscous) {
 
             // Save pre-Newton state for CFL retry on Newton failure.
             Real* d_q_before_newton = d_scratch + 3 * nvar_cells;
-            if (!dcopy_gpu(d_mesh.state_device(), d_q_before_newton, nvar_cells, stream)) {
+            if (!dcopy_gpu(d_mesh.state_device(), d_q_before_newton, nvar_cells, stream_main)) {
                 if (error) *error = "save Q before Newton failed"; goto fail;
             }
 
@@ -267,7 +273,7 @@ if (config.viscous) {
                         nvar_cells * sizeof(Real), cudaMemcpyDeviceToDevice), "backup Q", error)) goto fail;
 
                 auto matvec = [&](const Real* v, Real* w, std::string* err) -> bool {
-                    return compute_jfv_product(d_mesh, v, w, d_r_saved, eps_jfv, config, w_inf, d_scratch, d_failed, err, stream);
+                    return compute_jfv_product(d_mesh, v, w, d_r_saved, eps_jfv, config, w_inf, d_scratch, d_failed, err, stream_main);
                 };
                 auto prec = [&](const Real* v, Real* z, std::string* err) -> bool {
                     return lusgs->apply(d_mesh, v, z, config.gamma, err);
@@ -284,33 +290,33 @@ if (config.viscous) {
                     Real* d_dq_full = d_scratch + 2 * nvar_cells;
                     while (btry < 8) {
                         if (btry == 0) {
-                            if (!dcopy_gpu(d_dq, d_dq_full, nvar_cells, stream)) {
+                            if (!dcopy_gpu(d_dq, d_dq_full, nvar_cells, stream_main)) {
                                 if (error) *error = "Newton save dq_full failed";
                                 goto fail;
                             }
                         } else {
-                            if (!dcopy_gpu(d_dq_full, d_dq, nvar_cells, stream)) {
+                            if (!dcopy_gpu(d_dq_full, d_dq, nvar_cells, stream_main)) {
                                 if (error) *error = "Newton restore dq_full failed";
                                 goto fail;
                             }
-                            if (!dscal_gpu(0.5f, d_dq, nvar_cells, stream)) {
+                            if (!dscal_gpu(0.5f, d_dq, nvar_cells, stream_main)) {
                                 if (error) *error = "Newton backtrack scale failed";
                                 goto fail;
                             }
                         }
-                        if (!daxpy_gpu(1, d_dq, d_mesh.state_device(), nvar_cells, stream)) {
+                        if (!daxpy_gpu(1, d_dq, d_mesh.state_device(), nvar_cells, stream_main)) {
                             if (error) *error = "Q += dq failed"; goto fail;
                         }
 
                         d_mesh.clear_residual(error);
                         if (!launch_euler_residual_kernel(d_mesh, w_inf, config.gamma, d_failed,
-                                nullptr, error, config.reconstruction_order, stream)) {
+                                nullptr, error, config.reconstruction_order, stream_main)) {
                             goto fail;
                         }
                         if (config.viscous) {
                             if (!compute_viscous_flux_gpu(d_mesh, config.gamma, config.prandtl,
                                     config.mu_ref, config.T_ref, config.sutherland_T,
-                                    config.Re, config.wall_temperature, config.turbulence ? 1 : 0, d_failed, stream)) {
+                                    config.Re, config.wall_temperature, config.turbulence ? 1 : 0, d_failed, stream_main)) {
                                 if (error) *error = "Newton viscous flux failed";
                                 goto fail;
                             }
@@ -318,30 +324,30 @@ if (config.viscous) {
                         if (config.turbulence) {
                             if (!compute_rans_source_gpu(d_mesh, config.gamma, config.Re,
                                     config.mu_ref, config.T_ref, config.sutherland_T,
-                                    d_failed, error, stream)) {
+                                    d_failed, error, stream_main)) {
                                 if (error) *error = "Newton RANS source failed";
                                 goto fail;
                             }
                         }
 
-                        if (!dnrm2_gpu(d_mesh.residual_device(), nvar_cells, d_l2_sum, stream)) {
+                        if (!dnrm2_gpu(d_mesh.residual_device(), nvar_cells, d_l2_sum, stream_main)) {
                             if (error) *error = "new L2 norm failed"; goto fail;
                         }
-                        newton_l2_check_kernel<<<1, 1, 0, stream>>>(
+                        newton_l2_check_kernel<<<1, 1, 0, stream_main>>>(
                             d_l2_sum, nvar_ncells, config.newton_sufficient_decrease, d_newton_accepted);
                         if (!cuda_check(cudaGetLastError(), "newton L2 check kernel launch", error)) goto fail;
                         int accepted = 0;
                         if (!cuda_check(cudaMemcpy(&accepted, d_newton_accepted, sizeof(int), cudaMemcpyDeviceToHost), "read accepted", error)) goto fail;
 
                         if (accepted) {
-                            if (!dcopy_gpu(d_mesh.residual_device(), d_r_saved, nvar_cells, stream)) {
+                            if (!dcopy_gpu(d_mesh.residual_device(), d_r_saved, nvar_cells, stream_main)) {
                                 if (error) *error = "update saved R failed"; goto fail;
                             }
                             newt_converged = true;
                             goto newton_accepted;
                         }
 
-                        if (!daxpy_gpu(-1, d_dq, d_mesh.state_device(), nvar_cells, stream)) {
+                        if (!daxpy_gpu(-1, d_dq, d_mesh.state_device(), nvar_cells, stream_main)) {
                             if (error) *error = "Newton backtrack restore failed"; goto fail;
                         }
                         ++btry;
@@ -356,31 +362,31 @@ newton_accepted:
                 // reduce CFL for the next outer iteration. The pre-Newton residual is
                 // already in d_r_saved, so the L2 check below will show no progress
                 // (but also no divergence). Future iterations try again at lower CFL.
-                if (!dcopy_gpu(d_q_before_newton, d_mesh.state_device(), nvar_cells, stream)) {
+                if (!dcopy_gpu(d_q_before_newton, d_mesh.state_device(), nvar_cells, stream_main)) {
                     if (error) *error = "Newton restore Q failed"; goto fail;
                 }
                 cfl_multiplier *= 0.5f;
             }
 
-            if (!dnrm2_gpu(d_r_saved, nvar_cells, d_l2_sum, stream)) {
+            if (!dnrm2_gpu(d_r_saved, nvar_cells, d_l2_sum, stream_main)) {
                 if (error) *error = "final L2 norm failed"; goto fail;
             }
         } else {
             if (!compute_update_gpu(d_mesh, d_min_dt, config.gamma, d_l2_sum, d_failed,
-                    d_failure_cell, d_failure_state, stream)) {
+                    d_failure_cell, d_failure_state, stream_main)) {
                 if (error) *error = "update kernel failed";
                 goto fail;
             }
         }
 
         if (diagnostics_enabled) {
-            if (!compute_state_bounds_gpu(d_mesh, config.gamma, d_state_bounds_history + iter * 6, stream)) {
+            if (!compute_state_bounds_gpu(d_mesh, config.gamma, d_state_bounds_history + iter * 6, stream_main)) {
                 if (error) *error = "state bounds kernel failed";
                 goto fail;
             }
         }
 
-        check_status_kernel<<<1, 1, 0, stream>>>(
+        check_status_kernel<<<1, 1, 0, stream_main>>>(
             d_failed, d_l2_sum, nvar_ncells,
             config.convergence_tol, d_residual_history + iter);
         if (!cuda_check(cudaGetLastError(), "check_status kernel launch", error)) goto fail;
@@ -516,7 +522,9 @@ cleanup:
     cuda_free_safe(d_q_backup);
     cuda_free_safe(d_scratch);
     cuda_free_safe(d_newton_accepted);
-    cudaStreamDestroy(stream);
+    cudaEventDestroy(event_timestep_done);
+    cudaStreamDestroy(stream_pre);
+    cudaStreamDestroy(stream_main);
 #ifdef MPI_ENABLED
     cudaStreamDestroy(stream_comm);
 #endif

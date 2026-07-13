@@ -273,6 +273,65 @@ __global__ void __launch_bounds__(256) backward_sweep_kernel(
     }
 }
 
+// Count face incidences per cell (parallel over faces)
+__global__ void __launch_bounds__(256) count_incidences_kernel(
+    const int* d_left, const int* d_right, int nf, int n_cells,
+    int* d_incidence) {
+    int f = blockIdx.x * blockDim.x + threadIdx.x;
+    if (f >= nf) return;
+    int l = d_left[f];
+    int r = d_right[f];
+    if (l >= 0 && l < n_cells) atomicAdd(&d_incidence[l], 1);
+    if (r >= 0 && r < n_cells) atomicAdd(&d_incidence[r], 1);
+}
+
+// Fill CSR cell-face adjacency from face arrays (parallel over faces)
+__global__ void __launch_bounds__(256) fill_csr_kernel(
+    const int* d_left, const int* d_right, int nf, int n_cells,
+    int* d_cursor,
+    int* d_cell_faces, int* d_cell_face_nbr) {
+    int f = blockIdx.x * blockDim.x + threadIdx.x;
+    if (f >= nf) return;
+    int l = d_left[f];
+    int r = d_right[f];
+    if (l >= 0 && l < n_cells) {
+        int pos = atomicAdd(&d_cursor[l], 1);
+        d_cell_faces[pos] = f;
+        d_cell_face_nbr[pos] = r;
+    }
+    if (r >= 0 && r < n_cells) {
+        int pos = atomicAdd(&d_cursor[r], 1);
+        d_cell_faces[pos] = f;
+        d_cell_face_nbr[pos] = l;
+    }
+}
+
+// Multi-pass greedy coloring: assign target_color to any uncolored cell
+// whose neighbors don't already have target_color.
+__global__ void __launch_bounds__(256) greedy_color_kernel(
+    const int* d_cell_face_start,
+    const int* d_cell_face_nbr,
+    int n_cells,
+    int* d_colors,
+    int target_color,
+    int* d_colored_this_pass) {
+    int i = blockIdx.x * blockDim.x + threadIdx.x;
+    if (i >= n_cells || d_colors[i] >= 0) return;
+
+    int start = d_cell_face_start[i];
+    int end = d_cell_face_start[i + 1];
+    for (int j = start; j < end; ++j) {
+        if (d_colors[d_cell_face_nbr[j]] == target_color) return;
+    }
+    d_colors[i] = target_color;
+    atomicAdd(d_colored_this_pass, 1);
+}
+
+__global__ void __launch_bounds__(256) init_colors_kernel(int* d_colors, int n_cells) {
+    int i = blockIdx.x * blockDim.x + threadIdx.x;
+    if (i < n_cells) d_colors[i] = -1;
+}
+
 } // namespace
 
 LusgsPreconditioner::~LusgsPreconditioner() { release(); }
@@ -361,68 +420,103 @@ bool LusgsPreconditioner::rebuild_coloring(DeviceMesh& mesh, std::string* error)
     int n_cells_new = static_cast<int>(mesh.cell_count());
     if (n_cells_new <= 0) { if (error) *error = "rebuild_coloring: empty mesh"; return false; }
     int nf = static_cast<int>(mesh.face_count());
-    std::vector<int> h_left(nf), h_right(nf);
     DeviceFaceData fd = mesh.face_data();
-    if (!cuda_check(cudaMemcpyAsync(h_left.data(), fd.left_cell, nf * sizeof(int), cudaMemcpyDeviceToHost, 0), "copy left", error)) return false;
-    if (!cuda_check(cudaMemcpyAsync(h_right.data(), fd.right_cell, nf * sizeof(int), cudaMemcpyDeviceToHost, 0), "copy right", error)) return false;
-    if (!cuda_check(cudaDeviceSynchronize(), "sync left/right", error)) return false;
 
-    std::vector<int> cell_color;
-    int n_colors = greedy_color_cells(h_left, h_right, n_cells_new, cell_color);
-    if (n_colors <= 0) {
-        if (error) *error = "rebuild_coloring: greedy coloring failed";
-        return false;
+    // --- Phase 1: Count face incidences per cell on GPU ---
+    int* d_incidence = nullptr;
+    if (!cuda_check(cudaMalloc(&d_incidence, n_cells_new * sizeof(int)), "cudaMalloc d_incidence", error)) return false;
+    if (!cuda_check(cudaMemset(d_incidence, 0, n_cells_new * sizeof(int)), "zero d_incidence", error)) { cuda_free_safe(d_incidence); return false; }
+
+    {
+        int block = 256;
+        int grid = (nf + block - 1) / block;
+        count_incidences_kernel<<<grid, block>>>(fd.left_cell, fd.right_cell, nf, n_cells_new, d_incidence);
+        if (!cuda_check(cudaGetLastError(), "count_incidences_kernel", error)) { cuda_free_safe(d_incidence); return false; }
     }
 
-    // If cell count changed, reallocate color and CSR arrays
+    // --- Phase 2: Download incidences (n_cells ints vs 2*nf ints previously) and compute prefix sum on CPU ---
+    std::vector<int> h_incidence(n_cells_new);
+    if (!cuda_check(cudaMemcpy(h_incidence.data(), d_incidence, n_cells_new * sizeof(int), cudaMemcpyDeviceToHost), "copy incidences", error)) { cuda_free_safe(d_incidence); return false; }
+    cuda_free_safe(d_incidence);
+
+    std::vector<int> h_cell_face_start(n_cells_new + 1, 0);
+    int total = 0;
+    for (int i = 0; i < n_cells_new; ++i) {
+        h_cell_face_start[i] = total;
+        total += h_incidence[i];
+    }
+    h_cell_face_start[n_cells_new] = total;
+
+    // --- Phase 3: (Re)allocate device arrays ---
+    // Always free CSR arrays first (adjacency may have changed even if count is same)
+    cuda_free_safe(d_cell_face_start_);
+    cuda_free_safe(d_cell_faces_);
+    cuda_free_safe(d_cell_face_nbr_);
+
     if (n_cells_new != n_cells_) {
         cuda_free_safe(d_cell_color_);
-        cuda_free_safe(d_cell_face_start_);
-        cuda_free_safe(d_cell_faces_);
-        cuda_free_safe(d_cell_face_nbr_);
         if (!cuda_check(cudaMalloc(&d_cell_color_, n_cells_new * sizeof(int)), "cudaMalloc d_cell_color", error)) return false;
         n_cells_ = n_cells_new;
     }
 
-    if (!cuda_check(cudaMemcpy(d_cell_color_, cell_color.data(), n_cells_ * sizeof(int), cudaMemcpyHostToDevice), "copy d_cell_color", error)) return false;
-    n_cell_colors_ = n_colors;
-
-    // Rebuild CSR cell-face adjacency
-    {
-        std::vector<int> incidence_count(n_cells_, 0);
-        for (int f = 0; f < nf; ++f) {
-            int l = h_left[f];
-            int r = h_right[f];
-            if (l >= 0 && l < n_cells_) incidence_count[l]++;
-            if (r >= 0 && r < n_cells_) incidence_count[r]++;
-        }
-
-        std::vector<int> h_cell_face_start(n_cells_ + 1, 0);
-        int total = 0;
-        for (int i = 0; i < n_cells_; ++i) {
-            h_cell_face_start[i] = total;
-            total += incidence_count[i];
-        }
-        h_cell_face_start[n_cells_] = total;
-
-        std::vector<int> h_cell_faces(total);
-        std::vector<int> h_cell_face_nbr(total);
-        std::vector<int> cursor = h_cell_face_start;
-        for (int f = 0; f < nf; ++f) {
-            int l = h_left[f];
-            int r = h_right[f];
-            if (l >= 0 && l < n_cells_) { int pos = cursor[l]++; h_cell_faces[pos] = f; h_cell_face_nbr[pos] = r; }
-            if (r >= 0 && r < n_cells_) { int pos = cursor[r]++; h_cell_faces[pos] = f; h_cell_face_nbr[pos] = l; }
-        }
-
-        if (!cuda_check(cudaMalloc(&d_cell_face_start_, (n_cells_ + 1) * sizeof(int)), "cudaMalloc d_cell_face_start", error)) return false;
+    if (!cuda_check(cudaMalloc(&d_cell_face_start_, (n_cells_ + 1) * sizeof(int)), "cudaMalloc d_cell_face_start", error)) return false;
+    if (total > 0) {
         if (!cuda_check(cudaMalloc(&d_cell_faces_, total * sizeof(int)), "cudaMalloc d_cell_faces", error)) return false;
         if (!cuda_check(cudaMalloc(&d_cell_face_nbr_, total * sizeof(int)), "cudaMalloc d_cell_face_nbr", error)) return false;
-        if (!cuda_check(cudaMemcpy(d_cell_face_start_, h_cell_face_start.data(), (n_cells_ + 1) * sizeof(int), cudaMemcpyHostToDevice), "copy cell_face_start", error)) return false;
-        if (!cuda_check(cudaMemcpy(d_cell_faces_, h_cell_faces.data(), total * sizeof(int), cudaMemcpyHostToDevice), "copy cell_faces", error)) return false;
-        if (!cuda_check(cudaMemcpy(d_cell_face_nbr_, h_cell_face_nbr.data(), total * sizeof(int), cudaMemcpyHostToDevice), "copy cell_face_nbr", error)) return false;
-        n_incidence_ = total;
+    } else {
+        d_cell_faces_ = nullptr;
+        d_cell_face_nbr_ = nullptr;
     }
+    n_incidence_ = total;
+
+    // Upload cell_face_start
+    if (!cuda_check(cudaMemcpy(d_cell_face_start_, h_cell_face_start.data(), (n_cells_ + 1) * sizeof(int), cudaMemcpyHostToDevice), "copy cell_face_start", error)) return false;
+
+    // --- Phase 4: Fill CSR from face arrays on GPU ---
+    if (total > 0) {
+        int* d_cursor = nullptr;
+        if (!cuda_check(cudaMalloc(&d_cursor, n_cells_ * sizeof(int)), "cudaMalloc d_cursor", error)) return false;
+        if (!cuda_check(cudaMemcpy(d_cursor, d_cell_face_start_, n_cells_ * sizeof(int), cudaMemcpyDeviceToDevice), "copy cursor", error)) { cuda_free_safe(d_cursor); return false; }
+
+        {
+            int block = 256;
+            int grid = (nf + block - 1) / block;
+            fill_csr_kernel<<<grid, block>>>(fd.left_cell, fd.right_cell, nf, n_cells_, d_cursor, d_cell_faces_, d_cell_face_nbr_);
+            if (!cuda_check(cudaGetLastError(), "fill_csr_kernel", error)) { cuda_free_safe(d_cursor); return false; }
+        }
+        cuda_free_safe(d_cursor);
+    }
+
+    // --- Phase 5: Multi-pass greedy coloring on GPU ---
+    {
+        int block = 256;
+        int grid = (n_cells_ + block - 1) / block;
+        init_colors_kernel<<<grid, block>>>(d_cell_color_, n_cells_);
+        if (!cuda_check(cudaGetLastError(), "init_colors_kernel", error)) return false;
+    }
+
+    int* d_colored = nullptr;
+    if (!cuda_check(cudaMalloc(&d_colored, sizeof(int)), "cudaMalloc d_colored", error)) return false;
+
+    int n_colors = 0;
+    int block = 256;
+    int grid = (n_cells_ + block - 1) / block;
+    for (int target = 0; target < kMaxCellColors; ++target) {
+        if (!cuda_check(cudaMemset(d_colored, 0, sizeof(int)), "zero d_colored", error)) { cuda_free_safe(d_colored); return false; }
+        greedy_color_kernel<<<grid, block>>>(d_cell_face_start_, d_cell_face_nbr_, n_cells_, d_cell_color_, target, d_colored);
+        if (!cuda_check(cudaGetLastError(), "greedy_color_kernel", error)) { cuda_free_safe(d_colored); return false; }
+        int colored = 0;
+        if (!cuda_check(cudaMemcpy(&colored, d_colored, sizeof(int), cudaMemcpyDeviceToHost), "read colored", error)) { cuda_free_safe(d_colored); return false; }
+        if (colored == 0) break;
+        n_colors = target + 1;
+    }
+    cuda_free_safe(d_colored);
+
+    if (n_colors <= 0) {
+        if (error) *error = "rebuild_coloring: GPU greedy coloring failed";
+        return false;
+    }
+    n_cell_colors_ = n_colors;
 
     return true;
 }

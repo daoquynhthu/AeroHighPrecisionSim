@@ -1020,4 +1020,17 @@
   迭代 CSR 邻接，复杂度从 O(N_cells*N_faces) 降至 O(N_cells*avg_degree)。
 - Verified: TestCfdState 36/36, TestCfdEuler 14/14, TestCfdGpu 67/67, TestGpuTopology 7/7 — all PASS
 
+2026-07-13
+- PERF2-7: `gpu_solver.cu` 双流架构。`stream_pre` 处理 `compute_timestep_gpu`，与 `stream_main`
+  上的梯度流水线并发执行。`cudaEventRecord`/`cudaStreamWaitEvent` 同步。
+- Verified: all 176 tests PASS (TestCfdGpu 67/67, TestCfdState 36/36, TestCfdEuler 14/14,
+  TestGpuTopology 7/7, TestCfdDiagnostics 4/4, TestCfdReconstruction 21/21,
+  TestCfdViscous 11/11, TestCfdRans 16/16)
+
+2026-07-13
+- PERF2-9: `rebuild_coloring()` 全 GPU 路径。新增 `count_incidences_kernel`/`fill_csr_kernel`/
+  `greedy_color_kernel`/`init_colors_kernel` 四个核函数。D2H 从 2×nf int 降至 n_cells int。
+- 同时修复 `rebuild_coloring()` 在 n_cells 不变时 CSR 指针内存泄漏。
+- Verified: all 176 tests PASS (same as above)
+
 

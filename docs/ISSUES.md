@@ -2807,12 +2807,14 @@ LU-SGS 核函数中对 `d_q[cell * nvar + k]` 的步长-6 访问，每次 warp �
 
 **PERF2-7** [MEDIUM] `gpu_solver.cu:115`
 尽管所有 GPU 函数已有流参数，求解器仅使用单条流。核函数无法并发执行。建议创建 2-3 条计算流。
+[FIXED 2026-07-13] 双流架构：`stream_pre` 处理 `compute_timestep_gpu`，与 `stream_main` 上的梯度流水线（`compute_gradients_gpu` → `compute_limiters_gpu` → `apply_limiter_gpu`）并发执行。`cudaEventRecord`/`cudaStreamWaitEvent` 确保 `d_min_dt` 在欧拉残差之前就绪。所有 GPU 功能测试通过（176/176）。
 
 **PERF2-8** [LOW] `gpu_diagnostics.cu:88-93`
 `state_bounds_kernel` 使用 `real_atomic_min/max` 将局部极值写入 6 个全局标量。PERF-A1/A2 已修复时间步长和 L2 的类似问题。
 
 **PERF2-9** [LOW] `lusgs_gpu.cu:281-283, 314-316`
 `allocate()`/`rebuild_coloring()` 完整 D2H 面数组拷贝用于 CPU 侧着色。AMR 网格上频繁重建时可能累积开销。建议将着色移至 GPU。
+[FIXED 2026-07-13] `rebuild_coloring()` 改为全 GPU 路径：GPU 核函数计数面邻接（仅 D2H n_cells 个 incidence int，原 2×nf 个 face int），CPU 前缀和，GPU 核函数填充 CSR，GPU 多遍贪心着色。消除了 2×nf int D2H + 主机着色。同时修复 CSR 指针在 n_cells 不变时重复 cudaMalloc 的内存泄漏。
 
 **PERF2-10** [LOW] `gpu_rans.cu:105, 108, 115`
 RANS 核函数每单元重新计算循环不变 SA 常数（cw1、cv1³、cw3⁶ 等）。建议提升至 `constexpr` 或 `__constant__` 内存。
