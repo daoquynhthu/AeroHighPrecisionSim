@@ -966,3 +966,10 @@
 - The alias `Real* d_neg_r = d_dt_cell` removed; d_neg_r has its own proper allocation
 - Existing implicit solver tests (test_implicit_solver_euler_sanity, etc.) cover the path
 - Verification: TestCfdGpu 65/65 PASS
+2026-07-12 — COV-1/2/3: add direct CPU tests for 3 uncovered functions
+- Exposed compact_mesh_nodes from anonymous namespace to cfd_mesh.hpp
+- test_cfd_euler.cpp: test compute_euler_residual_cpu uniform + mismatch
+- test_cfd_rans.cpp: test compute_rans_sources output size + finiteness
+- test_cfd_mesh.cpp: test compact_mesh_nodes no-op/remove/remap/empty
+- Verified: TestCfdEuler 11/11, TestCfdRans 16/16, TestCfdMesh 32/32, TestCfdGpu 65/65
+

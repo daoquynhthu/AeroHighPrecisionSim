@@ -2708,14 +2708,14 @@ GPU/CPU HLLC 波速公式一致。对称流极限下正确。
 
 ### 测试覆盖 (COV)
 
-**COV-1** [HIGH] `src/aero/cfd/cfd_residual.cpp:12`
-`compute_euler_residual_cpu`（一阶）无直接 CPU 测试，仅通过 GPU oracle 对比间接验证。建议添加 `test_cfd_residual.cpp`。
+**COV-1** [FIXED] `src/aero/cfd/cfd_residual.cpp:12`
+新增 CFD-EULER-COV1-1（均匀来流零残差）+ CFD-EULER-COV1-2（尺寸不匹配返回 false）。
 
-**COV-2** [HIGH] `src/aero/cfd/rans.cpp:92`
-`compute_rans_sources`（网格级循环包装器）未被测试。`compute_rans_source`（单元级）已通过 12 个测试覆盖。
+**COV-2** [FIXED] `src/aero/cfd/rans.cpp:92`
+新增 CFD-RANS-COV2-1（输出尺寸 = n_cells）+ CFD-RANS-COV2-2（均匀状态源项有限）。
 
-**COV-3** [HIGH] `src/aero/cfd/cfd_solver.cpp:41`
-`compact_mesh_nodes` 从未被任何测试直接调用。
+**COV-3** [FIXED] `src/aero/cfd/cfd_solver.cpp:41`
+移出匿名命名空间 → 声明于 `cfd_mesh.hpp`。新增 CFD-MESH-COV3-1/2/3/4 四个测试用例。
 
 **COV-4** [MEDIUM] `src/aero/cfd/mesh_validator.cpp:63,94,135,175`
 各单元类型雅可比符号函数（`tet/hex/penta/pyramid_jacobian_sign`）仅通过 `compute_mesh_quality_detail` 间接测试，缺乏直接单元测试。
