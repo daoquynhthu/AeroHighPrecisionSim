@@ -259,6 +259,47 @@ static int test_euler_residual_cpu_uniform() {
     return 0;
 }
 
+static int test_edge_case_meshes() {
+    TEST("CFD-EULER-10 empty mesh (0 cells) returns false from solver");
+    {
+        CfdMesh mesh;
+        compute_mesh_metrics(mesh);
+        FreestreamCondition cond;
+        cond.mach = 2.0f; cond.alpha_deg = 0.0f; cond.beta_deg = 0.0f;
+        CfdSolver solver;
+        if (!solver.load_mesh(mesh)) FAIL("load_mesh failed on empty mesh");
+        CfdConfig cfg;
+        cfg.use_gpu = false;
+        auto summary = solver.solve(cond, cfg);
+        if (!summary.failed) FAIL("expected failure for empty mesh");
+        PASS;
+    }
+
+    TEST("CFD-EULER-11 single-cell mesh solver runs without crash");
+    {
+        CfdMesh mesh = generate_structured_hex_mesh(2);
+        compute_mesh_metrics(mesh);
+        if (mesh.cells.size() != 1) FAIL("expected 1 cell, got %zu", mesh.cells.size());
+        FreestreamCondition cond;
+        cond.mach = 2.0f; cond.alpha_deg = 0.0f; cond.beta_deg = 0.0f;
+        CfdSolver solver;
+        if (!solver.load_mesh(mesh)) FAIL("load_mesh failed");
+        CfdConfig cfg;
+        cfg.max_iter = 2;
+        cfg.cfl = 1.0f;
+        cfg.use_gpu = false;
+        auto summary = solver.solve(cond, cfg);
+        if (summary.failed) {
+            std::string reason = summary.diagnostics.failure.valid
+                ? summary.diagnostics.failure.reason : "unknown";
+            FAIL("solver failed: %s", reason.c_str());
+        }
+        if (summary.forces.iterations <= 0) FAIL("no iterations");
+        PASS;
+    }
+    return 0;
+}
+
 int main() {
     int result = 0;
     result |= test_state_roundtrip();
@@ -268,6 +309,7 @@ int main() {
     result |= test_wall_forces();
     result |= test_amr_solver_loop();
     result |= test_euler_residual_cpu_uniform();
+    result |= test_edge_case_meshes();
     std::printf("\n%d / %d tests PASSED.\n", pass_count, test_count);
     return result == 0 && pass_count == test_count ? 0 : 1;
 }

@@ -343,6 +343,32 @@ static int test_make_freestream() {
         if (std::fabs(speed - 10.0f) > 1e-5f) FAIL("speed=%g", speed);
         PASS;
     }
+
+    TEST("CFD-STATE-35 make_freestream Mach>30 hypersonic is finite");
+    {
+        PrimitiveState w = make_freestream(40.0f, 10.0f, 5.0f, 1.4f);
+        if (!std::isfinite(w.rho)) FAIL("rho not finite");
+        if (!std::isfinite(w.u)) FAIL("u not finite");
+        if (!std::isfinite(w.v)) FAIL("v not finite");
+        if (!std::isfinite(w.w)) FAIL("w not finite");
+        if (!std::isfinite(w.p)) FAIL("p not finite");
+        Real speed = std::sqrt(w.u*w.u + w.v*w.v + w.w*w.w);
+        if (std::fabs(speed - 40.0f) > 1e-5f) FAIL("speed=%g", speed);
+        PASS;
+    }
+
+    TEST("CFD-STATE-36 make_freestream very low Mach is finite");
+    {
+        PrimitiveState w = make_freestream(0.005f, 0.0f, 0.0f, 1.4f);
+        if (!std::isfinite(w.rho)) FAIL("rho not finite");
+        if (!std::isfinite(w.u)) FAIL("u not finite");
+        if (!std::isfinite(w.v)) FAIL("v not finite");
+        if (!std::isfinite(w.w)) FAIL("w not finite");
+        if (!std::isfinite(w.p)) FAIL("p not finite");
+        Real speed = std::sqrt(w.u*w.u + w.v*w.v + w.w*w.w);
+        if (std::fabs(speed - 0.005f) > 1e-7f) FAIL("speed=%g expected 0.005", speed);
+        PASS;
+    }
     return 0;
 }
 

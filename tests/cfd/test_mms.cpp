@@ -70,6 +70,56 @@ static int test_mms_ns_consistency() {
     return 0;
 }
 
+static int test_mms_ns_order1_consistency() {
+    TEST("MMS-NS: laminar NS order-1 source consistency (q=q_exact -> residual=0)");
+
+    auto mms_euler = make_default_mms_euler();
+    PrimitiveState w_inf = make_freestream(0.5, 0.0, 0.0, 1.4);
+    FreestreamCondition freestream;
+    freestream.mach = 0.5;
+
+    CfdMesh mesh = generate_structured_hex_mesh(8);
+    compute_mesh_metrics(mesh);
+
+    CfdConfig cfg;
+    cfg.max_iter = 10;
+    cfg.cfl = 1.0;
+    cfg.convergence_tol = 1e-14;
+    cfg.reconstruction_order = 1;
+    cfg.viscous = true;
+    cfg.Re = 1e4;
+    cfg.use_gpu = false;
+
+    std::vector<ConservativeState> q_exact;
+    fill_mms(mesh, mms_euler, q_exact, cfg.gamma);
+
+    std::vector<EulerFlux> source;
+    if (!compute_mms_source(mesh, q_exact, w_inf, cfg, source))
+        FAIL("compute_mms_source failed");
+
+    cfg.mms_source = source;
+
+    CfdSolver solver;
+    if (!solver.load_mesh(mesh))
+        FAIL("load_mesh failed");
+
+    auto summary = solver.solve_from_state(freestream, cfg, q_exact);
+    if (summary.failed)
+        FAIL("solver failed");
+
+    std::printf("residual=%g ", summary.residual_history.empty() ? -1.0 : summary.residual_history.back());
+
+    Real err = mms_l2_error(summary.final_state, q_exact);
+    std::printf("L2_err=%g ", err);
+
+    Real final_res = summary.residual_history.back();
+    if (final_res > 1e-6)
+        FAIL("residual too high");
+
+    PASS();
+    return 0;
+}
+
 static int test_mms_sa_consistency() {
     TEST("MMS-SA: RANS SA source consistency (order-2, q=q_exact -> residual=0)");
 
@@ -487,6 +537,7 @@ static int test_mms_sa_fixed_point() {
 int main() {
     int result = 0;
     result |= test_mms_ns_consistency();
+    result |= test_mms_ns_order1_consistency();
     result |= test_mms_sa_consistency();
     result |= test_mms_euler_order1_consistency();
     result |= test_mms_euler_order2_consistency();

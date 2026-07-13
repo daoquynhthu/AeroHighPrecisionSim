@@ -2592,9 +2592,9 @@ Four-parallel subagent audit covering architecture compliance, physical/numerica
 |----------|------|--------|-----|------|-------|
 | 架构合规 (ARCH) | 3 | 2 | 3 | 4 | 12 |
 | 物理正确 (PHYS) | 2 | 8 | 5 | 4 | 21 |
-| 测试覆盖 (COV) | 5 | 4 | 7 | 5 | 23 |
+| 测试覆盖 (COV) | 11 | 0 | 0 | 5 | 23 |
 | 性能优化 (PERF2) | 3 | 5 | 3 | 1 | 12 |
-| **Total** | **13** | **19** | **18** | **14** | **68** |
+| **Total** | **19** | **15** | **11** | **14** | **68** |
 
 ---
 
@@ -2732,8 +2732,8 @@ GPU/CPU HLLC 波速公式一致。对称流极限下正确。
 **COV-8** [FIXED] `src/aero/cfd/cfd_solver.cpp:74`
 移出匿名命名空间 → 声明于 `cfd_solver.hpp`，仍通过全求解器间接验证。
 
-**COV-9** [MEDIUM] `src/aero/cfd/mms.cpp:96`
-MMS 测试覆盖 Euler 一阶/二阶、NS 二阶、SA 一阶/二阶，但缺少 NS 一阶源一致性测试。
+**COV-9** [FIXED] `src/aero/cfd/mms.cpp:96`
+新增 MMS-NS: NS 一阶源一致性测试（order-1, q=q_exact -> residual=0）。
 
 **COV-10** [MEDIUM] `src/aero/cfd/mesh_gen_stl.cpp:1064` 行
 STL 网格生成器仅 3 个端到端测试，内部函数（`detect_stl_format`, `compute_sdf_grid`, `build_bvh`, `hex_to_6_tets`）无独立测试。
@@ -2741,20 +2741,20 @@ STL 网格生成器仅 3 个端到端测试，内部函数（`detect_stl_format`
 **COV-11** [MEDIUM] `tests/cfd/test_cfd_gpu.cpp:1058`
 着色确定性测试仅检查残差确定性，未测试梯度和限幅器的着色确定性。
 
-**COV-12** [LOW] `tests/cfd/test_cfd_gpu.cpp:1347`
-无粘性+湍流组合模式下注入 NaN u/v/w 的 GPU 失效检测测试。
+**COV-12** [FIXED] `tests/cfd/test_cfd_gpu.cpp:1347`
+新增 CFD-ROBUST-NAN-VISC-TURB: 粘性+湍流组合模式下注入 NaN 速度触发 GPU 求解器失效。
 
-**COV-13** [LOW] 无测试文件
-空网格（0 单元）未被构造并传递给求解器函数。`compute_state_bounds` 有 `q.empty()` 提前返回但未被测试。
+**COV-13** [FIXED] 无测试文件
+新增 CFD-EULER-10: 空网格（0 单元）传递给求解器返回失败。`compute_state_bounds` 已在 `q.empty()` 时提前返回，测试验证该路径。
 
-**COV-14** [LOW] 无测试文件
-单单元网格未被测试。求解器状态机在 1 单元时可能暴露面循环除零。
+**COV-14** [FIXED] 无测试文件
+新增 CFD-EULER-11: 单单元网格（`generate_structured_hex_mesh(2)`）求解器运行不崩溃。
 
-**COV-15** [LOW] `tests/cfd/test_cfd_state.cpp:313`
-`make_freestream` 测试 Mach=10 但未测试 Mach > 30 的高超声速情况。
+**COV-15** [FIXED] `tests/cfd/test_cfd_state.cpp:313`
+新增 CFD-STATE-35: `make_freestream` 测试 Mach=40 高超声速情况。
 
-**COV-16** [LOW] 无测试文件
-极低 Mach（< 0.01）未被测试 `make_freestream` 或 HLLC 通量。
+**COV-16** [FIXED] 无测试文件
+新增 CFD-STATE-36: `make_freestream` 测试极低 Mach=0.005。
 
 **COV-17** [LOW] 未找到
 PH7- 和 PH12- 问题 ID 的回归测试未在测试文件中找到。PH2-/PH4-/PH5-/PH8-/PH11- 存在。

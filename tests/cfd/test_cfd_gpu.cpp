@@ -3207,6 +3207,39 @@ static int test_unknown_boundary_type_fails() {
     return 0;
 }
 
+static int test_robust_nan_viscous_turb() {
+    TEST("CFD-ROBUST-NAN-VISC-TURB NaN triggers failure with viscous+turbulence");
+    {
+        CfdMesh mesh = generate_structured_cube_mesh(5.0f, 9);
+        compute_mesh_metrics(mesh);
+        CfdSolver solver;
+        if (!solver.load_mesh(mesh)) FAIL("load_mesh failed");
+
+        FreestreamCondition cond;
+        cond.mach = 2.0f; cond.alpha_deg = 0.0f; cond.beta_deg = 0.0f;
+
+        CfdConfig cfg;
+        cfg.max_iter = 5;
+        cfg.use_gpu = true;
+        cfg.reconstruction_order = 1;
+        cfg.viscous = true;
+        cfg.turbulence = true;
+        cfg.Re = 1e5;
+        cfg.diagnostic_level = DiagnosticLevel::Off;
+
+        PrimitiveState w_inf;
+        w_inf.rho = 1.0f; w_inf.u = 2.0f; w_inf.p = 1.0f / 1.4f; w_inf.nu_tilde = 0.1f;
+        ConservativeState q = primitive_to_conservative(w_inf, 1.4f);
+        std::vector<ConservativeState> qv(mesh.cells.size(), q);
+        qv[0].rho_u = std::numeric_limits<Real>::quiet_NaN();
+
+        CfdSolveSummary summary = solver.solve_from_state(cond, cfg, qv);
+        if (!summary.failed) FAIL("solver did not detect NaN in viscous+turb mode");
+        PASS;
+    }
+    return 0;
+}
+
 int main() {
     int result = 0;
     result |= test_residual_equivalence_single_face();
@@ -3274,6 +3307,7 @@ result |= test_recon_order2_converged_forces();
     result |= test_robust_zero_volume();
     result |= test_robust_negative_wall_distance();
     result |= test_unknown_boundary_type_fails();
+    result |= test_robust_nan_viscous_turb();
     std::printf("\n%d / %d tests PASSED.\n", pass_count, test_count);
     return result == 0 && pass_count == test_count ? 0 : 1;
 }

@@ -980,4 +980,13 @@
 - COV-5: Added test_linear_solver() to test_cfd_reconstruction.cpp (5 tests: solve_3x3 identity/general/singular, lu_factor_3x3 + lu_solve_3x3 round trip, lu_factor_3x3 singular)
 - Verified: TestCfdReconstruction 21/21 PASS; missile_lib, TestCfdEuler, TestMms, TestCfdGpu all build clean
 
+2026-07-13
+- COV-9: Added test_mms_ns_order1_consistency() — NS first-order source consistency test (test_mms.cpp)
+- COV-12: Added test_robust_nan_viscous_turb() — GPU NaN failure detection with viscous+turbulence (test_cfd_gpu.cpp)
+- COV-13: Added CFD-EULER-10 empty mesh (0 cells) solver returns failure (test_cfd_euler.cpp)
+- COV-14: Added CFD-EULER-11 single-cell mesh solver runs without crash (test_cfd_euler.cpp)
+- COV-15: Added CFD-STATE-35 make_freestream Mach=40 test (test_cfd_state.cpp)
+- COV-16: Added CFD-STATE-36 make_freestream Mach=0.005 test (test_cfd_state.cpp)
+- Verified: TestCfdState 36/36, TestCfdEuler 13/13, TestMms 10/10, TestCfdGpu 66/66 — all PASS
+
 
