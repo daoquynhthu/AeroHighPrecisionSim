@@ -71,6 +71,8 @@ Real state_delta_l2(const ConservativeState& a, const ConservativeState& b) {
     return d0*d0 + d1*d1 + d2*d2 + d3*d3 + d4*d4 + d5*d5;
 }
 
+} // namespace
+
 void integrate_wall_forces(const CfdMesh& mesh, const std::vector<int>& wall_face_indices,
     const std::vector<ConservativeState>& q, const FreestreamCondition& condition,
     const CfdConfig& config, CfdForceResult& result,
@@ -200,8 +202,6 @@ void integrate_wall_forces(const CfdMesh& mesh, const std::vector<int>& wall_fac
     result.CD = -fsx;
     result.CL = -fsz;
 }
-
-} // namespace
 
 PrimitiveState make_freestream(Real mach, Real alpha_deg, Real beta_deg, Real gamma) {
     Real alpha = alpha_deg * 3.14159265358979323846 / 180.0;

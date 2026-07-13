@@ -973,3 +973,11 @@
 - test_cfd_mesh.cpp: test compact_mesh_nodes no-op/remove/remap/empty
 - Verified: TestCfdEuler 11/11, TestCfdRans 16/16, TestCfdMesh 32/32, TestCfdGpu 65/65
 
+2026-07-13
+- COV-4/6: Exposed solve_3x3, lu_factor_3x3, lu_solve_3x3 from anonymous namespace to reconstruction.hpp
+- COV-8: Exposed integrate_wall_forces from anonymous namespace to cfd_solver.hpp
+- Added #include "aero/cfd/reconstruction.hpp" to cfd_solver.hpp for PrimitiveGradient
+- COV-5: Added test_linear_solver() to test_cfd_reconstruction.cpp (5 tests: solve_3x3 identity/general/singular, lu_factor_3x3 + lu_solve_3x3 round trip, lu_factor_3x3 singular)
+- Verified: TestCfdReconstruction 21/21 PASS; missile_lib, TestCfdEuler, TestMms, TestCfdGpu all build clean
+
+

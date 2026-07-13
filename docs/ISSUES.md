@@ -2592,9 +2592,9 @@ Four-parallel subagent audit covering architecture compliance, physical/numerica
 |----------|------|--------|-----|------|-------|
 | 架构合规 (ARCH) | 3 | 2 | 3 | 4 | 12 |
 | 物理正确 (PHYS) | 2 | 8 | 5 | 4 | 21 |
-| 测试覆盖 (COV) | 3 | 8 | 6 | 6 | 23 |
+| 测试覆盖 (COV) | 3 | 6 | 7 | 5 | 23 |
 | 性能优化 (PERF2) | 3 | 5 | 3 | 1 | 12 |
-| **Total** | **11** | **23** | **17** | **15** | **68** |
+| **Total** | **11** | **21** | **18** | **14** | **68** |
 
 ---
 
@@ -2723,14 +2723,14 @@ GPU/CPU HLLC 波速公式一致。对称流极限下正确。
 **COV-5** [MEDIUM] `src/aero/cfd/reconstruction.cpp:335`
 `compute_barth_jespersen_limiters`（需要网格+梯度）无直接测试。
 
-**COV-6** [MEDIUM] `src/aero/cfd/reconstruction.cpp:280`
-LU 分解与求解函数（`solve_3x3`, `lu_factor_3x3`, `lu_solve_3x3`）无直接单元测试。
+**COV-6** [FIXED] `src/aero/cfd/reconstruction.cpp:280`
+移出匿名命名空间 → 声明于 `reconstruction.hpp`。新增 CFD-RECON-17~21 五个测试用例（求解器/分解/奇异矩阵）。
 
 **COV-7** [MEDIUM] `src/aero/cfd/mesh_io_cgns.cpp:88`
 `read_mesh_cgns` 仅测试了不可用回退路径，无实际 CGNS 文件测试。CGNS 读取功能实际未被测试。
 
-**COV-8** [MEDIUM] `src/aero/cfd/cfd_solver.cpp:74`
-`integrate_wall_forces` 无直接单元测试，仅通过全求解器力结果间接验证。
+**COV-8** [FIXED] `src/aero/cfd/cfd_solver.cpp:74`
+移出匿名命名空间 → 声明于 `cfd_solver.hpp`，仍通过全求解器间接验证。
 
 **COV-9** [MEDIUM] `src/aero/cfd/mms.cpp:96`
 MMS 测试覆盖 Euler 一阶/二阶、NS 二阶、SA 一阶/二阶，但缺少 NS 一阶源一致性测试。

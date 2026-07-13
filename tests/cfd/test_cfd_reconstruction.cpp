@@ -317,6 +317,73 @@ static int test_apply_limiter() {
     return 0;
 }
 
+static int test_linear_solver() {
+    TEST("CFD-RECON-17 solve_3x3 identity system returns input");
+    {
+        Real a[3][3] = {{1,0,0},{0,1,0},{0,0,1}};
+        Real b[3] = {3,5,7};
+        Real x[3];
+        if (!solve_3x3(a, b, x)) FAIL("solve_3x3 returned false on identity");
+        if (std::fabs(x[0]-3) > 1e-7f) FAIL("x[0]=%g", x[0]);
+        if (std::fabs(x[1]-5) > 1e-7f) FAIL("x[1]=%g", x[1]);
+        if (std::fabs(x[2]-7) > 1e-7f) FAIL("x[2]=%g", x[2]);
+        PASS;
+    }
+
+    TEST("CFD-RECON-18 solve_3x3 general system");
+    {
+        Real a[3][3] = {{2,1,1},{1,3,2},{1,0,1}};
+        Real b[3] = {9,19,6};
+        Real x[3];
+        if (!solve_3x3(a, b, x)) FAIL("solve_3x3 returned false");
+        Real r0 = a[0][0]*x[0] + a[0][1]*x[1] + a[0][2]*x[2] - b[0];
+        Real r1 = a[1][0]*x[0] + a[1][1]*x[1] + a[1][2]*x[2] - b[1];
+        Real r2 = a[2][0]*x[0] + a[2][1]*x[1] + a[2][2]*x[2] - b[2];
+        if (std::fabs(r0) > 1e-6f) FAIL("residual[0]=%g", r0);
+        if (std::fabs(r1) > 1e-6f) FAIL("residual[1]=%g", r1);
+        if (std::fabs(r2) > 1e-6f) FAIL("residual[2]=%g", r2);
+        PASS;
+    }
+
+    TEST("CFD-RECON-19 solve_3x3 singular returns false");
+    {
+        Real a[3][3] = {{0,0,0},{0,0,0},{0,0,0}};
+        Real b[3] = {1,2,3};
+        Real x[3] = {};
+        if (solve_3x3(a, b, x)) FAIL("should have returned false for singular");
+        PASS;
+    }
+
+    TEST("CFD-RECON-20 lu_factor_3x3 + lu_solve_3x3 round trip");
+    {
+        Real a[3][3] = {{3,1,2},{1,4,1},{2,1,5}};
+        Real b[3] = {11,16,21};
+        Real lu[3][3];
+        int pivot[3];
+        if (!lu_factor_3x3(a, lu, pivot)) FAIL("lu_factor failed");
+        Real x[3];
+        lu_solve_3x3(lu, pivot, b, x);
+        Real r0 = a[0][0]*x[0] + a[0][1]*x[1] + a[0][2]*x[2] - b[0];
+        Real r1 = a[1][0]*x[0] + a[1][1]*x[1] + a[1][2]*x[2] - b[1];
+        Real r2 = a[2][0]*x[0] + a[2][1]*x[1] + a[2][2]*x[2] - b[2];
+        if (std::fabs(r0) > 1e-6f) FAIL("lu residual[0]=%g", r0);
+        if (std::fabs(r1) > 1e-6f) FAIL("lu residual[1]=%g", r1);
+        if (std::fabs(r2) > 1e-6f) FAIL("lu residual[2]=%g", r2);
+        PASS;
+    }
+
+    TEST("CFD-RECON-21 lu_factor_3x3 singular returns false");
+    {
+        Real a[3][3] = {{1,2,3},{2,4,6},{3,6,9}};
+        Real lu[3][3];
+        int pivot[3];
+        if (lu_factor_3x3(a, lu, pivot)) FAIL("should have returned false for singular");
+        PASS;
+    }
+
+    return 0;
+}
+
 int main() {
     int result = 0;
     result |= test_green_gauss();
@@ -326,6 +393,7 @@ int main() {
     result |= test_reconstruct_primitive();
     result |= test_reconstruct_positive();
     result |= test_apply_limiter();
+    result |= test_linear_solver();
     std::printf("\n%d / %d tests PASSED.\n", pass_count, test_count);
     return result == 0 && pass_count == test_count ? 0 : 1;
 }

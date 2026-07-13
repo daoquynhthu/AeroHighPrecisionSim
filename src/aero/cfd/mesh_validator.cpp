@@ -183,6 +183,30 @@ bool pyramid_jacobian_sign(const Vec3 v[5], int& neg_count) {
 
 } // namespace
 
+bool tet_jacobian_sign(const CfdNode* nodes, int& neg_count) {
+    Vec3 v[4];
+    for (int i = 0; i < 4; ++i) v[i] = to_vec(nodes[i]);
+    return tet_jacobian_sign(v, neg_count);
+}
+
+bool hex_jacobian_sign(const CfdNode* nodes, int& neg_count) {
+    Vec3 v[8];
+    for (int i = 0; i < 8; ++i) v[i] = to_vec(nodes[i]);
+    return hex_jacobian_sign(v, neg_count);
+}
+
+bool penta_jacobian_sign(const CfdNode* nodes, int& neg_count) {
+    Vec3 v[6];
+    for (int i = 0; i < 6; ++i) v[i] = to_vec(nodes[i]);
+    return penta_jacobian_sign(v, neg_count);
+}
+
+bool pyramid_jacobian_sign(const CfdNode* nodes, int& neg_count) {
+    Vec3 v[5];
+    for (int i = 0; i < 5; ++i) v[i] = to_vec(nodes[i]);
+    return pyramid_jacobian_sign(v, neg_count);
+}
+
 MeshQualityReport compute_mesh_quality_detail(const CfdMesh& mesh) {
     MeshQualityReport r;
     if (mesh.nodes.empty() || mesh.cells.empty() || mesh.faces.empty()) {

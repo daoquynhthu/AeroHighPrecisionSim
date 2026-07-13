@@ -76,91 +76,6 @@ PrimitiveGradient scale_gradient(const PrimitiveGradient& g, Real theta) {
     return out;
 }
 
-bool solve_3x3(Real a[3][3], Real b[3], Real x[3]) {
-    Real m[3][4] = {
-        {a[0][0], a[0][1], a[0][2], b[0]},
-        {a[1][0], a[1][1], a[1][2], b[1]},
-        {a[2][0], a[2][1], a[2][2], b[2]}
-    };
-
-    for (int col = 0; col < 3; ++col) {
-        int pivot = col;
-        for (int row = col + 1; row < 3; ++row) {
-            if (std::fabs(m[row][col]) > std::fabs(m[pivot][col])) pivot = row;
-        }
-        Real col_max = 0.0f;
-        for (int r = 0; r < 3; ++r) col_max = (std::fabs(m[r][col]) > col_max) ? std::fabs(m[r][col]) : col_max;
-        if (col_max < Real(1e-30) || std::fabs(m[pivot][col]) < col_max * Real(1e-12)) return false;
-        if (pivot != col) {
-            for (int j = col; j < 4; ++j) std::swap(m[col][j], m[pivot][j]);
-        }
-        Real inv = 1.0f / m[col][col];
-        for (int j = col; j < 4; ++j) m[col][j] *= inv;
-        for (int row = 0; row < 3; ++row) {
-            if (row == col) continue;
-            Real factor = m[row][col];
-            for (int j = col; j < 4; ++j) m[row][j] -= factor * m[col][j];
-        }
-    }
-
-    x[0] = m[0][3];
-    x[1] = m[1][3];
-    x[2] = m[2][3];
-    return std::isfinite(x[0]) && std::isfinite(x[1]) && std::isfinite(x[2]);
-}
-
-// LU decomposition of a 3x3 matrix with partial pivoting.
-// Stores L below diagonal (unit diagonal implicit), U on/above diagonal.
-// pivot[i] records which original row is now at row i after permutation.
-static bool lu_factor_3x3(const Real a[3][3], Real lu[3][3], int pivot[3]) {
-    for (int r = 0; r < 3; ++r)
-        for (int c = 0; c < 3; ++c)
-            lu[r][c] = a[r][c];
-    pivot[0] = 0; pivot[1] = 1; pivot[2] = 2;
-
-    for (int k = 0; k < 3; ++k) {
-        int p = k;
-        Real max_abs = std::fabs(lu[k][k]);
-        for (int r = k + 1; r < 3; ++r) {
-            Real abs_val = std::fabs(lu[r][k]);
-            if (abs_val > max_abs) { max_abs = abs_val; p = r; }
-        }
-        Real col_max = 0.0f;
-        for (int r = k; r < 3; ++r)
-            col_max = std::max(col_max, std::fabs(lu[r][k]));
-        if (col_max < Real(1e-30) || max_abs < col_max * Real(1e-12)) return false;
-
-        if (p != k) {
-            for (int j = 0; j < 3; ++j) std::swap(lu[k][j], lu[p][j]);
-            std::swap(pivot[k], pivot[p]);
-        }
-        Real inv_diag = 1.0f / lu[k][k];
-        for (int i = k + 1; i < 3; ++i) {
-            Real factor = lu[i][k] * inv_diag;
-            lu[i][k] = factor;
-            for (int j = k + 1; j < 3; ++j)
-                lu[i][j] -= factor * lu[k][j];
-        }
-    }
-    return true;
-}
-
-// Solve LU * x = P * b using forward (L) and back (U) substitution.
-static void lu_solve_3x3(const Real lu[3][3], const int pivot[3], const Real b[3], Real x[3]) {
-    Real y[3];
-    for (int i = 0; i < 3; ++i) {
-        y[i] = b[pivot[i]];
-        for (int j = 0; j < i; ++j)
-            y[i] -= lu[i][j] * y[j];
-    }
-    for (int i = 2; i >= 0; --i) {
-        x[i] = y[i];
-        for (int j = i + 1; j < 3; ++j)
-            x[i] -= lu[i][j] * x[j];
-        x[i] /= lu[i][i];
-    }
-}
-
 void accumulate_least_squares_matrix(Real a[3][3], Real dx, Real dy, Real dz) {
     Real d[3] = {dx, dy, dz};
     for (int r = 0; r < 3; ++r) {
@@ -238,6 +153,87 @@ void update_limiter(PrimitiveLimiter& limiter, const PrimitiveState& center, con
 }
 
 } // namespace
+
+bool solve_3x3(Real a[3][3], Real b[3], Real x[3]) {
+    Real m[3][4] = {
+        {a[0][0], a[0][1], a[0][2], b[0]},
+        {a[1][0], a[1][1], a[1][2], b[1]},
+        {a[2][0], a[2][1], a[2][2], b[2]}
+    };
+
+    for (int col = 0; col < 3; ++col) {
+        int pivot = col;
+        for (int row = col + 1; row < 3; ++row) {
+            if (std::fabs(m[row][col]) > std::fabs(m[pivot][col])) pivot = row;
+        }
+        Real col_max = 0.0f;
+        for (int r = 0; r < 3; ++r) col_max = (std::fabs(m[r][col]) > col_max) ? std::fabs(m[r][col]) : col_max;
+        if (col_max < Real(1e-30) || std::fabs(m[pivot][col]) < col_max * Real(1e-12)) return false;
+        if (pivot != col) {
+            for (int j = col; j < 4; ++j) std::swap(m[col][j], m[pivot][j]);
+        }
+        Real inv = 1.0f / m[col][col];
+        for (int j = col; j < 4; ++j) m[col][j] *= inv;
+        for (int row = 0; row < 3; ++row) {
+            if (row == col) continue;
+            Real factor = m[row][col];
+            for (int j = col; j < 4; ++j) m[row][j] -= factor * m[col][j];
+        }
+    }
+
+    x[0] = m[0][3];
+    x[1] = m[1][3];
+    x[2] = m[2][3];
+    return std::isfinite(x[0]) && std::isfinite(x[1]) && std::isfinite(x[2]);
+}
+
+bool lu_factor_3x3(const Real a[3][3], Real lu[3][3], int pivot[3]) {
+    for (int r = 0; r < 3; ++r)
+        for (int c = 0; c < 3; ++c)
+            lu[r][c] = a[r][c];
+    pivot[0] = 0; pivot[1] = 1; pivot[2] = 2;
+
+    for (int k = 0; k < 3; ++k) {
+        int p = k;
+        Real max_abs = std::fabs(lu[k][k]);
+        for (int r = k + 1; r < 3; ++r) {
+            Real abs_val = std::fabs(lu[r][k]);
+            if (abs_val > max_abs) { max_abs = abs_val; p = r; }
+        }
+        Real col_max = 0.0f;
+        for (int r = k; r < 3; ++r)
+            col_max = std::max(col_max, std::fabs(lu[r][k]));
+        if (col_max < Real(1e-30) || max_abs < col_max * Real(1e-12)) return false;
+
+        if (p != k) {
+            for (int j = 0; j < 3; ++j) std::swap(lu[k][j], lu[p][j]);
+            std::swap(pivot[k], pivot[p]);
+        }
+        Real inv_diag = 1.0f / lu[k][k];
+        for (int i = k + 1; i < 3; ++i) {
+            Real factor = lu[i][k] * inv_diag;
+            lu[i][k] = factor;
+            for (int j = k + 1; j < 3; ++j)
+                lu[i][j] -= factor * lu[k][j];
+        }
+    }
+    return true;
+}
+
+void lu_solve_3x3(const Real lu[3][3], const int pivot[3], const Real b[3], Real x[3]) {
+    Real y[3];
+    for (int i = 0; i < 3; ++i) {
+        y[i] = b[pivot[i]];
+        for (int j = 0; j < i; ++j)
+            y[i] -= lu[i][j] * y[j];
+    }
+    for (int i = 2; i >= 0; --i) {
+        x[i] = y[i];
+        for (int j = i + 1; j < 3; ++j)
+            x[i] -= lu[i][j] * x[j];
+        x[i] /= lu[i][i];
+    }
+}
 
 std::vector<PrimitiveGradient> compute_green_gauss_gradients(
     const CfdMesh& mesh,

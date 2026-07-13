@@ -48,6 +48,10 @@ struct PrimitiveLimiter {
     Real nu_tilde = 1.0f;
 };
 
+bool solve_3x3(Real a[3][3], Real b[3], Real x[3]);
+bool lu_factor_3x3(const Real a[3][3], Real lu[3][3], int pivot[3]);
+void lu_solve_3x3(const Real lu[3][3], const int pivot[3], const Real b[3], Real x[3]);
+
 class DeviceMesh;
 
 std::vector<PrimitiveGradient> compute_green_gauss_gradients(

@@ -4,6 +4,7 @@
 #include "aero/cfd/cfd_mesh.hpp"
 #include "aero/cfd/cfd_result.hpp"
 #include "aero/cfd/cfd_state.hpp"
+#include "aero/cfd/reconstruction.hpp"
 
 #include <string>
 #include <vector>
@@ -20,6 +21,11 @@ struct CfdSolveSummary {
     bool converged = false;
     bool failed = false;
 };
+
+void integrate_wall_forces(const CfdMesh& mesh, const std::vector<int>& wall_face_indices,
+    const std::vector<ConservativeState>& q, const FreestreamCondition& condition,
+    const CfdConfig& config, CfdForceResult& result,
+    const std::vector<PrimitiveGradient>* grads = nullptr);
 
 class CfdSolver {
 public:
