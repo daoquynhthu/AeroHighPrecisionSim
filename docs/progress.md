@@ -1006,6 +1006,11 @@
 - Verified: all 176 tests PASS (TestCfdGpu 67/67, TestCfdState 36/36, TestCfdEuler 14/14, TestGpuTopology 7/7, TestCfdDiagnostics 4/4, TestCfdReconstruction 21/21, TestCfdViscous 11/11, TestCfdRans 16/16)
 
 2026-07-13
+- PERF2-5: DeviceMesh 新增 d_w_ 原始状态缓冲区 (rho/u/v/w/p/nu_tilde); 新增 convert_to_primitive_kernel;
+  所有梯度/最值/限制器核函数改为读取 d_w。六面体网格每单元 c2p 从 6 次降至 1 次。
+- Verified: all 176 tests PASS (same as above)
+
+2026-07-13
 - PERF2-2: 给 `viscous_flux_kernel_atomic` 和 `viscous_flux_kernel_colored` 添加 `__launch_bounds__(128)`。
 - PERF2-1: 新增 `newton_l2_check_kernel`/`init_l2_old_kernel` 设备端收敛检查核函数。
   `l2_old` 存储在 `d_l2_sum[1]` 消除 D2H 回读。Newton 回溯 L2 比较完全 GPU 端完成。

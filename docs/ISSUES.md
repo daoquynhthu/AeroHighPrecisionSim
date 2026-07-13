@@ -2593,7 +2593,7 @@ Four-parallel subagent audit covering architecture compliance, physical/numerica
 | 架构合规 (ARCH) | 3 | 2 | 3 | 4 | 12 |
 | 物理正确 (PHYS) | 2 | 8 | 5 | 4 | 21 |
 | 测试覆盖 (COV) | 18 | 2 | 0 | 3 | 23 |
-| 性能优化 (PERF2) | 4 | 0 | 8 | 0 | 12 |
+| 性能优化 (PERF2) | 3 | 0 | 9 | 0 | 12 |
 | **Total** | **24** | **15** | **11** | **14** | **68** |
 
 ---
@@ -2799,6 +2799,7 @@ LU-SGS 核函数中对 `d_q[cell * nvar + k]` 的步长-6 访问，每次 warp �
 
 **PERF2-5** [MEDIUM] `reconstruction_gpu.cu:75-78, 89-91, 186-205, 220-222`
 梯度核函数对每个面冗余进行保守→原始转换。六面体网格上每个单元被 6 个面共享，每轮梯度计算中每个单元被转换多达 6 次（GPU 版的 PERF-D1 问题）。建议预转换 `d_q`。
+[FIXED 2026-07-13] `DeviceMesh` 新增 `d_w_` 原始状态缓冲区（rho/u/v/w/p/nu_tilde）。新增 `convert_to_primitive_kernel` 在 `compute_gradients_gpu` 开始时执行一次转换。所有梯度/最值/限制器核函数改为读取 `d_w` 而非每面调用 `d_conservative_to_primitive`。消除冗余：六面体网格每单元从 6 次 c2p 降至 1 次。
 
 **PERF2-6** [MEDIUM] `gpu_wall.cu:79-84, 145-155`
 壁面力核函数始终使用原子操作，7 个力/力矩计数器上的冲突。PERF-A4 尝试着色路径但回退。建议每块共享内存部分归约，每块仅一次 atomicAdd。

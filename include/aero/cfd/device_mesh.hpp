@@ -64,6 +64,7 @@ class DeviceMesh {
 public:
     static constexpr int NVAR = CFD_NVAR;
     static constexpr int NGRAD = 18;
+    static constexpr int NPRIM = 6; // rho, u, v, w, p, nu_tilde
     static constexpr int kMinmaxStride = 12;
     static constexpr int kMaxColors = 64;
 
@@ -102,6 +103,7 @@ public:
 
     Real* state_device() const { return d_q_; }
     void set_state_device(Real* d_q) { d_q_ = d_q; }
+    Real* primitive_device() const { return d_w_; }
     Real* residual_device() const { return d_residual_; }
     Real* gradients_device() const { return d_gradients_; }
     Real* limiters_device() const { return d_limiters_; }
@@ -151,6 +153,7 @@ private:
     Real* d_minmax_ = nullptr;
     Real* d_mu_ = nullptr;
     Real* d_lam_ = nullptr;
+    Real* d_w_ = nullptr;
 
     int n_colors_ = 0;
     int* d_color_offsets_ = nullptr;

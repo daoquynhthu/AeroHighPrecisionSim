@@ -15,6 +15,35 @@ __global__ void init_float_one_kernel(Real* ptr, int n) {
     if (idx < n) ptr[idx] = 1.0f;
 }
 
+__global__ void convert_to_primitive_kernel(
+    const Real* d_q, int nvar, int n_cells, Real gamma,
+    Real* d_w) {
+    int idx = blockIdx.x * blockDim.x + threadIdx.x;
+    if (idx >= n_cells) return;
+    Real rho = d_q[idx * nvar + 0];
+    if (rho <= 0.0f || !real_isfinite(rho)) {
+        d_w[idx * 6 + 0] = 1e10f;
+        d_w[idx * 6 + 1] = 0.0f;
+        d_w[idx * 6 + 2] = 0.0f;
+        d_w[idx * 6 + 3] = 0.0f;
+        d_w[idx * 6 + 4] = 1e10f;
+        d_w[idx * 6 + 5] = 0.0f;
+        return;
+    }
+    Real inv_rho = 1.0f / rho;
+    Real u = d_q[idx * nvar + 1] * inv_rho;
+    Real v = d_q[idx * nvar + 2] * inv_rho;
+    Real w = d_q[idx * nvar + 3] * inv_rho;
+    Real ke = 0.5f * (u*u + v*v + w*w);
+    Real p = (gamma - 1.0f) * (d_q[idx * nvar + 4] - rho * ke);
+    d_w[idx * 6 + 0] = rho;
+    d_w[idx * 6 + 1] = u;
+    d_w[idx * 6 + 2] = v;
+    d_w[idx * 6 + 3] = w;
+    d_w[idx * 6 + 4] = p;
+    d_w[idx * 6 + 5] = d_q[idx * nvar + 5] * inv_rho;
+}
+
 __device__ bool d_conservative_to_primitive(const Real* q, int cell, int nvar, Real gamma,
     Real& rho, Real& u, Real& v, Real& w, Real& p) {
     rho = q[cell * nvar + 0];
@@ -56,12 +85,11 @@ __global__ void __launch_bounds__(256) apply_limiter_kernel(PrimitiveGradient* g
 
 
 __global__ void __launch_bounds__(128) gg_gradient_kernel_atomic(
-    const Real* d_q,
-    int nvar, int n_cells, int n_faces,
+    const Real* d_w,
+    int n_cells, int n_faces,
     const int* d_left_cell, const int* d_right_cell, const int* d_boundary,
     const Real* d_nx, const Real* d_ny, const Real* d_nz, const Real* d_area,
     const Real* d_volume,
-    Real gamma,
     Real* d_gradients,
     int* d_failed) {
     int idx = blockIdx.x * blockDim.x + threadIdx.x;
@@ -71,26 +99,35 @@ __global__ void __launch_bounds__(128) gg_gradient_kernel_atomic(
     if (left < 0 || left >= n_cells) return;
     int bnd = d_boundary[idx];
 
-    Real rhoL, uL, vL, wL, pL;
-    if (!d_conservative_to_primitive(d_q, left, nvar, gamma, rhoL, uL, vL, wL, pL)) {
+    Real rhoL = d_w[left * 6 + 0];
+    if (rhoL > 1e9f || !real_isfinite(rhoL)) {
         if (d_failed) atomicCAS(d_failed, 0, 1);
         return;
     }
+    Real uL = d_w[left * 6 + 1];
+    Real vL = d_w[left * 6 + 2];
+    Real wL = d_w[left * 6 + 3];
+    Real pL = d_w[left * 6 + 4];
+    Real nu_tildeL = d_w[left * 6 + 5];
 
     Real nx = d_nx[idx], ny = d_ny[idx], nz = d_nz[idx];
     Real area = d_area[idx];
 
-    Real nu_tildeL = d_q[left * nvar + 5] * (1.0f / rhoL);
     Real rhoF, uF, vF, wF, pF, nu_tildeF;
     if (bnd == static_cast<int>(BoundaryKind::Interior)) {
         int right = d_right_cell[idx];
         if (right < 0 || right >= n_cells) return;
-        Real rhoR, uR, vR, wR, pR;
-        if (!d_conservative_to_primitive(d_q, right, nvar, gamma, rhoR, uR, vR, wR, pR)) {
+        Real rhoR = d_w[right * 6 + 0];
+        if (rhoR > 1e9f || !real_isfinite(rhoR)) {
             if (d_failed) atomicCAS(d_failed, 0, 1);
             return;
         }
-        Real nu_tildeR = d_q[right * nvar + 5] * (1.0f / rhoR);
+        Real uR = d_w[right * 6 + 1];
+        Real vR = d_w[right * 6 + 2];
+        Real wR = d_w[right * 6 + 3];
+        Real pR = d_w[right * 6 + 4];
+        Real nu_tildeR = d_w[right * 6 + 5];
+
         rhoF = 0.5f * (rhoL + rhoR);
         uF = 0.5f * (uL + uR);
         vF = 0.5f * (vL + vR);
@@ -167,12 +204,11 @@ __global__ void __launch_bounds__(128) gg_gradient_kernel_atomic(
 }
 
 __global__ void __launch_bounds__(128) gg_gradient_kernel_colored(
-    const Real* d_q,
-    int nvar, int n_cells,
+    const Real* d_w,
+    int n_cells,
     const int* d_left_cell, const int* d_right_cell, const int* d_boundary,
     const Real* d_nx, const Real* d_ny, const Real* d_nz, const Real* d_area,
     const Real* d_volume,
-    Real gamma,
     int face_start, int face_end,
     Real* d_gradients,
     int* d_failed) {
@@ -183,26 +219,35 @@ __global__ void __launch_bounds__(128) gg_gradient_kernel_colored(
     if (left < 0 || left >= n_cells) return;
     int bnd = d_boundary[idx];
 
-    Real rhoL, uL, vL, wL, pL;
-    if (!d_conservative_to_primitive(d_q, left, nvar, gamma, rhoL, uL, vL, wL, pL)) {
+    Real rhoL = d_w[left * 6 + 0];
+    if (rhoL > 1e9f || !real_isfinite(rhoL)) {
         if (d_failed) atomicCAS(d_failed, 0, 1);
         return;
     }
+    Real uL = d_w[left * 6 + 1];
+    Real vL = d_w[left * 6 + 2];
+    Real wL = d_w[left * 6 + 3];
+    Real pL = d_w[left * 6 + 4];
+    Real nu_tildeL = d_w[left * 6 + 5];
 
     Real nx = d_nx[idx], ny = d_ny[idx], nz = d_nz[idx];
     Real area = d_area[idx];
 
-    Real nu_tildeL = d_q[left * nvar + 5] * (1.0f / rhoL);
     Real rhoF, uF, vF, wF, pF, nu_tildeF;
     if (bnd == static_cast<int>(BoundaryKind::Interior)) {
         int right = d_right_cell[idx];
         if (right < 0 || right >= n_cells) return;
-        Real rhoR, uR, vR, wR, pR;
-        if (!d_conservative_to_primitive(d_q, right, nvar, gamma, rhoR, uR, vR, wR, pR)) {
+        Real rhoR = d_w[right * 6 + 0];
+        if (rhoR > 1e9f || !real_isfinite(rhoR)) {
             if (d_failed) atomicCAS(d_failed, 0, 1);
             return;
         }
-        Real nu_tildeR = d_q[right * nvar + 5] * (1.0f / rhoR);
+        Real uR = d_w[right * 6 + 1];
+        Real vR = d_w[right * 6 + 2];
+        Real wR = d_w[right * 6 + 3];
+        Real pR = d_w[right * 6 + 4];
+        Real nu_tildeR = d_w[right * 6 + 5];
+
         rhoF = 0.5f * (rhoL + rhoR);
         uF = 0.5f * (uL + uR);
         vF = 0.5f * (vL + vR);
@@ -281,13 +326,13 @@ __global__ void __launch_bounds__(128) gg_gradient_kernel_colored(
 constexpr int kMINMAX_STRIDE = 12;
 
 __global__ void init_minmax_kernel(
-    const Real* d_q, int nvar, int n_cells, Real gamma,
+    const Real* d_w, int n_cells,
     Real* d_minmax,
     int* d_failed) {
     int idx = blockIdx.x * blockDim.x + threadIdx.x;
     if (idx >= n_cells) return;
-    Real rho, u, v, w, p;
-    if (!d_conservative_to_primitive(d_q, idx, nvar, gamma, rho, u, v, w, p)) {
+    Real rho = d_w[idx * 6 + 0];
+    if (rho > 1e9f || !real_isfinite(rho)) {
         if (d_failed) atomicCAS(d_failed, 0, 1);
         Real* m = d_minmax + idx * kMINMAX_STRIDE;
         m[0] = 1e10f;  m[1] = -1e10f;
@@ -300,18 +345,16 @@ __global__ void init_minmax_kernel(
     }
     Real* m = d_minmax + idx * kMINMAX_STRIDE;
     m[0] = rho; m[1] = rho;
-    m[2] = u;   m[3] = u;
-    m[4] = v;   m[5] = v;
-    m[6] = w;   m[7] = w;
-    m[8] = p;   m[9] = p;
-    Real nu_tilde = d_q[idx * nvar + 5] * (1.0f / rho);
-    m[10] = nu_tilde; m[11] = nu_tilde;
+    m[2] = d_w[idx * 6 + 1];   m[3] = d_w[idx * 6 + 1];
+    m[4] = d_w[idx * 6 + 2];   m[5] = d_w[idx * 6 + 2];
+    m[6] = d_w[idx * 6 + 3];   m[7] = d_w[idx * 6 + 3];
+    m[8] = d_w[idx * 6 + 4];   m[9] = d_w[idx * 6 + 4];
+    m[10] = d_w[idx * 6 + 5]; m[11] = d_w[idx * 6 + 5];
 }
 
 __global__ void __launch_bounds__(128) update_minmax_kernel(
-    const Real* d_q, int nvar, int n_cells, int n_faces,
+    const Real* d_w, int n_cells, int n_faces,
     const int* d_left_cell, const int* d_right_cell, const int* d_boundary,
-    Real gamma,
     Real* d_minmax,
     int* d_failed) {
     int idx = blockIdx.x * blockDim.x + threadIdx.x;
@@ -322,13 +365,9 @@ __global__ void __launch_bounds__(128) update_minmax_kernel(
     int right = d_right_cell[idx];
     if (left < 0 || left >= n_cells || right < 0 || right >= n_cells) return;
 
-    Real rhoL, uL, vL, wL, pL;
-    Real rhoR, uR, vR, wR, pR;
-    if (!d_conservative_to_primitive(d_q, left, nvar, gamma, rhoL, uL, vL, wL, pL)) {
-        if (d_failed) atomicCAS(d_failed, 0, 1);
-        return;
-    }
-    if (!d_conservative_to_primitive(d_q, right, nvar, gamma, rhoR, uR, vR, wR, pR)) {
+    Real rhoL = d_w[left * 6 + 0];
+    Real rhoR = d_w[right * 6 + 0];
+    if (rhoL > 1e9f || !real_isfinite(rhoL) || rhoR > 1e9f || !real_isfinite(rhoR)) {
         if (d_failed) atomicCAS(d_failed, 0, 1);
         return;
     }
@@ -338,30 +377,26 @@ __global__ void __launch_bounds__(128) update_minmax_kernel(
         real_atomic_max(max_addr, val);
     };
 
-    Real nu_tildeL = d_q[left * nvar + 5] * (1.0f / rhoL);
-    Real nu_tildeR = d_q[right * nvar + 5] * (1.0f / rhoR);
-
     Real* mL = d_minmax + left * kMINMAX_STRIDE;
     update(&mL[0], &mL[1], rhoR);
-    update(&mL[2], &mL[3], uR);
-    update(&mL[4], &mL[5], vR);
-    update(&mL[6], &mL[7], wR);
-    update(&mL[8], &mL[9], pR);
-    update(&mL[10], &mL[11], nu_tildeR);
+    update(&mL[2], &mL[3], d_w[right * 6 + 1]);
+    update(&mL[4], &mL[5], d_w[right * 6 + 2]);
+    update(&mL[6], &mL[7], d_w[right * 6 + 3]);
+    update(&mL[8], &mL[9], d_w[right * 6 + 4]);
+    update(&mL[10], &mL[11], d_w[right * 6 + 5]);
 
     Real* mR = d_minmax + right * kMINMAX_STRIDE;
     update(&mR[0], &mR[1], rhoL);
-    update(&mR[2], &mR[3], uL);
-    update(&mR[4], &mR[5], vL);
-    update(&mR[6], &mR[7], wL);
-    update(&mR[8], &mR[9], pL);
-    update(&mR[10], &mR[11], nu_tildeL);
+    update(&mR[2], &mR[3], d_w[left * 6 + 1]);
+    update(&mR[4], &mR[5], d_w[left * 6 + 2]);
+    update(&mR[6], &mR[7], d_w[left * 6 + 3]);
+    update(&mR[8], &mR[9], d_w[left * 6 + 4]);
+    update(&mR[10], &mR[11], d_w[left * 6 + 5]);
 }
 
 __global__ void __launch_bounds__(128) update_minmax_kernel_colored(
-    const Real* d_q, int nvar, int n_cells,
+    const Real* d_w, int n_cells,
     const int* d_left_cell, const int* d_right_cell, const int* d_boundary,
-    Real gamma,
     int face_start, int face_end,
     Real* d_minmax,
     int* d_failed,
@@ -375,35 +410,28 @@ __global__ void __launch_bounds__(128) update_minmax_kernel_colored(
     if (left < 0 || left >= n_cells || right < 0 || right >= n_cells) return;
     if (d_partition_owner && d_partition_owner[left] != my_rank) return;
 
-    Real rhoL, uL, vL, wL, pL;
-    Real rhoR, uR, vR, wR, pR;
-    if (!d_conservative_to_primitive(d_q, left, nvar, gamma, rhoL, uL, vL, wL, pL)) {
+    Real rhoL = d_w[left * 6 + 0];
+    Real rhoR = d_w[right * 6 + 0];
+    if (rhoL > 1e9f || !real_isfinite(rhoL) || rhoR > 1e9f || !real_isfinite(rhoR)) {
         if (d_failed) atomicCAS(d_failed, 0, 1);
         return;
     }
-    if (!d_conservative_to_primitive(d_q, right, nvar, gamma, rhoR, uR, vR, wR, pR)) {
-        if (d_failed) atomicCAS(d_failed, 0, 1);
-        return;
-    }
-
-    Real nu_tildeL = d_q[left * nvar + 5] * (1.0f / rhoL);
-    Real nu_tildeR = d_q[right * nvar + 5] * (1.0f / rhoR);
 
     Real* mL = d_minmax + left * kMINMAX_STRIDE;
     if (rhoR < mL[0]) mL[0] = rhoR; if (rhoR > mL[1]) mL[1] = rhoR;
-    if (uR < mL[2]) mL[2] = uR; if (uR > mL[3]) mL[3] = uR;
-    if (vR < mL[4]) mL[4] = vR; if (vR > mL[5]) mL[5] = vR;
-    if (wR < mL[6]) mL[6] = wR; if (wR > mL[7]) mL[7] = wR;
-    if (pR < mL[8]) mL[8] = pR; if (pR > mL[9]) mL[9] = pR;
-    if (nu_tildeR < mL[10]) mL[10] = nu_tildeR; if (nu_tildeR > mL[11]) mL[11] = nu_tildeR;
+    if (d_w[right * 6 + 1] < mL[2]) mL[2] = d_w[right * 6 + 1]; if (d_w[right * 6 + 1] > mL[3]) mL[3] = d_w[right * 6 + 1];
+    if (d_w[right * 6 + 2] < mL[4]) mL[4] = d_w[right * 6 + 2]; if (d_w[right * 6 + 2] > mL[5]) mL[5] = d_w[right * 6 + 2];
+    if (d_w[right * 6 + 3] < mL[6]) mL[6] = d_w[right * 6 + 3]; if (d_w[right * 6 + 3] > mL[7]) mL[7] = d_w[right * 6 + 3];
+    if (d_w[right * 6 + 4] < mL[8]) mL[8] = d_w[right * 6 + 4]; if (d_w[right * 6 + 4] > mL[9]) mL[9] = d_w[right * 6 + 4];
+    if (d_w[right * 6 + 5] < mL[10]) mL[10] = d_w[right * 6 + 5]; if (d_w[right * 6 + 5] > mL[11]) mL[11] = d_w[right * 6 + 5];
 
     Real* mR = d_minmax + right * kMINMAX_STRIDE;
     if (rhoL < mR[0]) mR[0] = rhoL; if (rhoL > mR[1]) mR[1] = rhoL;
-    if (uL < mR[2]) mR[2] = uL; if (uL > mR[3]) mR[3] = uL;
-    if (vL < mR[4]) mR[4] = vL; if (vL > mR[5]) mR[5] = vL;
-    if (wL < mR[6]) mR[6] = wL; if (wL > mR[7]) mR[7] = wL;
-    if (pL < mR[8]) mR[8] = pL; if (pL > mR[9]) mR[9] = pL;
-    if (nu_tildeL < mR[10]) mR[10] = nu_tildeL; if (nu_tildeL > mR[11]) mR[11] = nu_tildeL;
+    if (d_w[left * 6 + 1] < mR[2]) mR[2] = d_w[left * 6 + 1]; if (d_w[left * 6 + 1] > mR[3]) mR[3] = d_w[left * 6 + 1];
+    if (d_w[left * 6 + 2] < mR[4]) mR[4] = d_w[left * 6 + 2]; if (d_w[left * 6 + 2] > mR[5]) mR[5] = d_w[left * 6 + 2];
+    if (d_w[left * 6 + 3] < mR[6]) mR[6] = d_w[left * 6 + 3]; if (d_w[left * 6 + 3] > mR[7]) mR[7] = d_w[left * 6 + 3];
+    if (d_w[left * 6 + 4] < mR[8]) mR[8] = d_w[left * 6 + 4]; if (d_w[left * 6 + 4] > mR[9]) mR[9] = d_w[left * 6 + 4];
+    if (d_w[left * 6 + 5] < mR[10]) mR[10] = d_w[left * 6 + 5]; if (d_w[left * 6 + 5] > mR[11]) mR[11] = d_w[left * 6 + 5];
 }
 
 __device__ Real limiter_theta_device(Real center, Real reconstructed, Real min_val, Real max_val) {
@@ -421,11 +449,10 @@ __device__ Real limiter_theta_device(Real center, Real reconstructed, Real min_v
 }
 
 __global__ void __launch_bounds__(128) bj_limiter_kernel(
-    const Real* d_q, int nvar, int n_cells, int n_faces,
+    const Real* d_w, int n_cells, int n_faces,
     const int* d_left_cell, const int* d_right_cell, const int* d_boundary,
     const Real* d_face_cx, const Real* d_face_cy, const Real* d_face_cz,
     const Real* d_cx, const Real* d_cy, const Real* d_cz,
-    Real gamma,
     const Real* d_gradients,
     const Real* d_minmax,
     Real* d_limiters,
@@ -437,17 +464,20 @@ __global__ void __launch_bounds__(128) bj_limiter_kernel(
     if (left < 0 || left >= n_cells) return;
     int bnd = d_boundary[idx];
 
-    Real rhoL, uL, vL, wL, pL;
-    if (!d_conservative_to_primitive(d_q, left, nvar, gamma, rhoL, uL, vL, wL, pL)) {
+    Real rhoL = d_w[left * 6 + 0];
+    if (rhoL > 1e9f || !real_isfinite(rhoL)) {
         if (d_failed) atomicCAS(d_failed, 0, 1);
         return;
     }
+    Real uL = d_w[left * 6 + 1];
+    Real vL = d_w[left * 6 + 2];
+    Real wL = d_w[left * 6 + 3];
+    Real pL = d_w[left * 6 + 4];
+    Real nu_tildeL = d_w[left * 6 + 5];
 
     Real dxL = d_face_cx[idx] - d_cx[left];
     Real dyL = d_face_cy[idx] - d_cy[left];
     Real dzL = d_face_cz[idx] - d_cz[left];
-
-    Real nu_tildeL = d_q[left * nvar + 5] * (1.0f / rhoL);
 
     const Real* gL = d_gradients + left * DeviceMesh::NGRAD;
     Real rec_rho = rhoL + gL[0]*dxL + gL[1]*dyL + gL[2]*dzL;
@@ -476,17 +506,20 @@ __global__ void __launch_bounds__(128) bj_limiter_kernel(
     if (bnd == static_cast<int>(BoundaryKind::Interior)) {
         int right = d_right_cell[idx];
         if (right < 0 || right >= n_cells) return;
-        Real rhoR, uR, vR, wR, pR;
-        if (!d_conservative_to_primitive(d_q, right, nvar, gamma, rhoR, uR, vR, wR, pR)) {
+        Real rhoR = d_w[right * 6 + 0];
+        if (rhoR > 1e9f || !real_isfinite(rhoR)) {
             if (d_failed) atomicCAS(d_failed, 0, 1);
             return;
         }
+        Real uR = d_w[right * 6 + 1];
+        Real vR = d_w[right * 6 + 2];
+        Real wR = d_w[right * 6 + 3];
+        Real pR = d_w[right * 6 + 4];
+        Real nu_tildeR = d_w[right * 6 + 5];
 
         Real dxR = d_face_cx[idx] - d_cx[right];
         Real dyR = d_face_cy[idx] - d_cy[right];
         Real dzR = d_face_cz[idx] - d_cz[right];
-
-        Real nu_tildeR = d_q[right * nvar + 5] * (1.0f / rhoR);
 
         const Real* gR = d_gradients + right * DeviceMesh::NGRAD;
         rec_rho = rhoR + gR[0]*dxR + gR[1]*dyR + gR[2]*dzR;
@@ -515,11 +548,10 @@ __global__ void __launch_bounds__(128) bj_limiter_kernel(
 }
 
 __global__ void __launch_bounds__(128) bj_limiter_kernel_colored(
-    const Real* d_q, int nvar, int n_cells,
+    const Real* d_w, int n_cells,
     const int* d_left_cell, const int* d_right_cell, const int* d_boundary,
     const Real* d_face_cx, const Real* d_face_cy, const Real* d_face_cz,
     const Real* d_cx, const Real* d_cy, const Real* d_cz,
-    Real gamma,
     const Real* d_gradients,
     const Real* d_minmax,
     int face_start, int face_end,
@@ -534,17 +566,20 @@ __global__ void __launch_bounds__(128) bj_limiter_kernel_colored(
     if (d_partition_owner && d_partition_owner[left] != my_rank) return;
     int bnd = d_boundary[idx];
 
-    Real rhoL, uL, vL, wL, pL;
-    if (!d_conservative_to_primitive(d_q, left, nvar, gamma, rhoL, uL, vL, wL, pL)) {
+    Real rhoL = d_w[left * 6 + 0];
+    if (rhoL > 1e9f || !real_isfinite(rhoL)) {
         if (d_failed) atomicCAS(d_failed, 0, 1);
         return;
     }
+    Real uL = d_w[left * 6 + 1];
+    Real vL = d_w[left * 6 + 2];
+    Real wL = d_w[left * 6 + 3];
+    Real pL = d_w[left * 6 + 4];
+    Real nu_tildeL = d_w[left * 6 + 5];
 
     Real dxL = d_face_cx[idx] - d_cx[left];
     Real dyL = d_face_cy[idx] - d_cy[left];
     Real dzL = d_face_cz[idx] - d_cz[left];
-
-    Real nu_tildeL = d_q[left * nvar + 5] * (1.0f / rhoL);
 
     const Real* gL = d_gradients + left * DeviceMesh::NGRAD;
     Real rec_rho = rhoL + gL[0]*dxL + gL[1]*dyL + gL[2]*dzL;
@@ -573,17 +608,20 @@ __global__ void __launch_bounds__(128) bj_limiter_kernel_colored(
     if (bnd == static_cast<int>(BoundaryKind::Interior)) {
         int right = d_right_cell[idx];
         if (right < 0 || right >= n_cells) return;
-        Real rhoR, uR, vR, wR, pR;
-        if (!d_conservative_to_primitive(d_q, right, nvar, gamma, rhoR, uR, vR, wR, pR)) {
+        Real rhoR = d_w[right * 6 + 0];
+        if (rhoR > 1e9f || !real_isfinite(rhoR)) {
             if (d_failed) atomicCAS(d_failed, 0, 1);
             return;
         }
+        Real uR = d_w[right * 6 + 1];
+        Real vR = d_w[right * 6 + 2];
+        Real wR = d_w[right * 6 + 3];
+        Real pR = d_w[right * 6 + 4];
+        Real nu_tildeR = d_w[right * 6 + 5];
 
         Real dxR = d_face_cx[idx] - d_cx[right];
         Real dyR = d_face_cy[idx] - d_cy[right];
         Real dzR = d_face_cz[idx] - d_cz[right];
-
-        Real nu_tildeR = d_q[right * nvar + 5] * (1.0f / rhoR);
 
         const Real* gR = d_gradients + right * DeviceMesh::NGRAD;
         rec_rho = rhoR + gR[0]*dxR + gR[1]*dyR + gR[2]*dzR;
@@ -620,17 +658,30 @@ bool compute_gradients_gpu(DeviceMesh& mesh, Real gamma, std::string* error, int
         if (error) *error = "gradients buffer not allocated";
         return false;
     }
+    if (!mesh.primitive_device()) {
+        if (error) *error = "primitive buffer not allocated";
+        return false;
+    }
 
-    std::size_t grad_bytes = DeviceMesh::NGRAD * mesh.cell_count() * sizeof(Real);
+    int nc = static_cast<int>(mesh.cell_count());
+    int nf = static_cast<int>(mesh.face_count());
+
+    // Pre-convert conservative state to primitive (rho, u, v, w, p, nu_tilde)
+    int block_cvt = 256;
+    int grid_cvt = (nc + block_cvt - 1) / block_cvt;
+    convert_to_primitive_kernel<<<grid_cvt, block_cvt, 0, stream>>>(
+        mesh.state_device(), DeviceMesh::NVAR, nc, gamma, mesh.primitive_device());
+    if (!cuda_check(cudaGetLastError(), "convert_to_primitive_kernel", error)) return false;
+
+    std::size_t grad_bytes = DeviceMesh::NGRAD * nc * sizeof(Real);
     if (!cuda_check(cudaMemsetAsync(mesh.gradients_device(), 0, grad_bytes, stream), "cudaMemset gradients", error)) return false;
     if (d_failed && !cuda_check(cudaMemsetAsync(d_failed, 0, sizeof(int), stream), "cudaMemset d_failed", error)) return false;
 
     int block = 128;
-    int nf = static_cast<int>(mesh.face_count());
-    int nc = static_cast<int>(mesh.cell_count());
     int n_colors = mesh.color_count();
     DeviceFaceData fd = mesh.face_data();
     DeviceCellData cd = mesh.cell_data();
+    Real* d_w = mesh.primitive_device();
 
     if (n_colors > 0) {
         for (int c = 0; c < n_colors; ++c) {
@@ -639,11 +690,10 @@ bool compute_gradients_gpu(DeviceMesh& mesh, Real gamma, std::string* error, int
             int nf_c  = end - start;
             int grid_c = (nf_c + block - 1) / block;
             gg_gradient_kernel_colored<<<grid_c, block, 0, stream>>>(
-                mesh.state_device(),
-                DeviceMesh::NVAR, nc,
+                d_w, nc,
                 fd.left_cell, fd.right_cell, fd.boundary,
                 fd.nx, fd.ny, fd.nz, fd.area,
-                cd.volume, gamma,
+                cd.volume,
                 start, end,
                 mesh.gradients_device(),
                 d_failed);
@@ -652,11 +702,10 @@ bool compute_gradients_gpu(DeviceMesh& mesh, Real gamma, std::string* error, int
     } else {
         int grid = (nf + block - 1) / block;
         gg_gradient_kernel_atomic<<<grid, block, 0, stream>>>(
-            mesh.state_device(),
-            DeviceMesh::NVAR, nc, nf,
+            d_w, nc, nf,
             fd.left_cell, fd.right_cell, fd.boundary,
             fd.nx, fd.ny, fd.nz, fd.area,
-            cd.volume, gamma,
+            cd.volume,
             mesh.gradients_device(),
             d_failed);
         if (!cuda_check(cudaGetLastError(), "gg_gradient_kernel_atomic", error)) return false;
@@ -667,8 +716,8 @@ bool compute_gradients_gpu(DeviceMesh& mesh, Real gamma, std::string* error, int
 bool compute_limiters_gpu(DeviceMesh& mesh, Real gamma, std::string* error, int* d_failed,
     cudaStream_t stream) {
     if (mesh.cell_count() == 0 || mesh.face_count() == 0) return true;
-    if (!mesh.gradients_device() || !mesh.limiters_device()) {
-        if (error) *error = "gradient/limiter buffers not allocated";
+    if (!mesh.gradients_device() || !mesh.limiters_device() || !mesh.primitive_device()) {
+        if (error) *error = "gradient/limiter/primitive buffers not allocated";
         return false;
     }
     if (d_failed && !cuda_check(cudaMemsetAsync(d_failed, 0, sizeof(int), stream), "cudaMemset d_failed", error)) return false;
@@ -687,10 +736,11 @@ bool compute_limiters_gpu(DeviceMesh& mesh, Real gamma, std::string* error, int*
     const int* d_partition_owner = gpu_part ? gpu_part->d_partition_owner : nullptr;
     int my_rank = gpu_part ? gpu_part->my_rank : 0;
 
+    Real* d_w = mesh.primitive_device();
     Real* d_minmax = mesh.minmax_device();
 
     init_minmax_kernel<<<cell_grid, block, 0, stream>>>(
-        mesh.state_device(), DeviceMesh::NVAR, nc, gamma, d_minmax, d_failed);
+        d_w, nc, d_minmax, d_failed);
     if (!cuda_check(cudaGetLastError(), "init_minmax_kernel", error)) return false;
 
     if (n_colors > 0) {
@@ -700,9 +750,8 @@ bool compute_limiters_gpu(DeviceMesh& mesh, Real gamma, std::string* error, int*
             int nf_c  = end - start;
             int grid_c = (nf_c + block - 1) / block;
             update_minmax_kernel_colored<<<grid_c, block, 0, stream>>>(
-                mesh.state_device(), DeviceMesh::NVAR, nc,
+                d_w, nc,
                 fd.left_cell, fd.right_cell, fd.boundary,
-                gamma,
                 start, end,
                 d_minmax, d_failed,
                 d_partition_owner, my_rank);
@@ -710,9 +759,9 @@ bool compute_limiters_gpu(DeviceMesh& mesh, Real gamma, std::string* error, int*
         }
     } else {
         update_minmax_kernel<<<face_grid, block, 0, stream>>>(
-            mesh.state_device(), DeviceMesh::NVAR, nc, nf,
+            d_w, nc, nf,
             fd.left_cell, fd.right_cell, fd.boundary,
-            gamma, d_minmax, d_failed);
+            d_minmax, d_failed);
         if (!cuda_check(cudaGetLastError(), "update_minmax_kernel", error)) return false;
     }
 
@@ -727,11 +776,10 @@ bool compute_limiters_gpu(DeviceMesh& mesh, Real gamma, std::string* error, int*
             int nf_c  = end - start;
             int grid_c = (nf_c + block - 1) / block;
             bj_limiter_kernel_colored<<<grid_c, block, 0, stream>>>(
-                mesh.state_device(), DeviceMesh::NVAR, nc,
+                d_w, nc,
                 fd.left_cell, fd.right_cell, fd.boundary,
                 fd.cx, fd.cy, fd.cz,
                 cd.cx, cd.cy, cd.cz,
-                gamma,
                 mesh.gradients_device(), d_minmax,
                 start, end,
                 mesh.limiters_device(), d_failed,
@@ -740,11 +788,10 @@ bool compute_limiters_gpu(DeviceMesh& mesh, Real gamma, std::string* error, int*
         }
     } else {
         bj_limiter_kernel<<<face_grid, block, 0, stream>>>(
-            mesh.state_device(), DeviceMesh::NVAR, nc, nf,
+            d_w, nc, nf,
             fd.left_cell, fd.right_cell, fd.boundary,
             fd.cx, fd.cy, fd.cz,
             cd.cx, cd.cy, cd.cz,
-            gamma,
             mesh.gradients_device(), d_minmax,
             mesh.limiters_device(), d_failed);
         if (!cuda_check(cudaGetLastError(), "bj_limiter_kernel", error)) return false;

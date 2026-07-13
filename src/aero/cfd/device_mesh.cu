@@ -46,6 +46,7 @@ DeviceMesh& DeviceMesh::operator=(DeviceMesh&& other) noexcept {
     d_minmax_ = other.d_minmax_;
     d_mu_ = other.d_mu_;
     d_lam_ = other.d_lam_;
+    d_w_ = other.d_w_;
     other.cell_count_ = 0;
     other.face_count_ = 0;
     other.d_q_ = nullptr;
@@ -62,6 +63,7 @@ DeviceMesh& DeviceMesh::operator=(DeviceMesh&& other) noexcept {
     other.d_minmax_ = nullptr;
     other.d_mu_ = nullptr;
     other.d_lam_ = nullptr;
+    other.d_w_ = nullptr;
     d_halo_indices_ = other.d_halo_indices_;
     d_halo_send_buf_ = other.d_halo_send_buf_;
     d_halo_recv_buf_ = other.d_halo_recv_buf_;
@@ -183,6 +185,7 @@ void DeviceMesh::release() {
     cuda_free_safe(d_minmax_);
     cuda_free_safe(d_mu_);
     cuda_free_safe(d_lam_);
+    cuda_free_safe(d_w_);
     cuda_free_safe(d_color_offsets_);
     cuda_free_safe(d_halo_indices_);
     cuda_free_safe(d_halo_send_buf_);
@@ -259,10 +262,12 @@ bool DeviceMesh::upload_mesh(const CfdMesh& mesh, std::string* error, bool skip_
     if (!alloc(d_q_, nc * NVAR * sizeof(Real), "cudaMalloc state")) return false;
     if (!alloc(d_residual_, nc * NVAR * sizeof(Real), "cudaMalloc residual")) return false;
     if (!alloc(d_gradients_, nc * DeviceMesh::NGRAD * sizeof(Real), "cudaMalloc gradients")) return false;
+    if (!alloc(d_w_, nc * DeviceMesh::NPRIM * sizeof(Real), "cudaMalloc primitive")) return false;
     if (!alloc(d_limiters_, nc * sizeof(PrimitiveLimiter), "cudaMalloc limiters")) return false;
     if (!alloc(d_minmax_, nc * DeviceMesh::kMinmaxStride * sizeof(Real), "cudaMalloc minmax")) return false;
     if (!cuda_check(cudaMemset(d_q_, 0, nc * NVAR * sizeof(Real)), "cudaMemset state", error)) { release(); return false; }
     if (!cuda_check(cudaMemset(d_residual_, 0, nc * NVAR * sizeof(Real)), "cudaMemset residual", error)) { release(); return false; }
+    if (!cuda_check(cudaMemset(d_w_, 0, nc * DeviceMesh::NPRIM * sizeof(Real)), "cudaMemset primitive", error)) { release(); return false; }
     if (!cuda_check(cudaMemset(d_gradients_, 0, nc * DeviceMesh::NGRAD * sizeof(Real)), "cudaMemset gradients", error)) { release(); return false; }
     if (!cuda_check(cudaMemset(d_limiters_, 0, nc * sizeof(PrimitiveLimiter)), "cudaMemset limiters", error)) { release(); return false; }
     if (!cuda_check(cudaMemset(d_minmax_, 0, nc * DeviceMesh::kMinmaxStride * sizeof(Real)), "cudaMemset minmax", error)) { release(); return false; }
