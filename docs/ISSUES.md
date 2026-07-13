@@ -2604,7 +2604,7 @@ Four-parallel subagent audit covering architecture compliance, physical/numerica
 `bool use_gpu = false` → `true`。
 
 **ARCH-2** [LOW] `app/aero_calc/main.cpp:77`
-入口点默认 `use_gpu = false`，但第 85 行自动选择逻辑覆盖此值。
+入口点默认 `use_gpu = false`，但第 85 行自动选择逻辑覆盖此值。（非 CFD，保留 open。）
 
 **ARCH-3** [HIGH] `src/aero/panel/aero_solver.cu:288-455`
 面板法求解器中所有 CUDA API 调用和内核启动均无 CUDA_CHECK 错误检查（cudaMalloc、cudaMemcpy、cudaFree、内核启动等全部缺失），与 CFD 求解器的约定不一致。
@@ -2618,11 +2618,11 @@ Four-parallel subagent audit covering architecture compliance, physical/numerica
 **ARCH-6** [INFO] `CMakeLists.txt:229-239`
 CMake install 规则使用旧品牌名 `AeroSimTargets`，应为 `AerospTargets`。
 
-**ARCH-7** [LOW] `src/aero/cfd/cfd_residual_gpu.cu:427, device_mesh.cu:231/314/335, gpu_update.cu:13`
-GPU 代码中存在 PERF-* 任务追踪注释（如 `// PERF-G9: cache events across calls`），非算法注释，违反 AGENTS.md 代码风格。
+**ARCH-7** [FIXED] `src/aero/cfd/cfd_residual_gpu.cu:427, device_mesh.cu:231/314/335, gpu_update.cu:13`
+GPU 代码中存在 PERF-* 任务追踪注释（如 `// PERF-G9: cache events across calls`），非算法注释，违反 AGENTS.md 代码风格。已移除 6 处 PERF-* 注释（device_mesh.cu x3, cfd_residual_gpu.cu x1, gpu_update.cu x1, cuda_utils.hpp x1）。
 
-**ARCH-8** [INFO] `src/aero/cfd/amr_refine.cpp:41-385, amr_hanging.cpp:69-125, amr_interpolate.cpp:23-144, aero_solver.cu:14-480`
-大量非算法性行注释（如 `// 8 child tets`, `// Edge midpoints (12)`），违反 AGENTS.md 代码风格。
+**ARCH-8** [FIXED] `src/aero/cfd/amr_refine.cpp, amr_hanging.cpp, amr_interpolate.cpp`
+大量非算法性行注释（如 `// 8 child tets`, `// Edge midpoints (12)`），违反 AGENTS.md 代码风格。已移除 29 处明显注释（amr_refine.cpp x17, amr_hanging.cpp x4, amr_interpolate.cpp x8）。保留 Bey 1995 引用、hex27 模板索引、正性保持策略等算法决策注释。`aero_solver.cu` 不属于 CFD，保留 open。
 
 **ARCH-9** [LOW] `docs/progress.md:416`
 2026-07-10 条目插入在 2026-07-11 条目之后，违反 progress.md 仅追加不插入的约定。
@@ -2633,8 +2633,8 @@ GPU 代码中存在 PERF-* 任务追踪注释（如 `// PERF-G9: cache events ac
 **ARCH-11** [INFO] `src/aero/panel/aero_table_gen.cpp`
 面板表生成位于 `src/aero/panel/` 而非 `app/aero_table_gen/`，与 REPO_SPEC.md 目录布局不一致。
 
-**ARCH-12** [INFO] `include/aero/cfd/cuda_utils.hpp:9`
-`CUDA_KERNEL_CHECK` 宏已定义但从未被使用，所有内核使用 `cuda_check(cudaGetLastError(), ...)` 代替。
+**ARCH-12** [FIXED] `include/aero/cfd/cuda_utils.hpp:9`
+`CUDA_KERNEL_CHECK` 宏实际上在 `cfd_residual_gpu.cu:351/369` 被使用（`euler_residual_kernel` 两变体后调用）。已移除其上的 `// PERF-C3` 注释（归入 ARCH-7）。
 
 ---
 

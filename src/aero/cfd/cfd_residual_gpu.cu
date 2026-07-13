@@ -427,7 +427,6 @@ bool compute_euler_residual_gpu_timed(
         return false;
     }
 
-    // PERF-G9: cache events across calls
     static cudaEvent_t s_start = nullptr;
     static cudaEvent_t s_stop = nullptr;
     if (!s_start) {

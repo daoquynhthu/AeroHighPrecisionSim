@@ -66,7 +66,6 @@ void apply_hanging_interpolation(
         Real dy = face.cy - coarse_cell.cy;
         Real dz = face.cz - coarse_cell.cz;
 
-        // Linear extrapolation: q_face = q_cell + grad_q . d
         ConservativeState q_interp = q_cell[coarse_id];
         q_interp.rho   += grad_rho[coarse_id].gx   * dx + grad_rho[coarse_id].gy   * dy + grad_rho[coarse_id].gz   * dz;
         q_interp.rho_u += grad_rho_u[coarse_id].gx * dx + grad_rho_u[coarse_id].gy * dy + grad_rho_u[coarse_id].gz * dz;
@@ -75,7 +74,6 @@ void apply_hanging_interpolation(
         q_interp.rho_E += grad_rho_E[coarse_id].gx * dx + grad_rho_E[coarse_id].gy * dy + grad_rho_E[coarse_id].gz * dz;
         q_interp.rho_nu_tilde += grad_rho_nu[coarse_id].gx * dx + grad_rho_nu[coarse_id].gy * dy + grad_rho_nu[coarse_id].gz * dz;
 
-        // Determine which side the coarse cell is on and update the corresponding face state
         if (face.left_cell == coarse_id) {
             q_face_left[hf.face_id] = q_interp;
         } else {
@@ -108,7 +106,6 @@ void apply_hanging_flux_correction_primitive(
         Real dz_f = face.cz - fine_cell.cz;
 
         // Old flux (what the main residual already used):
-        // Reconstruct both sides from cell centers (primitive space)
         PrimitiveState wl = reconstruct_primitive(w[coarse_id], grads[coarse_id], dx_c, dy_c, dz_c);
         PrimitiveState wr = reconstruct_primitive(w[fine_id], grads[fine_id], dx_f, dy_f, dz_f);
         if (wl.rho <= 0.0f || wl.p <= 0.0f) continue;
@@ -122,7 +119,6 @@ void apply_hanging_flux_correction_primitive(
         if (wl.rho <= 0.0f || wl.p <= 0.0f) continue;
         EulerFlux flux_new = hllc_flux(wl, wr, gamma, face.nx, face.ny, face.nz);
 
-        // Adjust residual: replace flux_old with flux_new
         Real area = face.area;
         residual[face.left_cell].mass   += (flux_old.mass   - flux_new.mass)   * area;
         residual[face.left_cell].mom_x  += (flux_old.mom_x  - flux_new.mom_x)  * area;

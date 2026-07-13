@@ -20,18 +20,15 @@ std::vector<int> build_old_to_new_map(
     int n_old = static_cast<int>(mesh_old.cells.size());
     std::vector<int> old_to_new(n_old, -1);
 
-    // Mark replaced old cells
     std::vector<bool> replaced(n_old, false);
     for (const auto& rec : records) {
         if (rec.parent_cell_id >= 0 && rec.parent_cell_id < n_old)
             replaced[rec.parent_cell_id] = true;
     }
 
-    // Compute total child count to know where children start in new array
     int n_children = 0;
     for (const auto& rec : records) n_children += rec.n_children;
 
-    // Map unchanged old cells to their new positions
     int idx = n_children + n_coarsened_parents;  // children + coarsened parents first, then unchanged cells
     for (int ci = 0; ci < n_old; ++ci) {
         if (!replaced[ci]) {
@@ -53,10 +50,8 @@ void prolongate_solution(
     int n_new = static_cast<int>(mesh_new.cells.size());
     q_new.resize(n_new);
 
-    // Build old-to-new map for unchanged cells
     auto old_to_new = build_old_to_new_map(mesh_old, records);
 
-    // Unchanged cells: copy directly
     for (int old_i = 0; old_i < static_cast<int>(mesh_old.cells.size()); ++old_i) {
         int new_i = old_to_new[old_i];
         if (new_i >= 0) {
@@ -92,7 +87,6 @@ void prolongate_solution_order2(
 
     auto old_to_new = build_old_to_new_map(mesh_old, records);
 
-    // Unchanged cells: copy directly
     for (int old_i = 0; old_i < static_cast<int>(mesh_old.cells.size()); ++old_i) {
         int new_i = old_to_new[old_i];
         if (new_i >= 0) {
@@ -117,7 +111,6 @@ void prolongate_solution_order2(
             Real dy = child_cell.cy - parent_cell.cy;
             Real dz = child_cell.cz - parent_cell.cz;
 
-            // Reconstruct primitive at child center
             PrimitiveState w_child = reconstruct_primitive(wp, gp, dx, dy, dz);
 
             // Fall back to injection if reconstruction is invalid
@@ -141,7 +134,6 @@ void restrict_solution(
     q_parent.resize(0);
     q_parent.reserve(n_records);
 
-    // Volume-weighted average each group of children
     for (const auto& rec : records) {
         Real vol_sum = 0.0f;
         ConservativeState avg;

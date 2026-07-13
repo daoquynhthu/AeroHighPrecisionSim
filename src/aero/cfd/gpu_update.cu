@@ -10,7 +10,6 @@ namespace cfd {
 
 namespace {
 
-// PERF-C2: merged init kernel — zeroes both scalar and failure flag in one launch
 __global__ void init_update_zero_kernel(Real* d_l2_sum, int* d_failed) {
     if (threadIdx.x == 0 && blockIdx.x == 0) {
         *d_l2_sum = 0.0f;

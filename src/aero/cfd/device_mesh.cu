@@ -231,7 +231,6 @@ bool DeviceMesh::upload_mesh(const CfdMesh& mesh, std::string* error, bool skip_
     std::size_t nf = face_count_;
     std::size_t nc = cell_count_;
 
-    // PERF-G7: allocate one buffer for all face data and one for all cell data
     std::size_t face_real_bytes = 7 * nf * sizeof(Real);
     std::size_t face_int_bytes = 3 * nf * sizeof(int);
     std::size_t cell_real_bytes = 6 * nc * sizeof(Real);
@@ -316,7 +315,6 @@ bool DeviceMesh::upload_mesh(const CfdMesh& mesh, std::string* error, bool skip_
             reorder(h_boundary, reorder_tmp_int);
             reorder(h_face_cx, reorder_tmp_real); reorder(h_face_cy, reorder_tmp_real); reorder(h_face_cz, reorder_tmp_real);
 
-            // PERF-B1: sort faces within each color by left_cell for coalesced d_q reads
             std::vector<int> perm(nf);
             for (std::size_t f = 0; f < nf; ++f) perm[f] = static_cast<int>(f);
             for (int c = 0; c < n_colors_; ++c) {
@@ -337,7 +335,6 @@ bool DeviceMesh::upload_mesh(const CfdMesh& mesh, std::string* error, bool skip_
         }
     }
 
-    // PERF-G7: pack all face data into contiguous host buffer → single cudaMemcpy
     {
         std::vector<Real> face_real_buf(7 * nf);
         Real* fr = face_real_buf.data();

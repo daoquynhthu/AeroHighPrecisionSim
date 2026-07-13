@@ -38,7 +38,6 @@ struct EdgeKeyHash {
     }
 };
 
-// Add midpoint for an edge if not already in the map, return node index.
 int get_or_create_midpoint(int a, int b, const std::vector<CfdNode>& old_nodes,
                            std::vector<CfdNode>& new_nodes,
                            std::unordered_map<EdgeKey, int, EdgeKeyHash>& edge_map) {
@@ -81,7 +80,6 @@ void refine_tet4(const CfdCell& parent, int parent_id,
     int m13 = get_or_create_midpoint(n1, n3, old_nodes, new_nodes, edge_map);
     int m23 = get_or_create_midpoint(n2, n3, old_nodes, new_nodes, edge_map);
 
-    // 8 child tets
     TetLocal children[MAX_CHILDREN] = {
         {n0, m01, m02, m03},
         {n1, m01, m13, m12},
@@ -127,7 +125,6 @@ static void build_hex27_stencil(int st[3][3][3], const int n[8],
                                 const std::vector<CfdNode>& old_nodes,
                                 std::vector<CfdNode>& new_nodes,
                                 std::unordered_map<EdgeKey, int, EdgeKeyHash>& edge_map) {
-    // Initialize all to -1
     for (int i = 0; i < 3; ++i)
         for (int j = 0; j < 3; ++j)
             for (int k = 0; k < 3; ++k)
@@ -152,23 +149,19 @@ static void build_hex27_stencil(int st[3][3][3], const int n[8],
         if (st[i][j][k] < 0)
             st[i][j][k] = get_or_create_midpoint(n[a], n[b], old_nodes, new_nodes, edge_map);
     };
-    // Edges along x
     set_mid_edge(1,0,0, 0,1);
     set_mid_edge(1,2,0, 3,2);
     set_mid_edge(1,0,2, 4,5);
     set_mid_edge(1,2,2, 7,6);
-    // Edges along y
     set_mid_edge(0,1,0, 0,3);
     set_mid_edge(2,1,0, 1,2);
     set_mid_edge(0,1,2, 4,7);
     set_mid_edge(2,1,2, 5,6);
-    // Edges along z
     set_mid_edge(0,0,1, 0,4);
     set_mid_edge(2,0,1, 1,5);
     set_mid_edge(2,2,1, 2,6);
     set_mid_edge(0,2,1, 3,7);
 
-    // Face centers (6) — midpoint of face diagonal (original hex nodes).
     // Using get_or_create_midpoint ensures shared faces get the same fc node.
     auto set_mid_face = [&](int i, int j, int k, int a, int b) {
         if (st[i][j][k] < 0)
@@ -245,7 +238,6 @@ bool refine_cells(CfdMesh& mesh,
                   const std::vector<RefinementRecord>* prev_records,
                   std::vector<CoarsenInfo>* coarsen_info,
                   int max_level) {
-    // ----- 1. Build sets for refine and coarsen -----
     std::vector<int> to_refine, to_coarsen;
     for (const auto& req : requests) {
         if (req.cell_id < 0 || req.cell_id >= static_cast<int>(mesh.cells.size()))
@@ -258,7 +250,6 @@ bool refine_cells(CfdMesh& mesh,
     std::sort(to_coarsen.begin(), to_coarsen.end());
     to_coarsen.erase(std::unique(to_coarsen.begin(), to_coarsen.end()), to_coarsen.end());
 
-    // Level cap check
     for (int id : to_refine) {
         if (mesh.cells[id].refinement_level >= max_level) {
             if (error) *error = "refinement level exceeds max (5)";
@@ -266,7 +257,6 @@ bool refine_cells(CfdMesh& mesh,
         }
     }
 
-    // ----- 2. Prepare coarsening groups (children of same parent) -----
     struct CoarsenGroup {
         int parent_id;
         int children[MAX_CHILDREN];
@@ -277,7 +267,6 @@ bool refine_cells(CfdMesh& mesh,
     std::vector<CoarsenGroup> coarsen_groups;
     int skipped_coarsen_groups = 0;
     if (!to_coarsen.empty()) {
-        // Group cells marked for coarsening by parent_id
         std::unordered_map<int, std::vector<int>> parent_groups;
         for (int ci : to_coarsen) {
             int pid = mesh.cells[ci].parent_id;
@@ -288,7 +277,6 @@ bool refine_cells(CfdMesh& mesh,
             parent_groups[pid].push_back(ci);
         }
 
-        // Build CoarsenGroup from each complete set of MAX_CHILDREN siblings
         for (const auto& pg : parent_groups) {
             int pid = pg.first;
             const auto& children = pg.second;
@@ -300,7 +288,6 @@ bool refine_cells(CfdMesh& mesh,
             CoarsenGroup cg;
             cg.parent_id = pid;
 
-            // Find the matching prev_record
             bool found_record = false;
             if (prev_records) {
                 for (const auto& rec : *prev_records) {
@@ -314,7 +301,6 @@ bool refine_cells(CfdMesh& mesh,
             if (!found_record) continue;  // can't reconstruct parent without record
             if (cg.src_record.n_children != MAX_CHILDREN) continue;
 
-            // Mark the MAX_CHILDREN children
             for (int ci : children) {
                 if (cg.n_found >= MAX_CHILDREN) break;
                 cg.children[cg.n_found++] = ci;
@@ -324,17 +310,14 @@ bool refine_cells(CfdMesh& mesh,
         }
     }
 
-    // ----- 3. Build new cell array (refine + coarsen in one pass) -----
     std::vector<CfdNode> old_nodes = mesh.nodes;
     std::vector<CfdCell> new_cells;
     std::vector<RefinementRecord> records;
     std::unordered_map<EdgeKey, int, EdgeKeyHash> edge_map;
 
-    // Mark cells to be replaced by children
     std::vector<bool> replaced(mesh.cells.size(), false);
     for (int id : to_refine) replaced[id] = true;
 
-    // Mark cells to be removed (coarsened — absorbed into parent)
     std::vector<bool> removed(mesh.cells.size(), false);
     for (const auto& cg : coarsen_groups) {
         for (int i = 0; i < MAX_CHILDREN; ++i) {
@@ -362,7 +345,6 @@ bool refine_cells(CfdMesh& mesh,
         }
     }
 
-    // ----- 4. Insert coarsened parent cells -----
     for (const auto& cg : coarsen_groups) {
         CfdCell parent;
         parent.type = cg.src_record.parent_type;
@@ -382,7 +364,6 @@ bool refine_cells(CfdMesh& mesh,
         }
     }
 
-    // ----- 5. Replace mesh -----
     mesh.cells = std::move(new_cells);
     rebuild_mesh_faces(mesh);
 

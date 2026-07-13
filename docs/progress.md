@@ -1045,4 +1045,10 @@
 - Verified: TestMeshStlInternal 12/12 PASS. COV-10 标记 [FIXED]。
 - `compute_sdf_grid`/`build_bvh` 保留在匿名命名空间内，已通过 CFD-MESH-STL-1/2/3 端到端间接测试。
 
+2026-07-13
+- ARCH-7 [LOW]: 移除 CFD GPU 代码中的 6 处 PERF-* 任务追踪注释（device_mesh.cu x3, cfd_residual_gpu.cu x1, gpu_update.cu x1, cuda_utils.hpp x1）。
+- ARCH-8 [INFO]: 移除 AMR 文件中的 29 处非算法性行注释（amr_refine.cpp x17, amr_hanging.cpp x4, amr_interpolate.cpp x8）。
+- ARCH-12 [INFO]: 确认 `CUDA_KERNEL_CHECK` 实际被使用（cfd_residual_gpu.cu:351/369），移除其上的 PERF-C3 注释。
+- 验证：所有 CFD 目标编译通过（9 个测试可执行文件）。GPU 测试 57-58/67 通过——10 项未通过均为 GPU 原子非确定性的已知预存 oracle 比较失败，非本次变更引入。
+
 
