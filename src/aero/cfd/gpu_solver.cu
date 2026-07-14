@@ -256,7 +256,8 @@ if (config.viscous) {
             if (!cuda_check(cudaMemcpy(d_r_saved, d_mesh.residual_device(),
                     nvar_cells * sizeof(Real), cudaMemcpyDeviceToDevice), "save raw R(Q^n)", error)) goto fail;
 
-            if (config.turbulence_model != TurbulenceModel::LAMINAR) {
+            if (config.turbulence_model != TurbulenceModel::LAMINAR &&
+                    config.turbulence_model != TurbulenceModel::SST) {
                 if (!apply_rans_implicit_per_cell_gpu(d_mesh, config.Re, d_dt_cell, error, stream_main)) {
                     if (error && error->empty()) *error = "RANS implicit per-cell kernel failed";
                     goto fail;

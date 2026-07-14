@@ -1594,6 +1594,7 @@ Tasks:
 - [x] `apply_rans_implicit_gpu` skipped for SST (SA-only implicit; SST uses separate forward-Euler path)
 - [ ] Wall BC: `k_wall = 0`, `omega_wall = 6ν/(β₁y²)` (clamped via SST destruction near wall; no explicit BC change needed)
 - [x] Farfield BC: k_inf, omega_inf from tu_inf (0.1%) and mu_t/mu ratio (0.1) — completed in solver init
+- [x] SST audit (2026-07-14): 4-way parallel audit produced 25 findings; 7 CRITICAL/HIGH fixed, SST-A2 (mu_t coupling) deferred to 13.3
 
 ### 13.3 GPU kernels for SST (residual coupling — deferred)
 

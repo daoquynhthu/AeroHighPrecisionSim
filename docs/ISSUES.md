@@ -2853,3 +2853,126 @@ CPU 半隐式修正使用 `mesh_.cells[i].h_min`（最小边长）而非 `mesh_.
 多数热点核函数缺 `__launch_bounds__` 标注：`gg_gradient_kernel_*`、`update_minmax_kernel_*`、`bj_limiter_kernel_*`、`viscous_flux_kernel_*`、`wall_force_kernel`、`rans_source_kernel`、`timestep_kernel`、`update_and_l2_kernel`、`compute_diag_kernel`、`sweep_kernel`。建议面级核函数加 `__launch_bounds__(128)`，单元级核函数加 `__launch_bounds__(256)`。
 [FIXED 2026-07-13] 32 个核函数添加 `__launch_bounds__`（128 面级/256 单元级/BLAS），涉及 10 个文件：`reconstruction_gpu.cu`、`gpu_wall.cu`、`gpu_rans.cu`、`gpu_timestep.cu`、`gpu_update.cu`、`jacobian_free.cu`、`lusgs_gpu.cu`、`gpu_diagnostics.cu`、`fgmres_gpu.cu`、`exchange_halo.cu`。
 
+## Phase 13.2 k-omega SST Audit (2026-07-14)
+
+### Category A: Physical Correctness Bugs
+
+**SST-A1** [CRITICAL] `gpu_sst.cu:63-68`
+`sst_gradient_kernel` only accumulates Green-Gauss face contribution to LEFT cell. The RIGHT cell gets no contribution from shared faces. Standard formula: grad_L += phi_F·n̂·A, grad_R -= phi_F·n̂·A (n̂ points L->R, outward for R is -n̂). Cells that are never "left" in any face get zero/incomplete gradients, corrupting F1 blending and diffusion downstream. Found by 3/4 audits independently.
+[FIXED 2026-07-14] Added `real_atomic_add(&d_grad_k[right*3+0..2], -kF * nx/ny/nz * weight)` and same for grad_omega inside the Interior branch.
+
+**SST-A2** [CRITICAL] `gpu_viscous.cu:198,224-232`
+SST mu_t NOT coupled to mean flow viscous stress tensor. The viscous flux kernel computes laminar Sutherland mu only; SST eddy viscosity mu_t = rho*k/omega is computed in SST buffers but never added to mu_eff for momentum/energy equations. The SST model computes k and omega fields but has zero effect on the mean flow — solver effectively runs in laminar regardless of SST.
+Fix: pass SST q_k/q_omega to viscous flux kernel, compute mu_t at face, add to mu_eff.
+
+**SST-A3** [HIGH] `rans_sst.hpp:87-89`
+P_k_raw = nu_t_lim * S_mag * S_mag (kinematic, dimensions L²/T³) but P_k_max = 10 * beta_star * rho * k * omega (includes rho, dimensions M/(L·T³)). The comparison `real_fmin(P_k_raw, P_k_max)` is dimensionally inconsistent. The production limiter is weakened by factor rho.
+[FIXED 2026-07-14] Changed to `P_k_raw = rho * nu_t_lim * S_mag * S_mag` to make it volumetric.
+
+**SST-A4** [MEDIUM] `gpu_sst.cu:140`
+Farfield advection inflow (vnL < 0) uses `rho_inf = d_q[left * nvar + 0]` — the cell's own density — instead of the freestream density. While kF/omegaF correctly use inf_k/inf_omega, the density multiplier in flux = vnF * rhoF * kF * area is wrong for inflow.
+Fix: pass freestream density to sst_advection_kernel and use it for inflow.
+
+**SST-A5** [MEDIUM] `jacobian_free.cu:49-50`
+JFV product only perturbs the 5 main flow conserved variables (rho, rho*u, rho*v, rho*w, rho*E). SST variables (k, omega) are never perturbed, so the Jacobian-vector product excludes dR_flow/d(k,omega) and dR_sst/d(k,omega). For strongly-coupled flows this may slow Newton convergence.
+Fix: extend JFV perturbation to include SST state buffers.
+
+**SST-A6** [LOW] `rans_sst.hpp:91`
+P_omega = gamma / nu_t * P_k derives omega production from (limited) k-production P_k, deviating from standard Menter 2003 `P_w = gamma * rho * S^2`. When P_k limiter activates, P_w is artificially reduced below gamma * S^2. Non-standard but common formulation; document as deliberate choice.
+
+### Category B: Architecture & Memory Bugs
+
+**SST-B1** [HIGH] `device_mesh.cu:534-539`
+`allocate_sst()` partial allocation leak: if the 2nd-6th cudaMalloc fails, previously allocated buffers are not freed. The guard `if (d_q_k_ != nullptr) return true;` on line 532 then causes subsequent calls to report success (d_q_k_ non-null) while other pointers are null.
+[FIXED 2026-07-14] On any cudaMalloc failure, cuda_free_safe all previously allocated SST buffers before returning false.
+
+**SST-B2** [HIGH] `gpu_solver.cu:259-264`
+In the Newton implicit path, `apply_rans_implicit_per_cell_gpu` is called for all non-LAMINAR models, including SST. This kernel modifies `d_residual[5]` (SA rho_nu_tilde slot). For SST, q[5]=0 and residual[5]=0 so there is no numerical effect, but conceptually wrong.
+[FIXED 2026-07-14] Added `&& config.turbulence_model != TurbulenceModel::SST` to the guard.
+
+**SST-B3** [HIGH] `gpu_sst.cu:100,114,130,153,284,332,367`
+`sst_advection_kernel` and `sst_diffusion_kernel` use `atomicExch(d_failed, 1)` without null guard. If d_failed is nullptr (allowed by wrapper defaults), this causes GPU segfault. `sst_source_kernel` correctly guards with `if (d_failed)`.
+[FIXED 2026-07-14] Added `if (d_failed)` guard before all atomicExch(d_failed, 1) calls in advection and diffusion kernels.
+
+**SST-B4** [MEDIUM] `gpu_sst.cu:27-34`
+`sst_gradient_kernel` accepts `int* d_failed` parameter but never writes to it. Invalid k/omega values propagate silently to downstream kernels.
+Fix: add invalid-data checks and atomicCAS(d_failed, 0, 1) on failure, matching sst_source_kernel pattern.
+
+**SST-B5** [LOW] `gpu_sst.cu:45`
+`sst_gradient_kernel` accepts `int nvar` parameter that is never used. Dead parameter.
+Fix: remove nvar from gradient kernel signature and launch.
+
+**SST-B6** [LOW] `gpu_sst.cu:166`
+`sst_source_kernel` accepts `Real Re` parameter that is never used in the kernel body. Dead parameter.
+Fix: remove Re from source kernel signature, wrapper, and declaration.
+
+**SST-B7** [LOW] `gpu_solver.cu:403`
+SST k/omega convergence not tracked in L2 residual norm. Only the 6 main conservation variables are checked; SST can diverge without triggering convergence/failure detection.
+Fix: when SST active, also compute L2 norm of SST residuals and include in convergence check.
+
+### Category C: Test Correctness & Coverage
+
+**SST-C1** [HIGH] `test_cfd_gpu.cpp:3460-3461`
+CFD-TURB-SST-KERNEL-1 checks `k>=0, omega>0, residuals finite` but never verifies residuals are NON-ZERO. If the entire SST pipeline shorts to zero, the test still passes. Combined with SST-A1 (gradient bug corrupting gradients), all outputs are wrong but finite.
+[FIXED 2026-07-14] Added `max(|residual_k|) > 0` and `max(|residual_omega|) > 0` assertions.
+
+**SST-C2** [HIGH] `test_cfd_gpu.cpp:3485-3515`
+CFD-TURB-SST-2 test name says "SST buffers present but unused" but never calls allocate_sst(). As a LAMINAR regression test it passes correctly, but does not test the claimed scenario.
+Fix: either rename test (remove "SST buffers present") or actually allocate SST buffers and verify they remain unmodified in LAMINAR mode.
+
+**SST-C3** [HIGH] `gpu_sst.cu:324`
+`sst_diffusion_kernel` reads `d_wall_distance[left]` without validating it. Negative/NaN wall distance produces wrong F1 (arg1a = sqrt_k / (beta_star * omega * d + eps) with negative d), generating incorrect sigma coefficients and diffusion fluxes. In contrast, sst_source_kernel validates wall_distance at lines 199-201.
+[FIXED 2026-07-14] Added `if (dL < 0.0f || !real_isfinite(dL))` guard.
+
+**SST-C4** [MEDIUM] Missing test
+No CPU/GPU numerical comparison for SST residuals (unlike CFD-ORACLE-RANS-4 which compares SA residuals at 5e-7 tolerance). This is the direct reason SST-A1 (gradient bug) was not caught.
+Fix: add CFD-TURB-SST-CPU-GPU-1 test that computes SST residual on CPU via rans_sst.hpp functions and compares against GPU results cell-by-cell.
+
+**SST-C5** [MEDIUM] `test_cfd_gpu.cpp:3314-3328`
+CFD-TURB-ENUM-1 string mapping test uses a local `check_tm_str` lambda that duplicates production string logic. If production mapping changes, the test doesn't catch it. Also, the lambda prints "FAIL" via printf but does not call the FAIL macro — errors are reported but the test still PASSes.
+Fix: extract `turbulence_model_to_string()` into a shared header, test that function. Make check_tm_str call FAIL on mismatch.
+
+**SST-C6** [MEDIUM] Missing tests
+Two PLAN.md-required tests are not implemented:
+- CFD-TURB-SST-1: flat plate Cf vs Coles correlation (10% tolerance)
+- CFD-TURB-SST-3: SST zero k/omega laminar regression (1e-6 tolerance)
+Fix: implement both tests.
+
+**SST-C7** [MEDIUM] Missing test
+No test validates SST boundary paths (NoSlipWall/SlipWall/Symmetry zero-flux, Farfield inflow using freestream values). A regression swapping boundary branches would go undetected.
+Fix: add CFD-TURB-SST-BC-1 test on a mesh with known wall/farfield faces.
+
+**SST-C8** [MEDIUM] Missing guard
+No guard against `viscous=true + SST`. The SST diffusion kernel in gpu_sst.cu computes k/omega diffusion independently, but the mean-flow viscous kernel does not include mu_t. Running viscous+SST produces incomplete physics. PLAN.md 13.3 marks this as deferred.
+Fix: either add a runtime error for viscous+SST, or implement the coupling.
+
+**SST-C9** [LOW] Missing test
+No JFV product test for SST (SA has CFD-IMPLICIT-REGRESS-6). SST implicit convergence may have undetected JFV issues.
+Fix: extend CFD-IMPLICIT-REGRESS-6 or add CFD-IMPLICIT-REGRESS-9 for SST JFV.
+
+### Category D: Performance & Optimization
+
+**SST-D1** [HIGH] `gpu_sst.cu:212,347`
+F1 blending function (including expensive tanh + sqrt) is computed redundantly: once per cell in source kernel, and 2x per interior face in diffusion kernel. For N cells with ~5N interior faces, this is ~11N F1 evaluations per iteration. Storing F1 in a scratch buffer reduces to N evaluations.
+Fix: allocate `d_sst_f1_` scratch buffer in device_mesh, write F1 in source kernel, read in diffusion kernel.
+
+**SST-D2** [HIGH] `gpu_sst.cu:63-68,131-134,368-371`
+SST face-loop kernels (gradient, advection, diffusion) use atomicAdd unconditionally. The main solver has colored kernel variants that eliminate atomics by processing non-overlapping face groups. SST has no colored variants.
+Fix: implement `_colored` variants of gradient/advection/diffusion SST kernels using `d_color_offsets_`.
+
+**SST-D3** [HIGH] `gpu_sst.cu:157,528,593,618,635`
+`sst_source_kernel` has `__launch_bounds__(256)` but wrapper launches with `block=128`. The compiler reserves registers for 256 threads but only 128 are active, wasting occupancy. Cell-level kernels should use block=256 with __launch_bounds__(256); face-level kernels should use block=128 with __launch_bounds__(128).
+Fix: unify: face kernels (block=128, __launch_bounds__(128)), cell kernels (block=256, __launch_bounds__(256)).
+
+**SST-D4** [LOW] `gpu_sst.cu:408-445`
+`clear_sst_residual_kernel` (zero residuals) and `sst_update_kernel` (write new k/omega) can be fused: update kernel zeros residuals after writing new state, eliminating one kernel launch per iteration.
+Fix: at end of sst_update_kernel, add `d_residual_k[idx] = 0; d_residual_omega[idx] = 0;`.
+
+**SST-D5** [LOW] `gpu_sst.cu` (global)
+SST kernels do not use __ldg() for read-only arrays (d_left_cell, d_nx, d_area, etc.), unlike the update kernel which uses __ldg for d_min_dt. Minor benefit on pre-Volta GPUs.
+Fix: wrap read-only parameter accesses with __ldg() where beneficial.
+
+**SST-D6** [INFO] `gpu_sst.cu:248-266`
+`d_sst_F1` device function duplicates F1 logic from `rans_sst.hpp:compute_sst_blending`. A single `AEROSP_REAL_HOST_DEVICE` function should serve both CPU reference and GPU paths, eliminating the GPU-only device function.
+Fix: make `compute_sst_blending` callable from GPU and remove d_sst_F1.
+

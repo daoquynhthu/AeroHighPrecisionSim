@@ -3400,6 +3400,14 @@ static int test_sst_kernel_sanity() {
         if (bad_res_k > 0) FAIL("%d cells have non-finite residual_k", bad_res_k);
         if (bad_res_omega > 0) FAIL("%d cells have non-finite residual_omega", bad_res_omega);
 
+        Real sum_res_k = 0.0, sum_res_omega = 0.0;
+        for (std::size_t i = 0; i < mesh.cells.size(); ++i) {
+            sum_res_k += std::fabs(h_res_k[i]);
+            sum_res_omega += std::fabs(h_res_omega[i]);
+        }
+        if (sum_res_k == 0.0) FAIL("residual_k is all zero after SST kernel pipeline");
+        if (sum_res_omega == 0.0) FAIL("residual_omega is all zero after SST kernel pipeline");
+
         Real min_dt = 1e30f;
         for (std::size_t i = 0; i < mesh.cells.size(); ++i) {
             Real dt = 1e30f;

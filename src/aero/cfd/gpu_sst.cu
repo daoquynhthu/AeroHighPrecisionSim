@@ -51,21 +51,39 @@ __global__ void __launch_bounds__(128) sst_gradient_kernel(
         Real wR = d_q_omega[right];
         kF = 0.5f * (kL + kR);
         wF = 0.5f * (wL + wR);
+
+        Real nx = d_nx[idx], ny = d_ny[idx], nz = d_nz[idx];
+        Real area = d_area[idx];
+        Real weight = area;
+
+        real_atomic_add(&d_grad_k[left * 3 + 0], kF * nx * weight);
+        real_atomic_add(&d_grad_k[left * 3 + 1], kF * ny * weight);
+        real_atomic_add(&d_grad_k[left * 3 + 2], kF * nz * weight);
+        real_atomic_add(&d_grad_omega[left * 3 + 0], wF * nx * weight);
+        real_atomic_add(&d_grad_omega[left * 3 + 1], wF * ny * weight);
+        real_atomic_add(&d_grad_omega[left * 3 + 2], wF * nz * weight);
+
+        real_atomic_add(&d_grad_k[right * 3 + 0], -kF * nx * weight);
+        real_atomic_add(&d_grad_k[right * 3 + 1], -kF * ny * weight);
+        real_atomic_add(&d_grad_k[right * 3 + 2], -kF * nz * weight);
+        real_atomic_add(&d_grad_omega[right * 3 + 0], -wF * nx * weight);
+        real_atomic_add(&d_grad_omega[right * 3 + 1], -wF * ny * weight);
+        real_atomic_add(&d_grad_omega[right * 3 + 2], -wF * nz * weight);
     } else {
         kF = kL;
         wF = wL;
+
+        Real nx = d_nx[idx], ny = d_ny[idx], nz = d_nz[idx];
+        Real area = d_area[idx];
+        Real weight = area;
+
+        real_atomic_add(&d_grad_k[left * 3 + 0], kF * nx * weight);
+        real_atomic_add(&d_grad_k[left * 3 + 1], kF * ny * weight);
+        real_atomic_add(&d_grad_k[left * 3 + 2], kF * nz * weight);
+        real_atomic_add(&d_grad_omega[left * 3 + 0], wF * nx * weight);
+        real_atomic_add(&d_grad_omega[left * 3 + 1], wF * ny * weight);
+        real_atomic_add(&d_grad_omega[left * 3 + 2], wF * nz * weight);
     }
-
-    Real nx = d_nx[idx], ny = d_ny[idx], nz = d_nz[idx];
-    Real area = d_area[idx];
-    Real weight = area;
-
-    real_atomic_add(&d_grad_k[left * 3 + 0], kF * nx * weight);
-    real_atomic_add(&d_grad_k[left * 3 + 1], kF * ny * weight);
-    real_atomic_add(&d_grad_k[left * 3 + 2], kF * nz * weight);
-    real_atomic_add(&d_grad_omega[left * 3 + 0], wF * nx * weight);
-    real_atomic_add(&d_grad_omega[left * 3 + 1], wF * ny * weight);
-    real_atomic_add(&d_grad_omega[left * 3 + 2], wF * nz * weight);
 }
 
 __global__ void __launch_bounds__(256) sst_divide_volume_kernel(
@@ -97,7 +115,7 @@ __global__ void __launch_bounds__(128) sst_advection_kernel(
     if (idx >= n_faces) return;
 
     int left = d_left_cell[idx];
-    if (left < 0 || left >= n_cells) { atomicExch(d_failed, 1); return; }
+    if (left < 0 || left >= n_cells) { if (d_failed) atomicExch(d_failed, 1); return; }
     int bnd = d_boundary[idx];
     Real nx = d_nx[idx], ny = d_ny[idx], nz = d_nz[idx];
     Real area = d_area[idx];
@@ -111,7 +129,7 @@ __global__ void __launch_bounds__(128) sst_advection_kernel(
 
     if (bnd == static_cast<int>(BoundaryKind::Interior)) {
         int right = d_right_cell[idx];
-        if (right < 0 || right >= n_cells) { atomicExch(d_failed, 1); return; }
+        if (right < 0 || right >= n_cells) { if (d_failed) atomicExch(d_failed, 1); return; }
         Real rhoR = d_q[right * nvar + 0];
         Real kR = d_q_k[right];
         Real wR = d_q_omega[right];
@@ -127,7 +145,7 @@ __global__ void __launch_bounds__(128) sst_advection_kernel(
         Real flux_k = vnF * rhoF * kF * area;
         Real flux_w = vnF * rhoF * wF * area;
 
-        if (!real_isfinite(flux_k) || !real_isfinite(flux_w)) { atomicExch(d_failed, 1); return; }
+        if (!real_isfinite(flux_k) || !real_isfinite(flux_w)) { if (d_failed) atomicExch(d_failed, 1); return; }
         real_atomic_add(&d_residual_k[left], -flux_k);
         real_atomic_add(&d_residual_omega[left], -flux_w);
         real_atomic_add(&d_residual_k[right], flux_k);
@@ -146,11 +164,11 @@ __global__ void __launch_bounds__(128) sst_advection_kernel(
         vnF = vnL;
         Real flux_k = vnF * rhoF * kF * area;
         Real flux_w = vnF * rhoF * wF * area;
-        if (!real_isfinite(flux_k) || !real_isfinite(flux_w)) { atomicExch(d_failed, 1); return; }
+        if (!real_isfinite(flux_k) || !real_isfinite(flux_w)) { if (d_failed) atomicExch(d_failed, 1); return; }
         real_atomic_add(&d_residual_k[left], -flux_k);
         real_atomic_add(&d_residual_omega[left], -flux_w);
     } else {
-        atomicExch(d_failed, 1);
+        if (d_failed) atomicExch(d_failed, 1);
     }
 }
 
@@ -281,7 +299,7 @@ __global__ void __launch_bounds__(128) sst_diffusion_kernel(
     if (idx >= n_faces) return;
 
     int left = d_left_cell[idx];
-    if (left < 0 || left >= n_cells) { atomicExch(d_failed, 1); return; }
+    if (left < 0 || left >= n_cells) { if (d_failed) atomicExch(d_failed, 1); return; }
     int bnd = d_boundary[idx];
 
     auto cell_mu = [&](int c, Real& mu_out, Real& mu_t_out) {
@@ -322,6 +340,7 @@ __global__ void __launch_bounds__(128) sst_diffusion_kernel(
     Real gwL_y = d_grad_omega[left * 3 + 1];
     Real gwL_z = d_grad_omega[left * 3 + 2];
     Real dL = d_wall_distance[left];
+    if (dL < 0.0f || !real_isfinite(dL)) { if (d_failed) atomicExch(d_failed, 1); return; }
 
     Real mu_F, mu_t_F, gk_dot_n, gw_dot_n;
     Real nx = d_nx[idx], ny = d_ny[idx], nz = d_nz[idx];
@@ -329,7 +348,7 @@ __global__ void __launch_bounds__(128) sst_diffusion_kernel(
 
     if (bnd == static_cast<int>(BoundaryKind::Interior)) {
         int right = d_right_cell[idx];
-        if (right < 0 || right >= n_cells) { atomicExch(d_failed, 1); return; }
+        if (right < 0 || right >= n_cells) { if (d_failed) atomicExch(d_failed, 1); return; }
 
         Real mu_R, mu_t_R;
         if (!cell_mu(right, mu_R, mu_t_R)) return;
@@ -364,7 +383,7 @@ __global__ void __launch_bounds__(128) sst_diffusion_kernel(
         Real flux_k = mu_eff_k_F * gk_dot_n * area;
         Real flux_w = mu_eff_w_F * gw_dot_n * area;
 
-        if (!real_isfinite(flux_k) || !real_isfinite(flux_w)) { atomicExch(d_failed, 1); return; }
+        if (!real_isfinite(flux_k) || !real_isfinite(flux_w)) { if (d_failed) atomicExch(d_failed, 1); return; }
         real_atomic_add(&d_residual_k[left], -flux_k);
         real_atomic_add(&d_residual_omega[left], -flux_w);
         real_atomic_add(&d_residual_k[right], flux_k);
@@ -390,7 +409,7 @@ __global__ void __launch_bounds__(128) sst_diffusion_kernel(
         Real flux_k = mu_eff_k_F * gk_dot_n * area;
         Real flux_w = mu_eff_w_F * gw_dot_n * area;
 
-        if (!real_isfinite(flux_k) || !real_isfinite(flux_w)) { atomicExch(d_failed, 1); return; }
+        if (!real_isfinite(flux_k) || !real_isfinite(flux_w)) { if (d_failed) atomicExch(d_failed, 1); return; }
         real_atomic_add(&d_residual_k[left], -flux_k);
         real_atomic_add(&d_residual_omega[left], -flux_w);
     }

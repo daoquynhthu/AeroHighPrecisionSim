@@ -84,7 +84,7 @@ AEROSP_REAL_HOST_DEVICE SstSource compute_sst_source(
     Real F2_S = b.F2 * S_mag;
     Real nu_t_lim = sst_coeff::a1 * k / real_fmax(a1_omega, F2_S);
 
-    Real P_k_raw = nu_t_lim * S_mag * S_mag;
+    Real P_k_raw = rho * nu_t_lim * S_mag * S_mag;
     Real P_k_max = Real(10.0) * sst_coeff::beta_star * rho * k * omega;
     Real P_k = real_fmin(P_k_raw, P_k_max);
 
