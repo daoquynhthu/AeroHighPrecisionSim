@@ -277,7 +277,6 @@ bool compute_turbulence_source_gpu(DeviceMesh& mesh, const CfdConfig& config,
             if (error) *error = "SST buffers not allocated";
             return false;
         }
-        if (!clear_sst_residual_gpu(mesh, error, stream)) return false;
         if (!compute_sst_gradients_gpu(mesh, d_failed, error, stream)) return false;
         if (!compute_sst_advection_gpu(mesh, inf_k, inf_omega, inf_rho, d_failed, error, stream)) return false;
         if (!compute_sst_diffusion_gpu(mesh, config.gamma,

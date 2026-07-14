@@ -185,6 +185,7 @@ __global__ void __launch_bounds__(256) sst_source_kernel(
     const Real* d_vel_grad,
     const Real* d_wall_distance,
     const Real* d_volume,
+    Real* d_sst_f1,
     int n_cells, int nvar, int ngrad,
     Real gamma, Real Re, Real mu_ref, Real T_ref, Real sutherland_T,
     int* d_failed)
@@ -234,6 +235,8 @@ __global__ void __launch_bounds__(256) sst_source_kernel(
 
     SstBlending b = compute_sst_blending(k, omega, wall_distance, rho, mu,
         gk_x, gk_y, gk_z, gw_x, gw_y, gw_z);
+
+    if (d_sst_f1) d_sst_f1[idx] = b.F1;
 
     Real mu_t = rho * k / (omega + 1e-30f);
 
@@ -294,6 +297,7 @@ __global__ void __launch_bounds__(128) sst_diffusion_kernel(
     Real* d_residual_k, Real* d_residual_omega,
     const Real* d_grad_k, const Real* d_grad_omega,
     const Real* d_wall_distance,
+    const Real* d_sst_f1,
     int n_cells, int n_faces, int nvar,
     const int* d_left_cell, const int* d_right_cell, const int* d_boundary,
     const Real* d_nx, const Real* d_ny, const Real* d_nz, const Real* d_area,
@@ -368,10 +372,8 @@ __global__ void __launch_bounds__(128) sst_diffusion_kernel(
         Real gwR_z = d_grad_omega[right * 3 + 2];
         Real dR = d_wall_distance[right];
 
-        Real F1_L = d_sst_F1(kL, wL, dL, d_q[left * nvar + 0], mu_L,
-            gkL_x, gkL_y, gkL_z, gwL_x, gwL_y, gwL_z);
-        Real F1_R = d_sst_F1(kR, wR, dR, d_q[right * nvar + 0], mu_R,
-            gkR_x, gkR_y, gkR_z, gwR_x, gwR_y, gwR_z);
+        Real F1_L = (d_sst_f1 && left >= 0 && left < n_cells) ? d_sst_f1[left] : 0.0f;
+        Real F1_R = (d_sst_f1 && right >= 0 && right < n_cells) ? d_sst_f1[right] : 0.0f;
         Real F1_F = 0.5f * (F1_L + F1_R);
 
         Real sigma_k_F = F1_F * sst_coeff::sigma_k1 + (1.0f - F1_F) * sst_coeff::sigma_k2;
@@ -398,9 +400,7 @@ __global__ void __launch_bounds__(128) sst_diffusion_kernel(
                bnd == static_cast<int>(BoundaryKind::Symmetry)) {
         return;
     } else {
-        Real rhoL = d_q[left * nvar + 0];
-        Real F1_L = d_sst_F1(kL, wL, dL, rhoL, mu_L,
-            gkL_x, gkL_y, gkL_z, gwL_x, gwL_y, gwL_z);
+        Real F1_L = (d_sst_f1 && left >= 0 && left < n_cells) ? d_sst_f1[left] : 0.0f;
         Real sigma_k_L = F1_L * sst_coeff::sigma_k1 + (1.0f - F1_L) * sst_coeff::sigma_k2;
         Real sigma_w_L = F1_L * sst_coeff::sigma_w1 + (1.0f - F1_L) * sst_coeff::sigma_w2;
 
@@ -443,6 +443,7 @@ __global__ void __launch_bounds__(256) sst_update_kernel(
     const Real* d_residual_k, const Real* d_residual_omega,
     const Real* d_min_dt, const Real* d_volume,
     Real* d_q_k_next, Real* d_q_omega_next,
+    Real* d_res_k, Real* d_res_omega,
     int n_cells)
 {
     int idx = blockIdx.x * blockDim.x + threadIdx.x;
@@ -466,6 +467,9 @@ __global__ void __launch_bounds__(256) sst_update_kernel(
 
     d_q_k_next[idx] = k_new;
     d_q_omega_next[idx] = w_new;
+
+    if (d_res_k) d_res_k[idx] = 0.0f;
+    if (d_res_omega) d_res_omega[idx] = 0.0f;
 }
 
 __global__ void sst_diag_kernel(
@@ -556,16 +560,17 @@ bool compute_sst_gradients_gpu(DeviceMesh& mesh, int* d_failed,
         if (error) *error = "SST buffers not allocated for gradients";
         return false;
     }
-    int block = 128;
+    int block_face = 128;
+    int block_cell = 256;
     int nf = static_cast<int>(mesh.face_count());
     int nc = static_cast<int>(mesh.cell_count());
-    int grid_grad = (nf + block - 1) / block;
-    int grid_div = (nc + block - 1) / block;
+    int grid_grad = (nf + block_face - 1) / block_face;
+    int grid_div = (nc + block_cell - 1) / block_cell;
 
     DeviceCellData cd = mesh.cell_data();
     DeviceFaceData fd = mesh.face_data();
 
-    sst_gradient_kernel<<<grid_grad, block, 0, stream>>>(
+    sst_gradient_kernel<<<grid_grad, block_face, 0, stream>>>(
         mesh.q_k_device(), mesh.q_omega_device(),
         nc, nf, DeviceMesh::NVAR,
         fd.left_cell, fd.right_cell, fd.boundary,
@@ -575,7 +580,7 @@ bool compute_sst_gradients_gpu(DeviceMesh& mesh, int* d_failed,
         d_failed);
     if (!cuda_check(cudaGetLastError(), "sst_gradient_kernel launch", error)) return false;
 
-    sst_divide_volume_kernel<<<grid_div, block, 0, stream>>>(
+    sst_divide_volume_kernel<<<grid_div, block_cell, 0, stream>>>(
         mesh.grad_k_device(), mesh.grad_omega_device(),
         cd.volume, nc);
     if (!cuda_check(cudaGetLastError(), "sst_divide_volume_kernel launch", error)) return false;
@@ -627,7 +632,7 @@ bool compute_sst_source_gpu(DeviceMesh& mesh, Real gamma, Real Re,
         return false;
     }
 
-    int block = 128;
+    int block = 256;
     int nc = static_cast<int>(mesh.cell_count());
     int grid = (nc + block - 1) / block;
     DeviceCellData cd = mesh.cell_data();
@@ -639,6 +644,7 @@ bool compute_sst_source_gpu(DeviceMesh& mesh, Real gamma, Real Re,
         mesh.grad_k_device(), mesh.grad_omega_device(),
         mesh.gradients_device(),
         cd.wall_distance, cd.volume,
+        mesh.sst_f1_device(),
         nc, DeviceMesh::NVAR, DeviceMesh::NGRAD,
         gamma, Re, mu_ref, T_ref, sutherland_T,
         d_failed);
@@ -674,6 +680,7 @@ bool compute_sst_diffusion_gpu(DeviceMesh& mesh, Real gamma,
         mesh.residual_k_device(), mesh.residual_omega_device(),
         mesh.grad_k_device(), mesh.grad_omega_device(),
         cd.wall_distance,
+        mesh.sst_f1_device(),
         nc, nf, DeviceMesh::NVAR,
         fd.left_cell, fd.right_cell, fd.boundary,
         fd.nx, fd.ny, fd.nz, fd.area,
@@ -692,7 +699,7 @@ bool compute_sst_update_gpu(DeviceMesh& mesh, const Real* d_min_dt,
         if (error) *error = "SST buffers not allocated for update";
         return false;
     }
-    int block = 128;
+    int block = 256;
     int nc = static_cast<int>(mesh.cell_count());
     int grid = (nc + block - 1) / block;
     DeviceCellData cd = mesh.cell_data();
@@ -702,6 +709,7 @@ bool compute_sst_update_gpu(DeviceMesh& mesh, const Real* d_min_dt,
         mesh.residual_k_device(), mesh.residual_omega_device(),
         d_min_dt, cd.volume,
         mesh.q_k_device(), mesh.q_omega_device(),
+        mesh.residual_k_device(), mesh.residual_omega_device(),
         nc);
     if (!cuda_check(cudaGetLastError(), "sst_update_kernel launch", error)) return false;
 
@@ -717,7 +725,7 @@ bool compute_sst_init_gpu(DeviceMesh& mesh,
         if (error) *error = "SST buffers not allocated for init";
         return false;
     }
-    int block = 128;
+    int block = 256;
     int nc = static_cast<int>(mesh.cell_count());
     int grid = (nc + block - 1) / block;
 
@@ -734,7 +742,7 @@ bool clear_sst_residual_gpu(DeviceMesh& mesh,
 {
     if (mesh.cell_count() == 0) return true;
     if (!mesh.has_sst()) return true;
-    int block = 128;
+    int block = 256;
     int nc = static_cast<int>(mesh.cell_count());
     int grid = (nc + block - 1) / block;
 
@@ -755,7 +763,7 @@ bool compute_sst_diag_gpu(DeviceMesh& mesh, Real gamma, Real mu_ref, Real T_ref,
         if (error) *error = "SST buffers not allocated for diag";
         return false;
     }
-    int block = 128;
+    int block = 256;
     int nc = static_cast<int>(mesh.cell_count());
     int grid = (nc + block - 1) / block;
     DeviceCellData cd = mesh.cell_data();

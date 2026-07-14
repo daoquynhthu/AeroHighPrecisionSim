@@ -2934,6 +2934,7 @@ Fix: added `if (d <= 0.0f || !std::isfinite(d)) d = 1e30f` to CPU comparison pat
 **SST-C5** [MEDIUM] `test_cfd_gpu.cpp:3314-3328`
 CFD-TURB-ENUM-1 string mapping test uses a local `check_tm_str` lambda that duplicates production string logic. If production mapping changes, the test doesn't catch it. Also, the lambda prints "FAIL" via printf but does not call the FAIL macro — errors are reported but the test still PASSes.
 Fix: extract `turbulence_model_to_string()` into a shared header, test that function. Make check_tm_str call FAIL on mismatch.
+[FIXED 2026-07-14] Changed lambda to return bool; each call is now followed by `if (!check_tm_str(...)) FAIL(...)`. Mismatched mapping now correctly fails the test.
 
 **SST-C6** [MEDIUM] Missing tests
 Two PLAN.md-required tests are not implemented:
@@ -2958,6 +2959,7 @@ Fix: extend CFD-IMPLICIT-REGRESS-6 or add CFD-IMPLICIT-REGRESS-9 for SST JFV.
 **SST-D1** [HIGH] `gpu_sst.cu:212,347`
 F1 blending function (including expensive tanh + sqrt) is computed redundantly: once per cell in source kernel, and 2x per interior face in diffusion kernel. For N cells with ~5N interior faces, this is ~11N F1 evaluations per iteration. Storing F1 in a scratch buffer reduces to N evaluations.
 Fix: allocate `d_sst_f1_` scratch buffer in device_mesh, write F1 in source kernel, read in diffusion kernel.
+[FIXED 2026-07-14] Added d_sst_f1_ to DeviceMesh (allocated in allocate_sst, freed in release). Source kernel writes b.F1 to buffer. Diffusion kernel reads from buffer instead of recomputing d_sst_F1().
 
 **SST-D2** [HIGH] `gpu_sst.cu:63-68,131-134,368-371`
 SST face-loop kernels (gradient, advection, diffusion) use atomicAdd unconditionally. The main solver has colored kernel variants that eliminate atomics by processing non-overlapping face groups. SST has no colored variants.
@@ -2966,10 +2968,12 @@ Fix: implement `_colored` variants of gradient/advection/diffusion SST kernels u
 **SST-D3** [HIGH] `gpu_sst.cu:157,528,593,618,635`
 `sst_source_kernel` has `__launch_bounds__(256)` but wrapper launches with `block=128`. The compiler reserves registers for 256 threads but only 128 are active, wasting occupancy. Cell-level kernels should use block=256 with __launch_bounds__(256); face-level kernels should use block=128 with __launch_bounds__(128).
 Fix: unify: face kernels (block=128, __launch_bounds__(128)), cell kernels (block=256, __launch_bounds__(256)).
+[FIXED 2026-07-14] Changed all cell-loop wrapper functions to launch with block=256. Face-loop wrappers remain block=128.
 
 **SST-D4** [LOW] `gpu_sst.cu:408-445`
 `clear_sst_residual_kernel` (zero residuals) and `sst_update_kernel` (write new k/omega) can be fused: update kernel zeros residuals after writing new state, eliminating one kernel launch per iteration.
 Fix: at end of sst_update_kernel, add `d_residual_k[idx] = 0; d_residual_omega[idx] = 0;`.
+[FIXED 2026-07-14] sst_update_kernel now takes d_res_k/d_res_omega params and zeros them after writing new state. Removed clear_sst_residual_gpu call from gpu_rans.cu SST pipeline.
 
 **SST-D5** [LOW] `gpu_sst.cu` (global)
 SST kernels do not use __ldg() for read-only arrays (d_left_cell, d_nx, d_area, etc.), unlike the update kernel which uses __ldg for d_min_dt. Minor benefit on pre-Volta GPUs.
@@ -2983,10 +2987,10 @@ Fix: wrap read-only parameter accesses with __ldg() where beneficial.
 |----------|------|-------|-----|
 | CRITICAL | 0 | 3 | SST-A1, SST-A3, SST-A4 |
 | HIGH     | 0 | 4 | SST-B1, SST-B2, SST-B3, SST-B4 |
-| MEDIUM   | 3 | 3 | SST-A2 (JFV, deferred Phase 13.3), SST-C2 (test name), SST-C4 (CPU/GPU test), SST-C5 (enum test), SST-C6 (two missing tests) |
-| LOW      | 3 | 3 | SST-C3 (wall_dist guard), SST-D3 (block size), SST-D4 (fuse clear+update), SST-D5 (__ldg), SST-C9 (JFV test), SST-C1 (residual check) |
+| MEDIUM   | 1 | 5 | SST-A2 (JFV, deferred), SST-C2 (test name), SST-C4 (CPU/GPU test), SST-C5 (enum test), SST-C6 (two missing tests), SST-C7 (boundary test), SST-C8 (viscous guard) |
+| LOW      | 3 | 4 | SST-C3 (wall_dist guard), SST-D1 (F1 buffer), SST-D3 (block size), SST-D4 (fuse clear+update), SST-C9 (JFV test), SST-C1 (residual check), SST-D5 (__ldg), SST-D6 (d_sst_F1 duplicate) |
 | INFO     | 1 | 0 | SST-D6 (d_sst_F1 duplicate) |
 
-Fixed this session (2026-07-14): SST-A4 (farfield inflow density), SST-B4 (d_failed guard in gradient kernel), SST-C2 (test name), SST-C4 (CPU/GPU source comparison test + wall_distance guard fix).
+Fixed this session (2026-07-14): SST-A4 (farfield inflow density), SST-B4 (d_failed guard in gradient kernel), SST-C2 (test name), SST-C4 (CPU/GPU source comparison test + wall_distance guard fix), SST-C5 (enum test lambda FAIL macro), SST-D1 (F1 scratch buffer), SST-D3 (block size mismatch), SST-D4 (fuse clear+update).
 
 

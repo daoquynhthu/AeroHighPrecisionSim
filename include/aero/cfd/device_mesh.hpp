@@ -136,6 +136,7 @@ public:
     Real* residual_omega_device() const { return d_residual_omega_; }
     Real* grad_k_device() const { return d_grad_k_; }
     Real* grad_omega_device() const { return d_grad_omega_; }
+    Real* sst_f1_device() const { return d_sst_f1_; }
 
 private:
     std::size_t cell_count_ = 0;
@@ -175,6 +176,7 @@ private:
     Real* d_residual_omega_ = nullptr;
     Real* d_grad_k_ = nullptr;
     Real* d_grad_omega_ = nullptr;
+    Real* d_sst_f1_ = nullptr;
     Real* d_w_ = nullptr;
 
     int n_colors_ = 0;

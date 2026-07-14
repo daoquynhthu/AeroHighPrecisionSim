@@ -1099,3 +1099,9 @@
 
 2026-07-14
 - SST-C4 (CPU/GPU SST source comparison test): added CFD-TURB-SST-CPU-GPU-1 test. Root cause of initial failure: ghost cells have wall_distance=0; GPU sst_source_kernel guards d<=0 to d=1e30, but CPU comparison had no such guard. Fix: added matching d<=0 guard to CPU path. Also added proper wall_distance computation for interior test cells. Added diagnostic kernel compute_sst_diag_gpu / sst_diag_kernel for future debugging. Test tolerance: 1e-6 for both source_k and source_w. All 73/73 tests PASS.
+
+2026-07-14
+- SST-D3 (block size mismatch): changed all cell-loop SST kernel wrappers to launch with block=256 (matching __launch_bounds__(256)). Face-loop wrappers remain block=128. Tests: 73/73 PASS.
+- SST-D1 (F1 scratch buffer): added d_sst_f1_ to DeviceMesh (allocated/freed in SST lifecycle). Source kernel writes F1 to buffer; diffusion kernel reads from buffer instead of recomputing. Eliminates ~10N redundant F1 evaluations per iteration. Tests: 73/73 PASS.
+- SST-C5 (enum test): lambda now returns bool; each call guarded by if(!check_tm_str(...)) FAIL(...). Mismatched mapping now correctly fails the test. Tests: 73/73 PASS.
+- SST-D4 (fuse clear+update): sst_update_kernel now zeros residuals after writing new state. Removed separate clear_sst_residual_gpu call from SST pipeline. Eliminates one kernel launch per iteration. Tests: 73/73 PASS.

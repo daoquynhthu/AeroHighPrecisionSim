@@ -203,6 +203,7 @@ void DeviceMesh::release() {
     cuda_free_safe(d_residual_omega_);
     cuda_free_safe(d_grad_k_);
     cuda_free_safe(d_grad_omega_);
+    cuda_free_safe(d_sst_f1_);
     cuda_free_safe(d_w_);
     cuda_free_safe(d_color_offsets_);
     cuda_free_safe(d_halo_indices_);
@@ -222,6 +223,7 @@ void DeviceMesh::release() {
     d_q_k_ = d_q_omega_ = nullptr;
     d_residual_k_ = d_residual_omega_ = nullptr;
     d_grad_k_ = d_grad_omega_ = nullptr;
+    d_sst_f1_ = nullptr;
     cell_count_ = 0;
     face_count_ = 0;
     n_colors_ = 0;
@@ -538,6 +540,7 @@ bool DeviceMesh::allocate_sst() {
         cuda_free_safe(d_residual_omega_);
         cuda_free_safe(d_grad_k_);
         cuda_free_safe(d_grad_omega_);
+        cuda_free_safe(d_sst_f1_);
     };
     if (!cuda_check(cudaMalloc(&d_q_k_, nc * sizeof(Real)), "cudaMalloc d_q_k_", nullptr)) { free_all(); return false; }
     if (!cuda_check(cudaMalloc(&d_q_omega_, nc * sizeof(Real)), "cudaMalloc d_q_omega_", nullptr)) { free_all(); return false; }
@@ -545,12 +548,14 @@ bool DeviceMesh::allocate_sst() {
     if (!cuda_check(cudaMalloc(&d_residual_omega_, nc * sizeof(Real)), "cudaMalloc d_residual_omega_", nullptr)) { free_all(); return false; }
     if (!cuda_check(cudaMalloc(&d_grad_k_, nc * 3 * sizeof(Real)), "cudaMalloc d_grad_k_", nullptr)) { free_all(); return false; }
     if (!cuda_check(cudaMalloc(&d_grad_omega_, nc * 3 * sizeof(Real)), "cudaMalloc d_grad_omega_", nullptr)) { free_all(); return false; }
+    if (!cuda_check(cudaMalloc(&d_sst_f1_, nc * sizeof(Real)), "cudaMalloc d_sst_f1_", nullptr)) { free_all(); return false; }
     if (!cuda_check(cudaMemset(d_q_k_, 0, nc * sizeof(Real)), "cudaMemset d_q_k_", nullptr)) { free_all(); return false; }
     if (!cuda_check(cudaMemset(d_q_omega_, 0, nc * sizeof(Real)), "cudaMemset d_q_omega_", nullptr)) { free_all(); return false; }
     if (!cuda_check(cudaMemset(d_residual_k_, 0, nc * sizeof(Real)), "cudaMemset d_residual_k_", nullptr)) { free_all(); return false; }
     if (!cuda_check(cudaMemset(d_residual_omega_, 0, nc * sizeof(Real)), "cudaMemset d_residual_omega_", nullptr)) { free_all(); return false; }
     if (!cuda_check(cudaMemset(d_grad_k_, 0, nc * 3 * sizeof(Real)), "cudaMemset d_grad_k_", nullptr)) { free_all(); return false; }
     if (!cuda_check(cudaMemset(d_grad_omega_, 0, nc * 3 * sizeof(Real)), "cudaMemset d_grad_omega_", nullptr)) { free_all(); return false; }
+    if (!cuda_check(cudaMemset(d_sst_f1_, 0, nc * sizeof(Real)), "cudaMemset d_sst_f1_", nullptr)) { free_all(); return false; }
     return true;
 }
 

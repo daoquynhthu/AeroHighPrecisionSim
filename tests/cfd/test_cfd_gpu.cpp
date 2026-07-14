@@ -3316,21 +3316,22 @@ static int test_turbulence_model_enum() {
         CfdConfig cfg;
         if (cfg.turbulence_model != TurbulenceModel::LAMINAR) FAIL("default != LAMINAR");
 
-        auto check_tm_str = [](TurbulenceModel tm, const char* expected) -> void {
+        auto check_tm_str = [](TurbulenceModel tm, const char* expected) -> bool {
             const char* s = "unknown";
             if (tm == TurbulenceModel::LAMINAR) s = "laminar";
             else if (tm == TurbulenceModel::SA) s = "rans-sa";
             else if (tm == TurbulenceModel::SA_DDES) s = "rans-sa-ddes";
             else if (tm == TurbulenceModel::SST) s = "rans-sst";
-            if (std::strcmp(s, expected) != 0) {
-                std::printf("FAIL: model=%d expected=%s got=%s\n", static_cast<int>(tm), expected, s);
-                std::fflush(stdout);
-            }
+            return std::strcmp(s, expected) == 0;
         };
-        check_tm_str(TurbulenceModel::LAMINAR, "laminar");
-        check_tm_str(TurbulenceModel::SA, "rans-sa");
-        check_tm_str(TurbulenceModel::SA_DDES, "rans-sa-ddes");
-        check_tm_str(TurbulenceModel::SST, "rans-sst");
+        if (!check_tm_str(TurbulenceModel::LAMINAR, "laminar"))
+            FAIL("LAMINAR string mapping");
+        if (!check_tm_str(TurbulenceModel::SA, "rans-sa"))
+            FAIL("SA string mapping");
+        if (!check_tm_str(TurbulenceModel::SA_DDES, "rans-sa-ddes"))
+            FAIL("SA_DDES string mapping");
+        if (!check_tm_str(TurbulenceModel::SST, "rans-sst"))
+            FAIL("SST string mapping");
 
         PASS;
     }
