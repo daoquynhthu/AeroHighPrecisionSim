@@ -114,7 +114,7 @@ __global__ void __launch_bounds__(128) sst_advection_kernel(
     int n_cells, int n_faces, int nvar,
     const int* d_left_cell, const int* d_right_cell, const int* d_boundary,
     const Real* d_nx, const Real* d_ny, const Real* d_nz, const Real* d_area,
-    Real inf_k, Real inf_omega,
+    Real inf_k, Real inf_omega, Real inf_rho,
     int* d_failed)
 {
     int idx = blockIdx.x * blockDim.x + threadIdx.x;
@@ -161,11 +161,10 @@ __global__ void __launch_bounds__(128) sst_advection_kernel(
                bnd == static_cast<int>(BoundaryKind::Symmetry)) {
         return;
     } else if (bnd == static_cast<int>(BoundaryKind::Farfield)) {
-        Real rho_inf = d_q[left * nvar + 0];
         if (vnL >= 0.0f) {
             rhoF = rhoL; kF = kL; wF = wL;
         } else {
-            rhoF = rho_inf; kF = inf_k; wF = inf_omega;
+            rhoF = inf_rho; kF = inf_k; wF = inf_omega;
         }
         vnF = vnL;
         Real flux_k = vnF * rhoF * kF * area;
@@ -507,7 +506,7 @@ bool compute_sst_gradients_gpu(DeviceMesh& mesh, int* d_failed,
 }
 
 bool compute_sst_advection_gpu(DeviceMesh& mesh,
-    Real inf_k, Real inf_omega,
+    Real inf_k, Real inf_omega, Real inf_rho,
     int* d_failed, std::string* error, cudaStream_t stream)
 {
     if (mesh.cell_count() == 0 || mesh.face_count() == 0) return true;
@@ -529,7 +528,7 @@ bool compute_sst_advection_gpu(DeviceMesh& mesh,
         nc, nf, DeviceMesh::NVAR,
         fd.left_cell, fd.right_cell, fd.boundary,
         fd.nx, fd.ny, fd.nz, fd.area,
-        inf_k, inf_omega,
+        inf_k, inf_omega, inf_rho,
         d_failed);
     if (!cuda_check(cudaGetLastError(), "sst_advection_kernel launch", error)) return false;
 

@@ -3370,7 +3370,7 @@ static int test_sst_kernel_sanity() {
             FAIL("clear_residual: %s", error.c_str());
         if (!compute_sst_gradients_gpu(d_mesh, d_failed, &error))
             FAIL("sst_gradients: %s", error.c_str());
-        if (!compute_sst_advection_gpu(d_mesh, inf_k, inf_omega, d_failed, &error))
+        if (!compute_sst_advection_gpu(d_mesh, inf_k, inf_omega, w.rho, d_failed, &error))
             FAIL("sst_advection: %s", error.c_str());
         if (!compute_sst_diffusion_gpu(d_mesh, gamma, mu_ref, T_ref, sutherland_T, d_failed, &error))
             FAIL("sst_diffusion: %s", error.c_str());

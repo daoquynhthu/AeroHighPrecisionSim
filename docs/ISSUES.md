@@ -2871,7 +2871,7 @@ P_k_raw = nu_t_lim * S_mag * S_mag (kinematic, dimensions L²/T³) but P_k_max =
 
 **SST-A4** [MEDIUM] `gpu_sst.cu:140`
 Farfield advection inflow (vnL < 0) uses `rho_inf = d_q[left * nvar + 0]` — the cell's own density — instead of the freestream density. While kF/omegaF correctly use inf_k/inf_omega, the density multiplier in flux = vnF * rhoF * kF * area is wrong for inflow.
-Fix: pass freestream density to sst_advection_kernel and use it for inflow.
+[FIXED 2026-07-14] Added `inf_rho` parameter to `sst_advection_kernel` and `compute_sst_advection_gpu`; propagated through `compute_turbulence_source_gpu` and callers in gpu_solver.cu.
 
 **SST-A5** [MEDIUM] `jacobian_free.cu:49-50`
 JFV product only perturbs the 5 main flow conserved variables (rho, rho*u, rho*v, rho*w, rho*E). SST variables (k, omega) are never perturbed, so the Jacobian-vector product excludes dR_flow/d(k,omega) and dR_sst/d(k,omega). For strongly-coupled flows this may slow Newton convergence.
@@ -2896,7 +2896,7 @@ In the Newton implicit path, `apply_rans_implicit_per_cell_gpu` is called for al
 
 **SST-B4** [MEDIUM] `gpu_sst.cu:27-34`
 `sst_gradient_kernel` accepts `int* d_failed` parameter but never writes to it. Invalid k/omega values propagate silently to downstream kernels.
-Fix: add invalid-data checks and atomicCAS(d_failed, 0, 1) on failure, matching sst_source_kernel pattern.
+[FIXED 2026-07-14] Added invalid-data checks (`k<0`, `omega<=0`, non-finite) with `atomicExch(d_failed,1)` on failure.
 
 **SST-B5** [LOW] `gpu_sst.cu:45`
 `sst_gradient_kernel` accepts `int nvar` parameter that is never used. Dead parameter.
@@ -2918,7 +2918,7 @@ CFD-TURB-SST-KERNEL-1 checks `k>=0, omega>0, residuals finite` but never verifie
 
 **SST-C2** [HIGH] `test_cfd_gpu.cpp:3485-3515`
 CFD-TURB-SST-2 test name says "SST buffers present but unused" but never calls allocate_sst(). As a LAMINAR regression test it passes correctly, but does not test the claimed scenario.
-Fix: either rename test (remove "SST buffers present") or actually allocate SST buffers and verify they remain unmodified in LAMINAR mode.
+[FIXED 2026-07-14] Renamed to "LAMINAR model regression (no SST allocation)" to match actual test behavior.
 
 **SST-C3** [HIGH] `gpu_sst.cu:324`
 `sst_diffusion_kernel` reads `d_wall_distance[left]` without validating it. Negative/NaN wall distance produces wrong F1 (arg1a = sqrt_k / (beta_star * omega * d + eps) with negative d), generating incorrect sigma coefficients and diffusion fluxes. In contrast, sst_source_kernel validates wall_distance at lines 199-201.

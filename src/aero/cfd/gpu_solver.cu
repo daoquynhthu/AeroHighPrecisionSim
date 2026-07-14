@@ -225,7 +225,7 @@ if (config.viscous) {
             }
         }
 
-        if (!compute_turbulence_source_gpu(d_mesh, config, d_failed, error, stream_main, inf_k, inf_omega, d_min_dt)) {
+        if (!compute_turbulence_source_gpu(d_mesh, config, d_failed, error, stream_main, inf_k, inf_omega, w_inf.rho, d_min_dt)) {
             if (error && error->empty()) *error = "turbulence source kernel failed";
             goto fail;
         }
@@ -349,7 +349,7 @@ if (config.viscous) {
                                 goto fail;
                             }
                         }
-                        if (!compute_turbulence_source_gpu(d_mesh, config, d_failed, error, stream_main, inf_k, inf_omega)) {
+                        if (!compute_turbulence_source_gpu(d_mesh, config, d_failed, error, stream_main, inf_k, inf_omega, w_inf.rho)) {
                             if (error && error->empty()) *error = "Newton turbulence source failed";
                             goto fail;
                         }
