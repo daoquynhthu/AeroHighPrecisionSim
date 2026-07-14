@@ -1602,13 +1602,13 @@ Files:
 
 | File | Action | Content |
 |------|--------|---------|
-| `src/aero/cfd/gpu_viscous.cu` | MODIFY | `viscous_flux_kernel_atomic`: add `k` and `ω` diffusion terms (σ_k * μ_eff for k, σ_ω * μ_eff for ω) |
+| `src/aero/cfd/gpu_viscous.cu` | MODIFY | `viscous_flux_kernel_atomic/colored`: SST mu_t added to molecular viscosity for momentum/energy viscous stress |
 | `src/aero/cfd/gpu_update.cu` | MODIFY | L2 norm of Q unchanged (separate SST update); but add k/ω validity check |
 
 Tasks:
 
-- [ ] Viscous kernel extension: `mu_eff_k = mu + sigma_k * mu_t`, `mu_eff_omega = mu + sigma_omega * mu_t`; diffusion flux for k, ω
-- [ ] `viscous=false` with `SST`: viscous terms for k/ω must still be computed (diffusion is essential for turbulence model stability)
+- [x] Viscous kernel extension: mu_t coupling to mean flow viscous stress (SST-A2, FIXED 2026-07-14). Face k/ω interpolated, S_mag computed, mu_t via SST stress limiter, mu_eff = mu + mu_t used for momentum/energy viscous flux. SA diffusion block skipped for SST.
+- [ ] `viscous=false` with `SST`: viscous terms for k/ω must still be computed (diffusion is essential for turbulence model stability) — handled via SST pipeline (gpu_sst.cu sst_diffusion_kernel)
 - [ ] SST point-implicit (diagonal contribution) for `apply_rans_implicit_gpu`
 
 Tests:

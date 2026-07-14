@@ -2864,6 +2864,7 @@ CPU 半隐式修正使用 `mesh_.cells[i].h_min`（最小边长）而非 `mesh_.
 **SST-A2** [CRITICAL] `gpu_viscous.cu:198,224-232`
 SST mu_t NOT coupled to mean flow viscous stress tensor. The viscous flux kernel computes laminar Sutherland mu only; SST eddy viscosity mu_t = rho*k/omega is computed in SST buffers but never added to mu_eff for momentum/energy equations. The SST model computes k and omega fields but has zero effect on the mean flow — solver effectively runs in laminar regardless of SST.
 Fix: pass SST q_k/q_omega to viscous flux kernel, compute mu_t at face, add to mu_eff.
+[FIXED 2026-07-14] Both `viscous_flux_kernel_atomic` and `viscous_flux_kernel_colored` now accept SST buffer pointers. When turbulence==3 (SST), face k/omega are interpolated, S_mag is computed from velocity gradients, mu_t computed via SST stress limiter (nu_t_lim = a1*k/max(a1*omega, F2*S)), added to molecular viscosity as mu_eff = mu + mu_t. Momentum and energy viscous fluxes use mu_eff. SA diffusion block skipped for SST. Removed viscous+SST runtime guards from gpu_solver.cu and cfd_solver.cpp. Test CFD-TURB-SST-VISC-1 verifies SST+viscous forces differ from laminar (mu_t has measurable effect). All 78/78 tests PASS.
 
 **SST-A3** [HIGH] `rans_sst.hpp:87-89`
 P_k_raw = nu_t_lim * S_mag * S_mag (kinematic, dimensions L²/T³) but P_k_max = 10 * beta_star * rho * k * omega (includes rho, dimensions M/(L·T³)). The comparison `real_fmin(P_k_raw, P_k_max)` is dimensionally inconsistent. The production limiter is weakened by factor rho.
@@ -2988,9 +2989,9 @@ Fix: wrap read-only parameter accesses with __ldg() where beneficial.
 
 | Severity | Open | FIXED | IDs |
 |----------|------|-------|-----|
-| CRITICAL | 0 | 3 | SST-A1, SST-A3, SST-A4 |
+| CRITICAL | 0 | 4 | SST-A1, SST-A2, SST-A3, SST-A4 |
 | HIGH     | 0 | 5 | SST-B1, SST-B2, SST-B3, SST-B4, SST-D2 |
-| MEDIUM   | 0 | 8 | SST-A2 (JFV, deferred), SST-C2 (test name), SST-C4 (CPU/GPU test), SST-C5 (enum test), SST-C6 (tests), SST-C7 (boundary test), SST-C8 (viscous guard) |
+| MEDIUM   | 1 | 7 | SST-A5 (JFV perturbation, open), SST-C2 (test name), SST-C4 (CPU/GPU test), SST-C5 (enum test), SST-C6 (tests), SST-C7 (boundary test), SST-C8 (viscous guard) |
 | LOW      | 0 | 6 | SST-C3 (wall_dist guard), SST-D1 (F1 buffer), SST-D3 (block size), SST-D4 (fuse clear+update), SST-C9 (JFV test), SST-C1 (residual check), SST-D5 (__ldg), SST-D6 (d_sst_F1 duplicate) |
 | INFO     | 0 | 1 | SST-D6 (d_sst_F1 duplicate) |
 

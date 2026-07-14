@@ -2,6 +2,7 @@
 #include "aero/cfd/mms.hpp"
 #include "aero/cfd/reconstruction.hpp"
 #include "aero/cfd/viscous.hpp"
+#include "aero/cfd/rans_sst.hpp"
 
 #include <algorithm>
 
@@ -375,6 +376,8 @@ bool compute_viscous_flux_cpu(
         Real mu_face = sutherland_viscosity(face_T, T_ref, sutherland_T) * mu_ref;
         if (mu_face <= 0.0f) continue;
 
+        Real mu_eff = mu_face;
+
         Real nx = face.nx, ny = face.ny, nz = face.nz;
         Real area = face.area;
 
@@ -386,13 +389,13 @@ bool compute_viscous_flux_cpu(
         Real tau_xz = (du_dz + dw_dx);
         Real tau_yz = (dv_dz + dw_dy);
 
-        Real mu_invRe = mu_face * inv_Re;
+        Real mu_invRe = mu_eff * inv_Re;
         Real visc_mom_x = (tau_xx*nx + tau_xy*ny + tau_xz*nz) * mu_invRe * area;
         Real visc_mom_y = (tau_xy*nx + tau_yy*ny + tau_yz*nz) * mu_invRe * area;
         Real visc_mom_z = (tau_xz*nx + tau_yz*ny + tau_zz*nz) * mu_invRe * area;
 
         Real dT_dn = dT_dx*nx + dT_dy*ny + dT_dz*nz;
-        Real kappa_over_Re = mu_face * gamma / ((gamma - 1.0f) * prandtl) * inv_Re;
+        Real kappa_over_Re = mu_eff * gamma / ((gamma - 1.0f) * prandtl) * inv_Re;
         Real visc_energy = (face_u * visc_mom_x + face_v * visc_mom_y + face_w * visc_mom_z
             + kappa_over_Re * dT_dn * area);
 
@@ -408,7 +411,7 @@ bool compute_viscous_flux_cpu(
             residual[face.right_cell].energy -= visc_energy;
         }
 
-        if (!turbulence) continue;
+        if (!turbulence || turbulence == 3) continue;
 
         // SA conservative diffusion: (1/sigma) * div((mu/Re + rho*nu_tilde*fv1) * grad(nu_tilde))
         Real nu_tilde_L = q[face.left_cell].rho_nu_tilde / wL.rho;

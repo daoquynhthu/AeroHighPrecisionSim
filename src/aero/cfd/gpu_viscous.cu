@@ -3,6 +3,7 @@
 #include "aero/cfd/device_mesh.hpp"
 #include "aero/cfd/partition.hpp"
 #include "aero/cfd/gpu_solver_internal.hpp"
+#include "aero/cfd/rans_sst.hpp"
 #include <cuda_runtime.h>
 namespace aerosp {
 namespace aero {
@@ -47,7 +48,9 @@ __global__ void __launch_bounds__(128) viscous_flux_kernel_atomic(
     Real inv_Re, Real Re, Real wall_T,
     int turbulence,
     int* d_failed,
-    const int* d_partition_owner, int my_rank) {
+    const int* d_partition_owner, int my_rank,
+    bool mesh_has_sst, const Real* d_sst_k, const Real* d_sst_omega,
+    const Real* cd_wall_distance) {
     int idx = blockIdx.x * blockDim.x + threadIdx.x;
     if (idx >= face_count) return;
 
@@ -198,6 +201,36 @@ __global__ void __launch_bounds__(128) viscous_flux_kernel_atomic(
     Real mu_face = sutherland_mu(face_T, T_ref, sutherland_T, mu_ref);
     if (mu_face <= 0.0f) return;
 
+    Real mu_eff = mu_face;
+
+    if (turbulence == 3 && mesh_has_sst) {
+        Real k_L = d_sst_k[left];
+        Real w_L = d_sst_omega[left];
+        if (real_isfinite(k_L) && k_L > 0.0f && real_isfinite(w_L) && w_L > 0.0f) {
+            Real d_L = cd_wall_distance[left];
+            if (d_L < 1e-10f) d_L = 1e-10f;
+
+            Real S11 = grad_du_dx;
+            Real S22 = grad_dv_dy;
+            Real S33 = grad_dw_dz;
+            Real S12 = 0.5f * (grad_du_dy + grad_dv_dx);
+            Real S13 = 0.5f * (grad_du_dz + grad_dw_dx);
+            Real S23 = 0.5f * (grad_dv_dz + grad_dw_dy);
+            Real S_mag = real_sqrt(2.0f * (S11*S11 + S22*S22 + S33*S33
+                + 2.0f * (S12*S12 + S13*S13 + S23*S23)));
+
+            SstBlending b = compute_sst_blending(k_L, w_L, d_L, rho_L, mu_face,
+                0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f);
+
+            Real a1_omega = sst_coeff::a1 * w_L + 1e-30f;
+            Real F2_S = b.F2 * S_mag;
+            Real nu_t_lim = sst_coeff::a1 * k_L / real_fmax(a1_omega, F2_S);
+            Real mu_t_face = rho_L * nu_t_lim;
+
+            mu_eff = mu_face + mu_t_face;
+        }
+    }
+
     if (!real_isfinite(grad_du_dx) || !real_isfinite(grad_du_dy) ||
         !real_isfinite(grad_du_dz) || !real_isfinite(grad_dv_dx) ||
         !real_isfinite(grad_dv_dy) || !real_isfinite(grad_dv_dz) ||
@@ -221,13 +254,13 @@ __global__ void __launch_bounds__(128) viscous_flux_kernel_atomic(
     Real tau_xz = (grad_du_dz + grad_dw_dx);
     Real tau_yz = (grad_dv_dz + grad_dw_dy);
 
-    Real mu_invRe = mu_face * inv_Re;
+    Real mu_invRe = mu_eff * inv_Re;
     Real visc_mom_x = (tau_xx*nx + tau_xy*ny + tau_xz*nz) * mu_invRe * area;
     Real visc_mom_y = (tau_xy*nx + tau_yy*ny + tau_yz*nz) * mu_invRe * area;
     Real visc_mom_z = (tau_xz*nx + tau_yz*ny + tau_zz*nz) * mu_invRe * area;
 
     Real dT_dn = grad_dT_dx*nx + grad_dT_dy*ny + grad_dT_dz*nz;
-    Real kappa_over_Re = mu_face * gamma / ((gamma - 1.0f) * prandtl) * inv_Re;
+    Real kappa_over_Re = mu_eff * gamma / ((gamma - 1.0f) * prandtl) * inv_Re;
     Real visc_energy = (face_u * visc_mom_x + face_v * visc_mom_y + face_w * visc_mom_z
         + kappa_over_Re * dT_dn * area);
 
@@ -243,7 +276,7 @@ __global__ void __launch_bounds__(128) viscous_flux_kernel_atomic(
         real_atomic_add(&d_residual[right * nvar + 4], -visc_energy);
     }
 
-    if (!turbulence) return;
+    if (!turbulence || turbulence == 3) return;
 
     // SA conservative diffusion: (1/sigma) * div((mu/Re + rho*nu_tilde*fv1) * grad(nu_tilde))
     constexpr Real sigma_sa = 2.0f / 3.0f;
@@ -342,7 +375,9 @@ __global__ void __launch_bounds__(128) viscous_flux_kernel_colored(
     Real inv_Re, Real Re, Real wall_T,
     int turbulence,
     int* d_failed,
-    const int* d_partition_owner, int my_rank) {
+    const int* d_partition_owner, int my_rank,
+    bool mesh_has_sst, const Real* d_sst_k, const Real* d_sst_omega,
+    const Real* cd_wall_distance) {
     int idx = blockIdx.x * blockDim.x + threadIdx.x + face_start;
     if (idx >= face_end) return;
 
@@ -493,6 +528,36 @@ __global__ void __launch_bounds__(128) viscous_flux_kernel_colored(
     Real mu_face = sutherland_mu(face_T, T_ref, sutherland_T, mu_ref);
     if (mu_face <= 0.0f) return;
 
+    Real mu_eff = mu_face;
+
+    if (turbulence == 3 && mesh_has_sst) {
+        Real k_L = d_sst_k[left];
+        Real w_L = d_sst_omega[left];
+        if (real_isfinite(k_L) && k_L > 0.0f && real_isfinite(w_L) && w_L > 0.0f) {
+            Real d_L = cd_wall_distance[left];
+            if (d_L < 1e-10f) d_L = 1e-10f;
+
+            Real S11 = grad_du_dx;
+            Real S22 = grad_dv_dy;
+            Real S33 = grad_dw_dz;
+            Real S12 = 0.5f * (grad_du_dy + grad_dv_dx);
+            Real S13 = 0.5f * (grad_du_dz + grad_dw_dx);
+            Real S23 = 0.5f * (grad_dv_dz + grad_dw_dy);
+            Real S_mag = real_sqrt(2.0f * (S11*S11 + S22*S22 + S33*S33
+                + 2.0f * (S12*S12 + S13*S13 + S23*S23)));
+
+            SstBlending b = compute_sst_blending(k_L, w_L, d_L, rho_L, mu_face,
+                0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f);
+
+            Real a1_omega = sst_coeff::a1 * w_L + 1e-30f;
+            Real F2_S = b.F2 * S_mag;
+            Real nu_t_lim = sst_coeff::a1 * k_L / real_fmax(a1_omega, F2_S);
+            Real mu_t_face = rho_L * nu_t_lim;
+
+            mu_eff = mu_face + mu_t_face;
+        }
+    }
+
     if (!real_isfinite(grad_du_dx) || !real_isfinite(grad_du_dy) ||
         !real_isfinite(grad_du_dz) || !real_isfinite(grad_dv_dx) ||
         !real_isfinite(grad_dv_dy) || !real_isfinite(grad_dv_dz) ||
@@ -516,13 +581,13 @@ __global__ void __launch_bounds__(128) viscous_flux_kernel_colored(
     Real tau_xz = (grad_du_dz + grad_dw_dx);
     Real tau_yz = (grad_dv_dz + grad_dw_dy);
 
-    Real mu_invRe = mu_face * inv_Re;
+    Real mu_invRe = mu_eff * inv_Re;
     Real visc_mom_x = (tau_xx*nx + tau_xy*ny + tau_xz*nz) * mu_invRe * area;
     Real visc_mom_y = (tau_xy*nx + tau_yy*ny + tau_yz*nz) * mu_invRe * area;
     Real visc_mom_z = (tau_xz*nx + tau_yz*ny + tau_zz*nz) * mu_invRe * area;
 
     Real dT_dn = grad_dT_dx*nx + grad_dT_dy*ny + grad_dT_dz*nz;
-    Real kappa_over_Re = mu_face * gamma / ((gamma - 1.0f) * prandtl) * inv_Re;
+    Real kappa_over_Re = mu_eff * gamma / ((gamma - 1.0f) * prandtl) * inv_Re;
     Real visc_energy = (face_u * visc_mom_x + face_v * visc_mom_y + face_w * visc_mom_z
         + kappa_over_Re * dT_dn * area);
 
@@ -538,7 +603,7 @@ __global__ void __launch_bounds__(128) viscous_flux_kernel_colored(
         d_residual[right * nvar + 4] += -visc_energy;
     }
 
-    if (!turbulence) return;
+    if (!turbulence || turbulence == 3) return;
 
     // SA conservative diffusion: (1/sigma) * div((mu/Re + rho*nu_tilde*fv1) * grad(nu_tilde))
     constexpr Real sigma_sa = 2.0f / 3.0f;
@@ -644,6 +709,11 @@ bool compute_viscous_flux_gpu(DeviceMesh& mesh, Real gamma, Real prandtl,
 
     int n_colors = mesh.color_count();
 
+    bool sst = mesh.has_sst();
+    const Real* d_sst_k = sst ? mesh.q_k_device() : nullptr;
+    const Real* d_sst_omega = sst ? mesh.q_omega_device() : nullptr;
+    const Real* d_wall_dist = cd.wall_distance;
+
     if (n_colors > 0) {
         for (int c = 0; c < n_colors; ++c) {
             int start = mesh.host_color_offsets()[c];
@@ -663,7 +733,8 @@ bool compute_viscous_flux_gpu(DeviceMesh& mesh, Real gamma, Real prandtl,
                 inv_Re, Re, wall_T,
                 turbulence,
                 d_failed,
-                d_partition_owner, my_rank);
+                d_partition_owner, my_rank,
+                sst, d_sst_k, d_sst_omega, d_wall_dist);
             if (!cuda_check(cudaGetLastError(), "viscous_flux_kernel_colored")) return false;
         }
     } else {
@@ -680,7 +751,8 @@ bool compute_viscous_flux_gpu(DeviceMesh& mesh, Real gamma, Real prandtl,
             inv_Re, Re, wall_T,
             turbulence,
             d_failed,
-            d_partition_owner, my_rank);
+            d_partition_owner, my_rank,
+            sst, d_sst_k, d_sst_omega, d_wall_dist);
             if (!cuda_check(cudaGetLastError(), "viscous_flux_kernel_atomic")) return false;
     }
     return true;

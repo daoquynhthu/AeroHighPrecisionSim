@@ -96,14 +96,6 @@ static CfdSolveSummary solve_gpu_impl(
     bool diagnostics_enabled = config.diagnostic_level != DiagnosticLevel::Off;
     Real cfl_multiplier = 1.0f;
 
-    if (config.viscous && config.turbulence_model == TurbulenceModel::SST) {
-        if (error) *error = "viscous=true with SST model is not yet supported. "
-            "The mean-flow viscous kernel does not include mu_t. "
-            "Set viscous=false or use SA model instead.";
-        summary.failed = true;
-        return summary;
-    }
-
     PrimitiveState w_inf = make_freestream(condition.mach, condition.alpha_deg, condition.beta_deg, config.gamma);
     w_inf.nu_tilde = condition.nu_tilde;
     if (condition.nu_tilde_ratio > 0.0f && config.viscous) {

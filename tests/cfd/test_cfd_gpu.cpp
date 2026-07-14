@@ -3880,7 +3880,7 @@ static int test_sst_boundary_paths() {
 }
 
 static int test_sst_viscous_guard() {
-    TEST("CFD-TURB-SST-VISC-1 viscous+SST triggers solver failure");
+    TEST("CFD-TURB-SST-VISC-1 viscous+SST produces finite forces with mu_t coupling");
     {
         CfdMesh mesh = generate_structured_cube_mesh(5.0f, 7);
         compute_mesh_metrics(mesh);
@@ -3903,11 +3903,20 @@ static int test_sst_viscous_guard() {
         fcond.mach = 2.0f;
         fcond.alpha_deg = 0.0f;
 
-        CfdSolver solver;
-        solver.load_mesh(mesh);
-        CfdSolveSummary s = solver.solve_from_state(fcond, cfg, q0);
-        if (!s.failed)
-            FAIL("expected failure for viscous+SST, but succeeded");
+        std::string gpu_err;
+        CfdSolveSummary s = solve_gpu_dispatch(mesh, fcond, cfg, &gpu_err);
+        if (s.failed) FAIL("viscous+SST GPU solve failed: %s", gpu_err.c_str());
+        Real visc_sst_cx = s.forces.CX;
+
+        CfdConfig cfg_lam = cfg;
+        cfg_lam.turbulence_model = TurbulenceModel::LAMINAR;
+        CfdSolveSummary s_lam = solve_gpu_dispatch(mesh, fcond, cfg_lam, &gpu_err);
+        if (s_lam.failed) FAIL("laminar GPU solve failed: %s", gpu_err.c_str());
+        Real lam_cx = s_lam.forces.CX;
+
+        Real diff = std::fabs(visc_sst_cx - lam_cx);
+        if (diff < 1e-10f)
+            FAIL("mu_t coupling has no effect: SST CX=%.8g, laminar CX=%.8g", visc_sst_cx, lam_cx);
         PASS;
     }
     return 0;
