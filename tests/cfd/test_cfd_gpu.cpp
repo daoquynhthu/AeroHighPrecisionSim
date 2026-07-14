@@ -3332,6 +3332,206 @@ static int test_turbulence_model_enum() {
     return 0;
 }
 
+static int test_sst_kernel_sanity() {
+    TEST("CFD-TURB-SST-KERNEL-1 SST kernel pipeline sanity (finite output, no failure)");
+    {
+        CfdMesh mesh = generate_structured_cube_mesh(5.0f, 9);
+        compute_mesh_metrics(mesh);
+
+        PrimitiveState w = make_freestream(0.5f, 2.0f, 0.0f, 1.4f);
+        std::vector<ConservativeState> q(mesh.cells.size(), primitive_to_conservative(w, 1.4f));
+        Real gamma = 1.4f, Re = 1e5f;
+        Real mu_ref = 1.0f, T_ref = 288.15f, sutherland_T = 110.4f;
+
+        DeviceMesh d_mesh;
+        std::string error;
+        if (!d_mesh.upload_mesh(mesh, &error)) FAIL("%s", error.c_str());
+        if (!d_mesh.upload_state(q, &error)) FAIL("%s", error.c_str());
+        if (!d_mesh.allocate_sst()) FAIL("allocate_sst failed");
+        if (!compute_gradients_gpu(d_mesh, gamma, &error)) FAIL("GPU gradients: %s", error.c_str());
+
+        Real U_inf = std::sqrt(w.u * w.u + w.v * w.v + w.w * w.w);
+        Real tu = 0.001f;
+        Real inf_k = 1.5f * (tu * tu) * U_inf * U_inf;
+        Real t_ratio = w.p / w.rho / T_ref;
+        Real mu_inf = mu_ref * t_ratio * std::sqrt(t_ratio) * (T_ref + sutherland_T) / (w.p / w.rho + sutherland_T);
+        Real nu_inf = mu_inf / w.rho;
+        Real inf_omega = inf_k / (0.09f * 0.1f * nu_inf + 1e-30f);
+
+        int* d_failed = nullptr;
+        if (!cuda_check(cudaMalloc(&d_failed, sizeof(int)), "malloc d_failed"))
+            FAIL("malloc d_failed");
+        if (!cuda_check(cudaMemset(d_failed, 0, sizeof(int)), "memset d_failed"))
+            FAIL("memset d_failed");
+
+        if (!compute_sst_init_gpu(d_mesh, inf_k, inf_omega, &error))
+            FAIL("sst_init: %s", error.c_str());
+        if (!clear_sst_residual_gpu(d_mesh, &error))
+            FAIL("clear_residual: %s", error.c_str());
+        if (!compute_sst_gradients_gpu(d_mesh, d_failed, &error))
+            FAIL("sst_gradients: %s", error.c_str());
+        if (!compute_sst_advection_gpu(d_mesh, inf_k, inf_omega, d_failed, &error))
+            FAIL("sst_advection: %s", error.c_str());
+        if (!compute_sst_diffusion_gpu(d_mesh, gamma, mu_ref, T_ref, sutherland_T, d_failed, &error))
+            FAIL("sst_diffusion: %s", error.c_str());
+        if (!compute_sst_source_gpu(d_mesh, gamma, Re, mu_ref, T_ref, sutherland_T, d_failed, &error))
+            FAIL("sst_source: %s", error.c_str());
+
+        std::vector<Real> h_k(mesh.cells.size()), h_omega(mesh.cells.size());
+        std::vector<Real> h_res_k(mesh.cells.size()), h_res_omega(mesh.cells.size());
+        if (!cuda_check(cudaMemcpy(h_k.data(), d_mesh.q_k_device(), mesh.cells.size() * sizeof(Real), cudaMemcpyDeviceToHost), "download k"))
+            FAIL("download k failed");
+        if (!cuda_check(cudaMemcpy(h_omega.data(), d_mesh.q_omega_device(), mesh.cells.size() * sizeof(Real), cudaMemcpyDeviceToHost), "download omega"))
+            FAIL("download omega failed");
+        if (!cuda_check(cudaMemcpy(h_res_k.data(), d_mesh.residual_k_device(), mesh.cells.size() * sizeof(Real), cudaMemcpyDeviceToHost), "download res_k"))
+            FAIL("download res_k failed");
+        if (!cuda_check(cudaMemcpy(h_res_omega.data(), d_mesh.residual_omega_device(), mesh.cells.size() * sizeof(Real), cudaMemcpyDeviceToHost), "download res_omega"))
+            FAIL("download res_omega failed");
+
+        int bad_k = 0, bad_omega = 0, bad_res_k = 0, bad_res_omega = 0;
+        for (std::size_t i = 0; i < mesh.cells.size(); ++i) {
+            if (!std::isfinite(h_k[i]) || h_k[i] < 0.0f) bad_k++;
+            if (!std::isfinite(h_omega[i]) || h_omega[i] <= 0.0f) bad_omega++;
+            if (!std::isfinite(h_res_k[i])) bad_res_k++;
+            if (!std::isfinite(h_res_omega[i])) bad_res_omega++;
+        }
+        if (bad_k > 0) FAIL("%d cells have invalid k", bad_k);
+        if (bad_omega > 0) FAIL("%d cells have invalid omega", bad_omega);
+        if (bad_res_k > 0) FAIL("%d cells have non-finite residual_k", bad_res_k);
+        if (bad_res_omega > 0) FAIL("%d cells have non-finite residual_omega", bad_res_omega);
+
+        Real min_dt = 1e30f;
+        for (std::size_t i = 0; i < mesh.cells.size(); ++i) {
+            Real dt = 1e30f;
+            Real vol = mesh.cells[i].volume;
+            Real h = std::pow(vol, 1.0f / 3.0f);
+            Real U = std::sqrt(w.u * w.u + w.v * w.v + w.w * w.w);
+            Real a = std::sqrt(gamma * w.p / w.rho);
+            Real speed = U + a;
+            if (speed > 0.0f) dt = 0.5f * h / speed;
+            if (dt < min_dt) min_dt = dt;
+        }
+        Real* d_min_dt = nullptr;
+        if (!cuda_check(cudaMalloc(&d_min_dt, sizeof(Real)), "malloc d_min_dt"))
+            FAIL("malloc d_min_dt");
+        if (!cuda_check(cudaMemcpy(d_min_dt, &min_dt, sizeof(Real), cudaMemcpyHostToDevice), "upload dt"))
+            FAIL("upload dt failed");
+        if (!compute_sst_update_gpu(d_mesh, d_min_dt, &error))
+            FAIL("sst_update: %s", error.c_str());
+
+        std::vector<Real> h_k_new(mesh.cells.size()), h_omega_new(mesh.cells.size());
+        if (!cuda_check(cudaMemcpy(h_k_new.data(), d_mesh.q_k_device(), mesh.cells.size() * sizeof(Real), cudaMemcpyDeviceToHost), "download k_new"))
+            FAIL("download k_new failed");
+        if (!cuda_check(cudaMemcpy(h_omega_new.data(), d_mesh.q_omega_device(), mesh.cells.size() * sizeof(Real), cudaMemcpyDeviceToHost), "download omega_new"))
+            FAIL("download omega_new failed");
+
+        int bad_k_new = 0, bad_omega_new = 0;
+        for (std::size_t i = 0; i < mesh.cells.size(); ++i) {
+            if (!std::isfinite(h_k_new[i]) || h_k_new[i] < 0.0f) bad_k_new++;
+            if (!std::isfinite(h_omega_new[i]) || h_omega_new[i] <= 0.0f) bad_omega_new++;
+        }
+        if (bad_k_new > 0) FAIL("%d cells have invalid k after update", bad_k_new);
+        if (bad_omega_new > 0) FAIL("%d cells have invalid omega after update", bad_omega_new);
+
+        int dev_failed = 0;
+        if (!cuda_check(cudaMemcpy(&dev_failed, d_failed, sizeof(int), cudaMemcpyDeviceToHost), "read d_failed"))
+            FAIL("read d_failed");
+        if (dev_failed != 0) FAIL("d_failed was set by kernel");
+
+        cudaFree(d_failed);
+        cudaFree(d_min_dt);
+        PASS;
+    }
+    return 0;
+}
+
+static int test_sst_laminar_regression() {
+    TEST("CFD-TURB-SST-2 LAMINAR model regression (SST buffers present but unused)");
+    {
+        CfdMesh mesh = generate_structured_cube_mesh(5.0f, 9);
+        compute_mesh_metrics(mesh);
+
+        PrimitiveState w = make_freestream(0.5f, 2.0f, 0.0f, 1.4f);
+        std::vector<ConservativeState> q0(mesh.cells.size(), primitive_to_conservative(w, 1.4f));
+
+        CfdConfig cfg;
+        cfg.max_iter = 10;
+        cfg.convergence_tol = 1e-12f;
+        cfg.turbulence_model = TurbulenceModel::LAMINAR;
+        cfg.gamma = 1.4f;
+        cfg.Re = 1e5f;
+        cfg.mu_ref = 1.0f;
+        cfg.T_ref = 288.15f;
+        cfg.sutherland_T = 110.4f;
+
+        FreestreamCondition fcond;
+        fcond.mach = 2.0f;
+        fcond.alpha_deg = 0.0f;
+        fcond.beta_deg = 0.0f;
+
+        CfdSolver solver;
+        solver.load_mesh(mesh);
+        CfdSolveSummary summary = solver.solve_from_state(fcond, cfg, q0);
+        if (summary.failed)
+            FAIL("LAMINAR solver failed");
+
+        if (summary.residual_history.empty() || !std::isfinite(summary.residual_history.back()))
+            FAIL("non-finite final L2 residual");
+        PASS;
+    }
+    return 0;
+}
+
+static int test_sst_solver_sanity() {
+    TEST("CFD-TURB-SST-SOLVER-1 SST solver sanity (finite forces, no crash)");
+    {
+        CfdMesh mesh = generate_structured_cube_mesh(5.0f, 9);
+        compute_mesh_metrics(mesh);
+
+        PrimitiveState w = make_freestream(0.5f, 2.0f, 0.0f, 1.4f);
+        std::vector<ConservativeState> q0(mesh.cells.size(), primitive_to_conservative(w, 1.4f));
+
+        CfdConfig cfg;
+        cfg.max_iter = 5;
+        cfg.convergence_tol = 1e-20f;
+        cfg.turbulence_model = TurbulenceModel::SST;
+        cfg.gamma = 1.4f;
+        cfg.Re = 1e5f;
+        cfg.mu_ref = 1.0f;
+        cfg.T_ref = 288.15f;
+        cfg.sutherland_T = 110.4f;
+
+        FreestreamCondition fcond;
+        fcond.mach = 2.0f;
+        fcond.alpha_deg = 0.0f;
+        fcond.beta_deg = 0.0f;
+
+        CfdSolver solver;
+        solver.load_mesh(mesh);
+        CfdSolveSummary summary = solver.solve_from_state(fcond, cfg, q0);
+        if (summary.failed)
+            FAIL("SST solver failed");
+
+        if (summary.residual_history.empty() || !std::isfinite(summary.residual_history.back()))
+            FAIL("non-finite final L2 residual");
+        if (!std::isfinite(summary.forces.CX))
+            FAIL("non-finite CX");
+        if (!std::isfinite(summary.forces.CY))
+            FAIL("non-finite CY");
+        if (!std::isfinite(summary.forces.CZ))
+            FAIL("non-finite CZ");
+
+        if (summary.residual_history.size() != static_cast<std::size_t>(cfg.max_iter))
+            FAIL("expected %d history entries, got %zu", cfg.max_iter, summary.residual_history.size());
+        for (auto r : summary.residual_history) {
+            if (!std::isfinite(r))
+                FAIL("non-finite residual history entry");
+        }
+        PASS;
+    }
+    return 0;
+}
+
 static int test_ddes_length_scale() {
     TEST("CFD-TURB-DDES-LENGTH-1 DDES length scale kernel correctness");
     {
@@ -3465,6 +3665,9 @@ result |= test_recon_order2_converged_forces();
     result |= test_unknown_boundary_type_fails();
     result |= test_turbulence_model_enum();
     result |= test_ddes_length_scale();
+    result |= test_sst_kernel_sanity();
+    result |= test_sst_laminar_regression();
+    result |= test_sst_solver_sanity();
     result |= test_robust_nan_viscous_turb();
     std::printf("\n%d / %d tests PASSED.\n", pass_count, test_count);
     return result == 0 && pass_count == test_count ? 0 : 1;
