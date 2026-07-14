@@ -2977,5 +2977,16 @@ Fix: wrap read-only parameter accesses with __ldg() where beneficial.
 
 **SST-D6** [INFO] `gpu_sst.cu:248-266`
 `d_sst_F1` device function duplicates F1 logic from `rans_sst.hpp:compute_sst_blending`. A single `AEROSP_REAL_HOST_DEVICE` function should serve both CPU reference and GPU paths, eliminating the GPU-only device function.
-Fix: make `compute_sst_blending` callable from GPU and remove d_sst_F1.
+### Summary — Phase 13.2 SST Audit (updated 2026-07-14)
+
+| Severity | Open | FIXED | IDs |
+|----------|------|-------|-----|
+| CRITICAL | 0 | 3 | SST-A1, SST-A3, SST-A4 |
+| HIGH     | 0 | 4 | SST-B1, SST-B2, SST-B3, SST-B4 |
+| MEDIUM   | 3 | 3 | SST-A2 (JFV, deferred Phase 13.3), SST-C2 (test name), SST-C4 (CPU/GPU test), SST-C5 (enum test), SST-C6 (two missing tests) |
+| LOW      | 3 | 3 | SST-C3 (wall_dist guard), SST-D3 (block size), SST-D4 (fuse clear+update), SST-D5 (__ldg), SST-C9 (JFV test), SST-C1 (residual check) |
+| INFO     | 1 | 0 | SST-D6 (d_sst_F1 duplicate) |
+
+Fixed this session (2026-07-14): SST-A4 (farfield inflow density), SST-B4 (d_failed guard in gradient kernel), SST-C2 (test name), SST-C4 (CPU/GPU source comparison test + wall_distance guard fix).
+
 
