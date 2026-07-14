@@ -42,6 +42,9 @@ __global__ void __launch_bounds__(128) sst_gradient_kernel(
 
     Real kL = d_q_k[left];
     Real wL = d_q_omega[left];
+    if (kL < 0.0f || !real_isfinite(kL) || wL <= 0.0f || !real_isfinite(wL)) {
+        if (d_failed) atomicExch(d_failed, 1); return;
+    }
 
     Real kF, wF;
     if (bnd == static_cast<int>(BoundaryKind::Interior)) {
@@ -49,6 +52,9 @@ __global__ void __launch_bounds__(128) sst_gradient_kernel(
         if (right < 0 || right >= n_cells) return;
         Real kR = d_q_k[right];
         Real wR = d_q_omega[right];
+        if (kR < 0.0f || !real_isfinite(kR) || wR <= 0.0f || !real_isfinite(wR)) {
+            if (d_failed) atomicExch(d_failed, 1); return;
+        }
         kF = 0.5f * (kL + kR);
         wF = 0.5f * (wL + wR);
 

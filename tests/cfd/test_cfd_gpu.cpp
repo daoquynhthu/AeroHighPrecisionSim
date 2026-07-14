@@ -3454,7 +3454,7 @@ static int test_sst_kernel_sanity() {
 }
 
 static int test_sst_laminar_regression() {
-    TEST("CFD-TURB-SST-2 LAMINAR model regression (SST buffers present but unused)");
+    TEST("CFD-TURB-SST-2 LAMINAR model regression (no SST allocation)");
     {
         CfdMesh mesh = generate_structured_cube_mesh(5.0f, 9);
         compute_mesh_metrics(mesh);
