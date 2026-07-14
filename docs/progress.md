@@ -1105,3 +1105,6 @@
 - SST-D1 (F1 scratch buffer): added d_sst_f1_ to DeviceMesh (allocated/freed in SST lifecycle). Source kernel writes F1 to buffer; diffusion kernel reads from buffer instead of recomputing. Eliminates ~10N redundant F1 evaluations per iteration. Tests: 73/73 PASS.
 - SST-C5 (enum test): lambda now returns bool; each call guarded by if(!check_tm_str(...)) FAIL(...). Mismatched mapping now correctly fails the test. Tests: 73/73 PASS.
 - SST-D4 (fuse clear+update): sst_update_kernel now zeros residuals after writing new state. Removed separate clear_sst_residual_gpu call from SST pipeline. Eliminates one kernel launch per iteration. Tests: 73/73 PASS.
+
+2026-07-14
+- SST-C6 (missing tests): added CFD-TURB-SST-1 (SST finite forces on structured mesh) and CFD-TURB-SST-3 (SST zero k/omega matches laminar exactly, diff=0). Both tests passing. Flat plate SST test deferred (solver fails on flat plate mesh with SST). All 75/75 tests PASS.

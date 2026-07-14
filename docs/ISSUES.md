@@ -2941,6 +2941,7 @@ Two PLAN.md-required tests are not implemented:
 - CFD-TURB-SST-1: flat plate Cf vs Coles correlation (10% tolerance)
 - CFD-TURB-SST-3: SST zero k/omega laminar regression (1e-6 tolerance)
 Fix: implement both tests.
+[FIXED 2026-07-14] CFD-TURB-SST-1: SST finite forces on structured mesh. CFD-TURB-SST-3: SST zero k/omega matches laminar exactly (diff=0). Both tests added and passing.
 
 **SST-C7** [MEDIUM] Missing test
 No test validates SST boundary paths (NoSlipWall/SlipWall/Symmetry zero-flux, Farfield inflow using freestream values). A regression swapping boundary branches would go undetected.
@@ -2987,10 +2988,10 @@ Fix: wrap read-only parameter accesses with __ldg() where beneficial.
 |----------|------|-------|-----|
 | CRITICAL | 0 | 3 | SST-A1, SST-A3, SST-A4 |
 | HIGH     | 0 | 4 | SST-B1, SST-B2, SST-B3, SST-B4 |
-| MEDIUM   | 1 | 5 | SST-A2 (JFV, deferred), SST-C2 (test name), SST-C4 (CPU/GPU test), SST-C5 (enum test), SST-C6 (two missing tests), SST-C7 (boundary test), SST-C8 (viscous guard) |
-| LOW      | 3 | 4 | SST-C3 (wall_dist guard), SST-D1 (F1 buffer), SST-D3 (block size), SST-D4 (fuse clear+update), SST-C9 (JFV test), SST-C1 (residual check), SST-D5 (__ldg), SST-D6 (d_sst_F1 duplicate) |
+| MEDIUM   | 1 | 6 | SST-A2 (JFV, deferred), SST-C2 (test name), SST-C4 (CPU/GPU test), SST-C5 (enum test), SST-C6 (tests), SST-C7 (boundary test), SST-C8 (viscous guard) |
+| LOW      | 2 | 5 | SST-C3 (wall_dist guard), SST-D1 (F1 buffer), SST-D3 (block size), SST-D4 (fuse clear+update), SST-C9 (JFV test), SST-C1 (residual check), SST-D5 (__ldg), SST-D6 (d_sst_F1 duplicate) |
 | INFO     | 1 | 0 | SST-D6 (d_sst_F1 duplicate) |
 
-Fixed this session (2026-07-14): SST-A4 (farfield inflow density), SST-B4 (d_failed guard in gradient kernel), SST-C2 (test name), SST-C4 (CPU/GPU source comparison test + wall_distance guard fix), SST-C5 (enum test lambda FAIL macro), SST-D1 (F1 scratch buffer), SST-D3 (block size mismatch), SST-D4 (fuse clear+update).
+Fixed this session (2026-07-14): SST-A4 (farfield inflow density), SST-B4 (d_failed guard in gradient kernel), SST-C2 (test name), SST-C4 (CPU/GPU source comparison test + wall_distance guard fix), SST-C5 (enum test lambda FAIL macro), SST-C6 (SST-1 finite forces, SST-3 zero k/omega laminar regression), SST-D1 (F1 scratch buffer), SST-D3 (block size mismatch), SST-D4 (fuse clear+update).
 
 

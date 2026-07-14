@@ -3698,6 +3698,89 @@ static int test_sst_laminar_regression() {
     return 0;
 }
 
+static int test_sst_zero_k_omega_laminar() {
+    TEST("CFD-TURB-SST-3 SST zero k/omega matches laminar (1e-6)");
+    {
+        CfdMesh mesh = generate_structured_cube_mesh(5.0f, 9);
+        compute_mesh_metrics(mesh);
+
+        PrimitiveState w = make_freestream(0.5f, 2.0f, 0.0f, 1.4f);
+        std::vector<ConservativeState> q0(mesh.cells.size(), primitive_to_conservative(w, 1.4f));
+
+        CfdConfig cfg_base;
+        cfg_base.max_iter = 10;
+        cfg_base.convergence_tol = 1e-12f;
+        cfg_base.gamma = 1.4f;
+        cfg_base.Re = 1e5f;
+        cfg_base.mu_ref = 1.0f;
+        cfg_base.T_ref = 288.15f;
+        cfg_base.sutherland_T = 110.4f;
+
+        FreestreamCondition fcond;
+        fcond.mach = 2.0f;
+        fcond.alpha_deg = 0.0f;
+
+        CfdConfig cfg_lam = cfg_base;
+        cfg_lam.turbulence_model = TurbulenceModel::LAMINAR;
+        CfdSolver solver_lam;
+        solver_lam.load_mesh(mesh);
+        CfdSolveSummary lam = solver_lam.solve_from_state(fcond, cfg_lam, q0);
+        if (lam.failed) FAIL("laminar solve failed");
+
+        CfdMesh mesh2 = generate_structured_cube_mesh(5.0f, 9);
+        compute_mesh_metrics(mesh2);
+        CfdConfig cfg_sst = cfg_base;
+        cfg_sst.turbulence_model = TurbulenceModel::SST;
+        CfdSolver solver_sst;
+        solver_sst.load_mesh(mesh2);
+        CfdSolveSummary sst = solver_sst.solve_from_state(fcond, cfg_sst, q0);
+        if (sst.failed) FAIL("SST zero k/omega solve failed");
+
+        Real CD_diff = std::fabs(sst.forces.CD - lam.forces.CD);
+        std::printf("  [INFO] CD_sst=%g CD_lam=%g diff=%g\n", sst.forces.CD, lam.forces.CD, CD_diff);
+
+        if (CD_diff > 1e-6f)
+            FAIL("CD mismatch: SST=%g laminar=%g diff=%g > 1e-6", sst.forces.CD, lam.forces.CD, CD_diff);
+        PASS;
+    }
+    return 0;
+}
+
+static int test_sst_flat_plate_cf() {
+    TEST("CFD-TURB-SST-1 SST produces finite forces on structured mesh");
+    {
+        CfdMesh mesh = generate_structured_cube_mesh(5.0f, 9);
+        compute_mesh_metrics(mesh);
+
+        PrimitiveState w = make_freestream(0.5f, 2.0f, 0.0f, 1.4f);
+        std::vector<ConservativeState> q0(mesh.cells.size(), primitive_to_conservative(w, 1.4f));
+
+        CfdConfig cfg;
+        cfg.max_iter = 10;
+        cfg.convergence_tol = 1e-12f;
+        cfg.turbulence_model = TurbulenceModel::SST;
+        cfg.gamma = 1.4f;
+        cfg.Re = 1e5f;
+        cfg.mu_ref = 1.0f;
+        cfg.T_ref = 288.15f;
+        cfg.sutherland_T = 110.4f;
+
+        FreestreamCondition fcond;
+        fcond.mach = 2.0f;
+        fcond.alpha_deg = 0.0f;
+
+        CfdSolver solver;
+        solver.load_mesh(mesh);
+        CfdSolveSummary summary = solver.solve_from_state(fcond, cfg, q0);
+        if (summary.failed) FAIL("SST solve failed");
+
+        if (!std::isfinite(summary.forces.CD)) FAIL("CD not finite: %g", summary.forces.CD);
+        if (!std::isfinite(summary.forces.CL)) FAIL("CL not finite: %g", summary.forces.CL);
+        PASS;
+    }
+    return 0;
+}
+
 static int test_sst_solver_sanity() {
     TEST("CFD-TURB-SST-SOLVER-1 SST solver sanity (finite forces, no crash)");
     {
@@ -3884,6 +3967,8 @@ result |= test_recon_order2_converged_forces();
     result |= test_sst_kernel_sanity();
     result |= test_sst_cpu_gpu_source();
     result |= test_sst_laminar_regression();
+    result |= test_sst_zero_k_omega_laminar();
+    result |= test_sst_flat_plate_cf();
     result |= test_sst_solver_sanity();
     result |= test_robust_nan_viscous_turb();
     std::printf("\n%d / %d tests PASSED.\n", pass_count, test_count);
