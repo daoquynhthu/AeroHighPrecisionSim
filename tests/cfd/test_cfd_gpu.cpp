@@ -3879,6 +3879,151 @@ static int test_sst_boundary_paths() {
     return 0;
 }
 
+static int test_sst_viscous_guard() {
+    TEST("CFD-TURB-SST-VISC-1 viscous+SST triggers solver failure");
+    {
+        CfdMesh mesh = generate_structured_cube_mesh(5.0f, 7);
+        compute_mesh_metrics(mesh);
+
+        PrimitiveState w = make_freestream(0.5f, 2.0f, 0.0f, 1.4f);
+        std::vector<ConservativeState> q0(mesh.cells.size(), primitive_to_conservative(w, 1.4f));
+
+        CfdConfig cfg;
+        cfg.max_iter = 5;
+        cfg.convergence_tol = 1e-12f;
+        cfg.turbulence_model = TurbulenceModel::SST;
+        cfg.viscous = true;
+        cfg.gamma = 1.4f;
+        cfg.Re = 1e5f;
+        cfg.mu_ref = 1.0f;
+        cfg.T_ref = 288.15f;
+        cfg.sutherland_T = 110.4f;
+
+        FreestreamCondition fcond;
+        fcond.mach = 2.0f;
+        fcond.alpha_deg = 0.0f;
+
+        CfdSolver solver;
+        solver.load_mesh(mesh);
+        CfdSolveSummary s = solver.solve_from_state(fcond, cfg, q0);
+        if (!s.failed)
+            FAIL("expected failure for viscous+SST, but succeeded");
+        PASS;
+    }
+    return 0;
+}
+
+static int test_sst_jfv_product() {
+    TEST("CFD-IMPLICIT-REGRESS-9 SST JFV product (finite, non-zero)");
+    {
+        CfdMesh mesh = generate_structured_cube_mesh(5.0f, 7);
+        compute_mesh_metrics(mesh);
+
+        DeviceMesh d_mesh;
+        if (!d_mesh.upload_mesh(mesh)) FAIL("upload mesh failed");
+        if (!d_mesh.allocate_sst()) FAIL("allocate SST failed");
+
+        int n = static_cast<int>(mesh.cells.size());
+        int nvar = DeviceMesh::NVAR;
+        int nvar_cells = n * nvar;
+
+        Real* d_v = nullptr;
+        Real* d_result = nullptr;
+        Real* d_scratch = nullptr;
+        Real* d_residual_saved = nullptr;
+        int* d_failed = nullptr;
+        if (!cuda_check(cudaMalloc(&d_v, nvar_cells * sizeof(Real)), "malloc d_v")) FAIL("malloc d_v");
+        if (!cuda_check(cudaMalloc(&d_result, nvar_cells * sizeof(Real)), "malloc d_result")) FAIL("malloc d_result");
+        if (!cuda_check(cudaMalloc(&d_scratch, 2 * nvar_cells * sizeof(Real)), "malloc d_scratch")) FAIL("malloc d_scratch");
+        if (!cuda_check(cudaMalloc(&d_residual_saved, nvar_cells * sizeof(Real)), "malloc d_residual_saved")) FAIL("malloc d_residual_saved");
+        if (!cuda_check(cudaMalloc(&d_failed, sizeof(int)), "malloc d_failed")) FAIL("malloc d_failed");
+        if (!cuda_check(cudaMemset(d_failed, 0, sizeof(int)), "zero d_failed")) FAIL("zero d_failed");
+
+        PrimitiveState w_inf;
+        w_inf.rho = 1.0f;
+        w_inf.u = 2.0f;
+        w_inf.v = 0.0f;
+        w_inf.w = 0.0f;
+        w_inf.p = 1.0f / 1.4f;
+
+        Real gamma = 1.4f;
+        ConservativeState q_inf = primitive_to_conservative(w_inf, gamma);
+        std::vector<ConservativeState> h_q(n, q_inf);
+        if (!d_mesh.upload_state(h_q)) FAIL("upload_state failed");
+
+        Real Re = 1e5f;
+        Real mu_ref = 1.0f;
+        Real T_ref = 288.15f;
+        Real sutherland_T = 110.4f;
+        Real wall_T = 288.15f;
+        Real prandtl = 0.72f;
+
+        d_mesh.clear_residual(nullptr);
+
+        Real U_val = real_sqrt(w_inf.u*w_inf.u + w_inf.v*w_inf.v + w_inf.w*w_inf.w);
+        Real tu = 0.001f;
+        Real init_k = 1.5f * tu * tu * U_val * U_val;
+        Real T_inf_sst = w_inf.p / w_inf.rho;
+        Real t_ratio_sst = T_inf_sst / T_ref;
+        Real mu_inf_sst = mu_ref * t_ratio_sst * real_sqrt(t_ratio_sst) * (T_ref + sutherland_T) / (T_inf_sst + sutherland_T);
+        Real nu_inf_sst = mu_inf_sst / w_inf.rho;
+        Real init_omega = init_k / (0.09f * 0.1f * nu_inf_sst + 1e-30f);
+        if (!compute_sst_init_gpu(d_mesh, init_k, init_omega, nullptr, nullptr))
+            FAIL("SST init failed");
+
+        if (!launch_euler_residual_kernel(d_mesh, w_inf, gamma, d_failed, nullptr, nullptr, 1))
+            FAIL("Euler residual kernel failed");
+
+        if (!dcopy_gpu(d_mesh.residual_device(), d_residual_saved, nvar_cells))
+            FAIL("dcopy residual failed");
+
+        std::vector<Real> h_v(nvar_cells, 1.0f);
+        if (!cuda_check(cudaMemcpy(d_v, h_v.data(), nvar_cells * sizeof(Real), cudaMemcpyHostToDevice), "copy v"))
+            FAIL("copy v failed");
+
+        CfdConfig cfg;
+        cfg.gamma = gamma;
+        cfg.Re = Re;
+        cfg.mu_ref = mu_ref;
+        cfg.T_ref = T_ref;
+        cfg.sutherland_T = sutherland_T;
+        cfg.wall_temperature = wall_T;
+        cfg.prandtl = prandtl;
+        cfg.turbulence_model = TurbulenceModel::SST;
+
+        Real epsilon = 1e-7f;
+        if (!compute_jfv_product(d_mesh, d_v, d_result, d_residual_saved, epsilon, cfg, w_inf, d_scratch, d_failed, nullptr))
+            FAIL("compute_jfv_product failed");
+
+        int jfv_failed = 0;
+        if (!cuda_check(cudaMemcpy(&jfv_failed, d_failed, sizeof(int), cudaMemcpyDeviceToHost), "read jfv d_failed"))
+            FAIL("read jfv d_failed failed");
+        if (jfv_failed) FAIL("JFV product produced solver failure");
+
+        std::vector<Real> h_result(nvar_cells);
+        if (!cuda_check(cudaMemcpy(h_result.data(), d_result, nvar_cells * sizeof(Real), cudaMemcpyDeviceToHost), "copy result"))
+            FAIL("copy result failed");
+
+        bool all_finite = true;
+        Real max_abs = 0;
+        for (int i = 0; i < nvar_cells; ++i) {
+            Real val = h_result[i];
+            if (!std::isfinite(val)) { all_finite = false; break; }
+            if (std::fabs(val) > max_abs) max_abs = std::fabs(val);
+        }
+        if (!all_finite) FAIL("JFV result has non-finite entries");
+        if (max_abs < 1e-10f) FAIL("JFV result is all zero (max_abs=%g)", max_abs);
+
+        cuda_free_safe(d_v);
+        cuda_free_safe(d_result);
+        cuda_free_safe(d_scratch);
+        cuda_free_safe(d_residual_saved);
+        cuda_free_safe(d_failed);
+        PASS;
+    }
+    return 0;
+}
+
 static int test_ddes_length_scale() {
     TEST("CFD-TURB-DDES-LENGTH-1 DDES length scale kernel correctness");
     {
@@ -4019,6 +4164,8 @@ result |= test_recon_order2_converged_forces();
     result |= test_sst_flat_plate_cf();
     result |= test_sst_solver_sanity();
     result |= test_sst_boundary_paths();
+    result |= test_sst_viscous_guard();
+    result |= test_sst_jfv_product();
     result |= test_robust_nan_viscous_turb();
     std::printf("\n%d / %d tests PASSED.\n", pass_count, test_count);
     return result == 0 && pass_count == test_count ? 0 : 1;

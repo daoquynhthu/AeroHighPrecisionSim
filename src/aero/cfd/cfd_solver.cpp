@@ -335,6 +335,10 @@ CfdSolveSummary CfdSolver::solve_from_state(
         summary.failed = true;
         return summary;
     }
+    if (config.viscous && config.turbulence_model == TurbulenceModel::SST) {
+        summary.failed = true;
+        return summary;
+    }
 
     PrimitiveState w_inf = make_freestream(condition.mach, condition.alpha_deg, condition.beta_deg, config.gamma);
     w_inf.nu_tilde = condition.nu_tilde;

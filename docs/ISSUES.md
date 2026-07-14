@@ -2948,13 +2948,13 @@ No test validates SST boundary paths (NoSlipWall/SlipWall/Symmetry zero-flux, Fa
 Fix: add CFD-TURB-SST-BC-1 test on a mesh with known wall/farfield faces.
 [FIXED 2026-07-14] Added CFD-TURB-SST-BC-1 test: structured cube mesh with wall/farfield faces, SST solver produces finite forces and residuals.
 
-**SST-C8** [MEDIUM] Missing guard
-No guard against `viscous=true + SST`. The SST diffusion kernel in gpu_sst.cu computes k/omega diffusion independently, but the mean-flow viscous kernel does not include mu_t. Running viscous+SST produces incomplete physics. PLAN.md 13.3 marks this as deferred.
-Fix: either add a runtime error for viscous+SST, or implement the coupling.
+**SST-C8** [MEDIUM] Missing guard [FIXED 2026-07-14]
+No guard against `viscous=true + SST`. The SST diffusion kernel in gpu_sst.cu computes k/omega diffusion independently, but the mean-flow viscous kernel does not include mu_t. Running viscous+SST produces incomplete physics.
+Fix: runtime error when `viscous=true && turbulence_model==SST` in both GPU (`solve_gpu_impl` at `gpu_solver.cu`) and CPU (`solve_from_state` at `cfd_solver.cpp`) paths. Guard added in 2026-07-14; test CFD-TURB-SST-VISC-1 verifies the error is triggered. Full mu_t coupling deferred to Phase 13.3.
 
-**SST-C9** [LOW] Missing test
+**SST-C9** [LOW] Missing test [FIXED 2026-07-14]
 No JFV product test for SST (SA has CFD-IMPLICIT-REGRESS-6). SST implicit convergence may have undetected JFV issues.
-Fix: extend CFD-IMPLICIT-REGRESS-6 or add CFD-IMPLICIT-REGRESS-9 for SST JFV.
+Fix: added CFD-IMPLICIT-REGRESS-9 for SST JFV product — verifies finite, non-zero JFV result. Initializes SST k/omega via `compute_sst_init_gpu` before JFV evaluation.
 
 ### Category D: Performance & Optimization
 
@@ -2990,10 +2990,10 @@ Fix: wrap read-only parameter accesses with __ldg() where beneficial.
 |----------|------|-------|-----|
 | CRITICAL | 0 | 3 | SST-A1, SST-A3, SST-A4 |
 | HIGH     | 0 | 5 | SST-B1, SST-B2, SST-B3, SST-B4, SST-D2 |
-| MEDIUM   | 1 | 7 | SST-A2 (JFV, deferred), SST-C2 (test name), SST-C4 (CPU/GPU test), SST-C5 (enum test), SST-C6 (tests), SST-C7 (boundary test), SST-C8 (viscous guard) |
-| LOW      | 2 | 5 | SST-C3 (wall_dist guard), SST-D1 (F1 buffer), SST-D3 (block size), SST-D4 (fuse clear+update), SST-C9 (JFV test), SST-C1 (residual check), SST-D5 (__ldg), SST-D6 (d_sst_F1 duplicate) |
-| INFO     | 1 | 0 | SST-D6 (d_sst_F1 duplicate) |
+| MEDIUM   | 0 | 8 | SST-A2 (JFV, deferred), SST-C2 (test name), SST-C4 (CPU/GPU test), SST-C5 (enum test), SST-C6 (tests), SST-C7 (boundary test), SST-C8 (viscous guard) |
+| LOW      | 0 | 6 | SST-C3 (wall_dist guard), SST-D1 (F1 buffer), SST-D3 (block size), SST-D4 (fuse clear+update), SST-C9 (JFV test), SST-C1 (residual check), SST-D5 (__ldg), SST-D6 (d_sst_F1 duplicate) |
+| INFO     | 0 | 1 | SST-D6 (d_sst_F1 duplicate) |
 
-Fixed this session (2026-07-14): SST-A4 (farfield inflow density), SST-B4 (d_failed guard in gradient kernel), SST-C2 (test name), SST-C4 (CPU/GPU source comparison test + wall_distance guard fix), SST-C5 (enum test lambda FAIL macro), SST-C6 (SST-1 finite forces, SST-3 zero k/omega laminar regression), SST-C7 (boundary path test), SST-D1 (F1 scratch buffer), SST-D2 (colored variants), SST-D3 (block size mismatch), SST-D4 (fuse clear+update).
+Fixed this session (2026-07-14): SST-A4 (farfield inflow density), SST-B4 (d_failed guard in gradient kernel), SST-C2 (test name), SST-C4 (CPU/GPU source comparison test + wall_distance guard fix), SST-C5 (enum test lambda FAIL macro), SST-C6 (SST-1 finite forces, SST-3 zero k/omega laminar regression), SST-C7 (boundary path test), SST-C8 (viscous+SST runtime guard), SST-C9 (SST JFV product test), SST-D1 (F1 scratch buffer), SST-D2 (colored variants), SST-D3 (block size mismatch), SST-D4 (fuse clear+update).
 
 

@@ -1112,3 +1112,6 @@
 2026-07-14
 - SST-C7 (boundary path test): added CFD-TURB-SST-BC-1 test on structured cube mesh with wall/farfield faces. SST solver produces finite forces and residuals. All 76/76 tests PASS.
 - SST-D2 (colored variants): added sst_gradient_kernel_colored, sst_advection_kernel_colored, sst_diffusion_kernel_colored. Wrapper functions use colored variants when color_count > 0, falling back to atomic versions. Eliminates atomics in SST face-loop kernels. All 76/76 tests PASS.
+- SST-C8 (viscous+SST guard): added runtime error for viscous=true+SST in both GPU (solve_gpu_impl) and CPU (solve_from_state) paths. Added CFD-TURB-SST-VISC-1 test. All 77/77 tests PASS.
+- SST-C9 (SST JFV test): added CFD-IMPLICIT-REGRESS-9 for SST JFV product. Initializes SST k/omega via compute_sst_init_gpu before JFV evaluation. Verifies finite, non-zero result. All 78/78 tests PASS.
+- SST-D4 (fuse clear+update): sst_update_kernel now zeros residuals after writing new state. Removed separate clear_sst_residual_gpu call from gpu_rans.cu.
