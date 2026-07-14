@@ -92,6 +92,67 @@ __global__ void __launch_bounds__(128) sst_gradient_kernel(
     }
 }
 
+__global__ void __launch_bounds__(128) sst_gradient_kernel_colored(
+    const Real* d_q_k, const Real* d_q_omega,
+    int n_cells,
+    const int* d_left_cell, const int* d_right_cell, const int* d_boundary,
+    const Real* d_nx, const Real* d_ny, const Real* d_nz, const Real* d_area,
+    const Real* d_volume,
+    int face_start, int face_end,
+    Real* d_grad_k, Real* d_grad_omega,
+    int* d_failed)
+{
+    int idx = blockIdx.x * blockDim.x + threadIdx.x + face_start;
+    if (idx >= face_end) return;
+
+    int left = d_left_cell[idx];
+    if (left < 0 || left >= n_cells) return;
+    int bnd = d_boundary[idx];
+
+    Real kL = d_q_k[left];
+    Real wL = d_q_omega[left];
+    if (kL < 0.0f || !real_isfinite(kL) || wL <= 0.0f || !real_isfinite(wL)) {
+        if (d_failed) atomicExch(d_failed, 1); return;
+    }
+
+    Real nx = d_nx[idx], ny = d_ny[idx], nz = d_nz[idx];
+    Real area = d_area[idx];
+    Real weight = area;
+
+    if (bnd == static_cast<int>(BoundaryKind::Interior)) {
+        int right = d_right_cell[idx];
+        if (right < 0 || right >= n_cells) return;
+        Real kR = d_q_k[right];
+        Real wR = d_q_omega[right];
+        if (kR < 0.0f || !real_isfinite(kR) || wR <= 0.0f || !real_isfinite(wR)) {
+            if (d_failed) atomicExch(d_failed, 1); return;
+        }
+        Real kF = 0.5f * (kL + kR);
+        Real wF = 0.5f * (wL + wR);
+
+        d_grad_k[left * 3 + 0] += kF * nx * weight;
+        d_grad_k[left * 3 + 1] += kF * ny * weight;
+        d_grad_k[left * 3 + 2] += kF * nz * weight;
+        d_grad_omega[left * 3 + 0] += wF * nx * weight;
+        d_grad_omega[left * 3 + 1] += wF * ny * weight;
+        d_grad_omega[left * 3 + 2] += wF * nz * weight;
+
+        d_grad_k[right * 3 + 0] -= kF * nx * weight;
+        d_grad_k[right * 3 + 1] -= kF * ny * weight;
+        d_grad_k[right * 3 + 2] -= kF * nz * weight;
+        d_grad_omega[right * 3 + 0] -= wF * nx * weight;
+        d_grad_omega[right * 3 + 1] -= wF * ny * weight;
+        d_grad_omega[right * 3 + 2] -= wF * nz * weight;
+    } else {
+        d_grad_k[left * 3 + 0] += kL * nx * weight;
+        d_grad_k[left * 3 + 1] += kL * ny * weight;
+        d_grad_k[left * 3 + 2] += kL * nz * weight;
+        d_grad_omega[left * 3 + 0] += wL * nx * weight;
+        d_grad_omega[left * 3 + 1] += wL * ny * weight;
+        d_grad_omega[left * 3 + 2] += wL * nz * weight;
+    }
+}
+
 __global__ void __launch_bounds__(256) sst_divide_volume_kernel(
     Real* d_grad_k, Real* d_grad_omega,
     const Real* d_volume, int n_cells)
@@ -172,6 +233,77 @@ __global__ void __launch_bounds__(128) sst_advection_kernel(
         if (!real_isfinite(flux_k) || !real_isfinite(flux_w)) { if (d_failed) atomicExch(d_failed, 1); return; }
         real_atomic_add(&d_residual_k[left], -flux_k);
         real_atomic_add(&d_residual_omega[left], -flux_w);
+    } else {
+        if (d_failed) atomicExch(d_failed, 1);
+    }
+}
+
+__global__ void __launch_bounds__(128) sst_advection_kernel_colored(
+    const Real* d_q,
+    const Real* d_q_k, const Real* d_q_omega,
+    Real* d_residual_k, Real* d_residual_omega,
+    int n_cells,
+    const int* d_left_cell, const int* d_right_cell, const int* d_boundary,
+    const Real* d_nx, const Real* d_ny, const Real* d_nz, const Real* d_area,
+    int face_start, int face_end,
+    Real inf_k, Real inf_omega, Real inf_rho,
+    int* d_failed)
+{
+    int idx = blockIdx.x * blockDim.x + threadIdx.x + face_start;
+    if (idx >= face_end) return;
+
+    int left = d_left_cell[idx];
+    if (left < 0 || left >= n_cells) { if (d_failed) atomicExch(d_failed, 1); return; }
+    int bnd = d_boundary[idx];
+    Real nx = d_nx[idx], ny = d_ny[idx], nz = d_nz[idx];
+    Real area = d_area[idx];
+
+    Real rhoL = d_q[left * 6 + 0];
+    Real kL = d_q_k[left];
+    Real wL = d_q_omega[left];
+    Real vnL = d_face_vn(d_q, left, 6, nx, ny, nz);
+
+    Real rhoF, kF, wF, vnF;
+
+    if (bnd == static_cast<int>(BoundaryKind::Interior)) {
+        int right = d_right_cell[idx];
+        if (right < 0 || right >= n_cells) { if (d_failed) atomicExch(d_failed, 1); return; }
+        Real rhoR = d_q[right * 6 + 0];
+        Real kR = d_q_k[right];
+        Real wR = d_q_omega[right];
+        Real vnR = d_face_vn(d_q, right, 6, nx, ny, nz);
+
+        vnF = 0.5f * (vnL + vnR);
+        if (vnF >= 0.0f) {
+            rhoF = rhoL; kF = kL; wF = wL;
+        } else {
+            rhoF = rhoR; kF = kR; wF = wR;
+        }
+
+        Real flux_k = vnF * rhoF * kF * area;
+        Real flux_w = vnF * rhoF * wF * area;
+
+        if (!real_isfinite(flux_k) || !real_isfinite(flux_w)) { if (d_failed) atomicExch(d_failed, 1); return; }
+        d_residual_k[left] -= flux_k;
+        d_residual_omega[left] -= flux_w;
+        d_residual_k[right] += flux_k;
+        d_residual_omega[right] += flux_w;
+    } else if (bnd == static_cast<int>(BoundaryKind::SlipWall) ||
+               bnd == static_cast<int>(BoundaryKind::NoSlipWall) ||
+               bnd == static_cast<int>(BoundaryKind::Symmetry)) {
+        return;
+    } else if (bnd == static_cast<int>(BoundaryKind::Farfield)) {
+        if (vnL >= 0.0f) {
+            rhoF = rhoL; kF = kL; wF = wL;
+        } else {
+            rhoF = inf_rho; kF = inf_k; wF = inf_omega;
+        }
+        vnF = vnL;
+        Real flux_k = vnF * rhoF * kF * area;
+        Real flux_w = vnF * rhoF * wF * area;
+        if (!real_isfinite(flux_k) || !real_isfinite(flux_w)) { if (d_failed) atomicExch(d_failed, 1); return; }
+        d_residual_k[left] -= flux_k;
+        d_residual_omega[left] -= flux_w;
     } else {
         if (d_failed) atomicExch(d_failed, 1);
     }
@@ -420,6 +552,135 @@ __global__ void __launch_bounds__(128) sst_diffusion_kernel(
     }
 }
 
+__global__ void __launch_bounds__(128) sst_diffusion_kernel_colored(
+    const Real* d_q,
+    const Real* d_q_k, const Real* d_q_omega,
+    Real* d_residual_k, Real* d_residual_omega,
+    const Real* d_grad_k, const Real* d_grad_omega,
+    const Real* d_wall_distance,
+    const Real* d_sst_f1,
+    int n_cells, int nvar,
+    const int* d_left_cell, const int* d_right_cell, const int* d_boundary,
+    const Real* d_nx, const Real* d_ny, const Real* d_nz, const Real* d_area,
+    int face_start, int face_end,
+    Real gamma, Real mu_ref, Real T_ref, Real sutherland_T,
+    int* d_failed)
+{
+    int idx = blockIdx.x * blockDim.x + threadIdx.x + face_start;
+    if (idx >= face_end) return;
+
+    int left = d_left_cell[idx];
+    if (left < 0 || left >= n_cells) { if (d_failed) atomicExch(d_failed, 1); return; }
+    int bnd = d_boundary[idx];
+
+    auto cell_mu = [&](int c, Real& mu_out, Real& mu_t_out) {
+        Real rho = d_q[c * nvar + 0];
+        if (rho <= 0.0f || !real_isfinite(rho)) { mu_out = 0.0f; mu_t_out = 0.0f; return false; }
+        Real inv_rho = 1.0f / rho;
+        Real u = d_q[c * nvar + 1] * inv_rho;
+        Real v = d_q[c * nvar + 2] * inv_rho;
+        Real w = d_q[c * nvar + 3] * inv_rho;
+        Real kinetic = 0.5f * (u*u + v*v + w*w);
+        Real p = (gamma - 1.0f) * (d_q[c * nvar + 4] - rho * kinetic);
+        if (!real_isfinite(p) || p <= 0.0f) { mu_out = 0.0f; mu_t_out = 0.0f; return false; }
+        Real T = p * inv_rho;
+        Real mu = mu_ref;
+        if (T > 0.0f) {
+            Real t_ratio = T / T_ref;
+            mu = mu_ref * t_ratio * real_sqrt(t_ratio) * (T_ref + sutherland_T) / (T + sutherland_T);
+        }
+        if (mu <= 0.0f) mu = mu_ref;
+        Real k = d_q_k[c];
+        Real omega = d_q_omega[c];
+        if (k < 0.0f) k = 0.0f;
+        if (omega <= 0.0f) omega = 1e-10f;
+        Real mu_t = rho * k / omega;
+        mu_out = mu;
+        mu_t_out = mu_t;
+        return true;
+    };
+
+    Real mu_L, mu_t_L;
+    if (!cell_mu(left, mu_L, mu_t_L)) return;
+    Real kL = d_q_k[left];
+    Real wL = d_q_omega[left];
+    Real gkL_x = d_grad_k[left * 3 + 0];
+    Real gkL_y = d_grad_k[left * 3 + 1];
+    Real gkL_z = d_grad_k[left * 3 + 2];
+    Real gwL_x = d_grad_omega[left * 3 + 0];
+    Real gwL_y = d_grad_omega[left * 3 + 1];
+    Real gwL_z = d_grad_omega[left * 3 + 2];
+    Real dL = d_wall_distance[left];
+    if (dL < 0.0f || !real_isfinite(dL)) { if (d_failed) atomicExch(d_failed, 1); return; }
+
+    Real mu_F, mu_t_F, gk_dot_n, gw_dot_n;
+    Real nx = d_nx[idx], ny = d_ny[idx], nz = d_nz[idx];
+    Real area = d_area[idx];
+
+    if (bnd == static_cast<int>(BoundaryKind::Interior)) {
+        int right = d_right_cell[idx];
+        if (right < 0 || right >= n_cells) { if (d_failed) atomicExch(d_failed, 1); return; }
+
+        Real mu_R, mu_t_R;
+        if (!cell_mu(right, mu_R, mu_t_R)) return;
+
+        Real kR = d_q_k[right];
+        Real wR = d_q_omega[right];
+        Real gkR_x = d_grad_k[right * 3 + 0];
+        Real gkR_y = d_grad_k[right * 3 + 1];
+        Real gkR_z = d_grad_k[right * 3 + 2];
+        Real gwR_x = d_grad_omega[right * 3 + 0];
+        Real gwR_y = d_grad_omega[right * 3 + 1];
+        Real gwR_z = d_grad_omega[right * 3 + 2];
+
+        Real F1_L = (d_sst_f1 && left >= 0 && left < n_cells) ? d_sst_f1[left] : 0.0f;
+        Real F1_R = (d_sst_f1 && right >= 0 && right < n_cells) ? d_sst_f1[right] : 0.0f;
+        Real F1_F = 0.5f * (F1_L + F1_R);
+
+        Real sigma_k_F = F1_F * sst_coeff::sigma_k1 + (1.0f - F1_F) * sst_coeff::sigma_k2;
+        Real sigma_w_F = F1_F * sst_coeff::sigma_w1 + (1.0f - F1_F) * sst_coeff::sigma_w2;
+
+        mu_F = 0.5f * (mu_L + mu_R);
+        mu_t_F = 0.5f * (mu_t_L + mu_t_R);
+
+        gk_dot_n = 0.5f * ((gkL_x + gkR_x) * nx + (gkL_y + gkR_y) * ny + (gkL_z + gkR_z) * nz);
+        gw_dot_n = 0.5f * ((gwL_x + gwR_x) * nx + (gwL_y + gwR_y) * ny + (gwL_z + gwR_z) * nz);
+
+        Real mu_eff_k_F = mu_F + sigma_k_F * mu_t_F;
+        Real mu_eff_w_F = mu_F + sigma_w_F * mu_t_F;
+        Real flux_k = mu_eff_k_F * gk_dot_n * area;
+        Real flux_w = mu_eff_w_F * gw_dot_n * area;
+
+        if (!real_isfinite(flux_k) || !real_isfinite(flux_w)) { if (d_failed) atomicExch(d_failed, 1); return; }
+        d_residual_k[left] -= flux_k;
+        d_residual_omega[left] -= flux_w;
+        d_residual_k[right] += flux_k;
+        d_residual_omega[right] += flux_w;
+    } else if (bnd == static_cast<int>(BoundaryKind::SlipWall) ||
+               bnd == static_cast<int>(BoundaryKind::NoSlipWall) ||
+               bnd == static_cast<int>(BoundaryKind::Symmetry)) {
+        return;
+    } else {
+        Real F1_L = (d_sst_f1 && left >= 0 && left < n_cells) ? d_sst_f1[left] : 0.0f;
+        Real sigma_k_L = F1_L * sst_coeff::sigma_k1 + (1.0f - F1_L) * sst_coeff::sigma_k2;
+        Real sigma_w_L = F1_L * sst_coeff::sigma_w1 + (1.0f - F1_L) * sst_coeff::sigma_w2;
+
+        mu_F = mu_L;
+        mu_t_F = mu_t_L;
+        gk_dot_n = gkL_x * nx + gkL_y * ny + gkL_z * nz;
+        gw_dot_n = gwL_x * nx + gwL_y * ny + gwL_z * nz;
+
+        Real mu_eff_k_F = mu_F + sigma_k_L * mu_t_F;
+        Real mu_eff_w_F = mu_F + sigma_w_L * mu_t_F;
+        Real flux_k = mu_eff_k_F * gk_dot_n * area;
+        Real flux_w = mu_eff_w_F * gw_dot_n * area;
+
+        if (!real_isfinite(flux_k) || !real_isfinite(flux_w)) { if (d_failed) atomicExch(d_failed, 1); return; }
+        d_residual_k[left] -= flux_k;
+        d_residual_omega[left] -= flux_w;
+    }
+}
+
 __global__ void __launch_bounds__(256) sst_init_kernel(
     Real* d_q_k, Real* d_q_omega, Real k_val, Real omega_val, int n_cells)
 {
@@ -564,22 +825,42 @@ bool compute_sst_gradients_gpu(DeviceMesh& mesh, int* d_failed,
     int block_cell = 256;
     int nf = static_cast<int>(mesh.face_count());
     int nc = static_cast<int>(mesh.cell_count());
-    int grid_grad = (nf + block_face - 1) / block_face;
-    int grid_div = (nc + block_cell - 1) / block_cell;
 
     DeviceCellData cd = mesh.cell_data();
     DeviceFaceData fd = mesh.face_data();
 
-    sst_gradient_kernel<<<grid_grad, block_face, 0, stream>>>(
-        mesh.q_k_device(), mesh.q_omega_device(),
-        nc, nf, DeviceMesh::NVAR,
-        fd.left_cell, fd.right_cell, fd.boundary,
-        fd.nx, fd.ny, fd.nz, fd.area,
-        cd.volume,
-        mesh.grad_k_device(), mesh.grad_omega_device(),
-        d_failed);
-    if (!cuda_check(cudaGetLastError(), "sst_gradient_kernel launch", error)) return false;
+    int n_colors = mesh.color_count();
+    if (n_colors > 0) {
+        for (int c = 0; c < n_colors; ++c) {
+            int start = mesh.host_color_offsets()[c];
+            int end   = mesh.host_color_offsets()[c + 1];
+            int nf_c  = end - start;
+            int grid_c = (nf_c + block_face - 1) / block_face;
+            sst_gradient_kernel_colored<<<grid_c, block_face, 0, stream>>>(
+                mesh.q_k_device(), mesh.q_omega_device(),
+                nc,
+                fd.left_cell, fd.right_cell, fd.boundary,
+                fd.nx, fd.ny, fd.nz, fd.area,
+                cd.volume,
+                start, end,
+                mesh.grad_k_device(), mesh.grad_omega_device(),
+                d_failed);
+            if (!cuda_check(cudaGetLastError(), "sst_gradient_kernel_colored launch", error)) return false;
+        }
+    } else {
+        int grid_grad = (nf + block_face - 1) / block_face;
+        sst_gradient_kernel<<<grid_grad, block_face, 0, stream>>>(
+            mesh.q_k_device(), mesh.q_omega_device(),
+            nc, nf, DeviceMesh::NVAR,
+            fd.left_cell, fd.right_cell, fd.boundary,
+            fd.nx, fd.ny, fd.nz, fd.area,
+            cd.volume,
+            mesh.grad_k_device(), mesh.grad_omega_device(),
+            d_failed);
+        if (!cuda_check(cudaGetLastError(), "sst_gradient_kernel launch", error)) return false;
+    }
 
+    int grid_div = (nc + block_cell - 1) / block_cell;
     sst_divide_volume_kernel<<<grid_div, block_cell, 0, stream>>>(
         mesh.grad_k_device(), mesh.grad_omega_device(),
         cd.volume, nc);
@@ -600,20 +881,41 @@ bool compute_sst_advection_gpu(DeviceMesh& mesh,
     int block = 128;
     int nf = static_cast<int>(mesh.face_count());
     int nc = static_cast<int>(mesh.cell_count());
-    int grid = (nf + block - 1) / block;
 
     DeviceFaceData fd = mesh.face_data();
 
-    sst_advection_kernel<<<grid, block, 0, stream>>>(
-        mesh.state_device(),
-        mesh.q_k_device(), mesh.q_omega_device(),
-        mesh.residual_k_device(), mesh.residual_omega_device(),
-        nc, nf, DeviceMesh::NVAR,
-        fd.left_cell, fd.right_cell, fd.boundary,
-        fd.nx, fd.ny, fd.nz, fd.area,
-        inf_k, inf_omega, inf_rho,
-        d_failed);
-    if (!cuda_check(cudaGetLastError(), "sst_advection_kernel launch", error)) return false;
+    int n_colors = mesh.color_count();
+    if (n_colors > 0) {
+        for (int c = 0; c < n_colors; ++c) {
+            int start = mesh.host_color_offsets()[c];
+            int end   = mesh.host_color_offsets()[c + 1];
+            int nf_c  = end - start;
+            int grid_c = (nf_c + block - 1) / block;
+            sst_advection_kernel_colored<<<grid_c, block, 0, stream>>>(
+                mesh.state_device(),
+                mesh.q_k_device(), mesh.q_omega_device(),
+                mesh.residual_k_device(), mesh.residual_omega_device(),
+                nc,
+                fd.left_cell, fd.right_cell, fd.boundary,
+                fd.nx, fd.ny, fd.nz, fd.area,
+                start, end,
+                inf_k, inf_omega, inf_rho,
+                d_failed);
+            if (!cuda_check(cudaGetLastError(), "sst_advection_kernel_colored launch", error)) return false;
+        }
+    } else {
+        int grid = (nf + block - 1) / block;
+        sst_advection_kernel<<<grid, block, 0, stream>>>(
+            mesh.state_device(),
+            mesh.q_k_device(), mesh.q_omega_device(),
+            mesh.residual_k_device(), mesh.residual_omega_device(),
+            nc, nf, DeviceMesh::NVAR,
+            fd.left_cell, fd.right_cell, fd.boundary,
+            fd.nx, fd.ny, fd.nz, fd.area,
+            inf_k, inf_omega, inf_rho,
+            d_failed);
+        if (!cuda_check(cudaGetLastError(), "sst_advection_kernel launch", error)) return false;
+    }
 
     return true;
 }
@@ -669,24 +971,48 @@ bool compute_sst_diffusion_gpu(DeviceMesh& mesh, Real gamma,
     int block = 128;
     int nf = static_cast<int>(mesh.face_count());
     int nc = static_cast<int>(mesh.cell_count());
-    int grid = (nf + block - 1) / block;
 
     DeviceCellData cd = mesh.cell_data();
     DeviceFaceData fd = mesh.face_data();
 
-    sst_diffusion_kernel<<<grid, block, 0, stream>>>(
-        mesh.state_device(),
-        mesh.q_k_device(), mesh.q_omega_device(),
-        mesh.residual_k_device(), mesh.residual_omega_device(),
-        mesh.grad_k_device(), mesh.grad_omega_device(),
-        cd.wall_distance,
-        mesh.sst_f1_device(),
-        nc, nf, DeviceMesh::NVAR,
-        fd.left_cell, fd.right_cell, fd.boundary,
-        fd.nx, fd.ny, fd.nz, fd.area,
-        gamma, mu_ref, T_ref, sutherland_T,
-        d_failed);
-    if (!cuda_check(cudaGetLastError(), "sst_diffusion_kernel launch", error)) return false;
+    int n_colors = mesh.color_count();
+    if (n_colors > 0) {
+        for (int c = 0; c < n_colors; ++c) {
+            int start = mesh.host_color_offsets()[c];
+            int end   = mesh.host_color_offsets()[c + 1];
+            int nf_c  = end - start;
+            int grid_c = (nf_c + block - 1) / block;
+            sst_diffusion_kernel_colored<<<grid_c, block, 0, stream>>>(
+                mesh.state_device(),
+                mesh.q_k_device(), mesh.q_omega_device(),
+                mesh.residual_k_device(), mesh.residual_omega_device(),
+                mesh.grad_k_device(), mesh.grad_omega_device(),
+                cd.wall_distance,
+                mesh.sst_f1_device(),
+                nc, DeviceMesh::NVAR,
+                fd.left_cell, fd.right_cell, fd.boundary,
+                fd.nx, fd.ny, fd.nz, fd.area,
+                start, end,
+                gamma, mu_ref, T_ref, sutherland_T,
+                d_failed);
+            if (!cuda_check(cudaGetLastError(), "sst_diffusion_kernel_colored launch", error)) return false;
+        }
+    } else {
+        int grid = (nf + block - 1) / block;
+        sst_diffusion_kernel<<<grid, block, 0, stream>>>(
+            mesh.state_device(),
+            mesh.q_k_device(), mesh.q_omega_device(),
+            mesh.residual_k_device(), mesh.residual_omega_device(),
+            mesh.grad_k_device(), mesh.grad_omega_device(),
+            cd.wall_distance,
+            mesh.sst_f1_device(),
+            nc, nf, DeviceMesh::NVAR,
+            fd.left_cell, fd.right_cell, fd.boundary,
+            fd.nx, fd.ny, fd.nz, fd.area,
+            gamma, mu_ref, T_ref, sutherland_T,
+            d_failed);
+        if (!cuda_check(cudaGetLastError(), "sst_diffusion_kernel launch", error)) return false;
+    }
 
     return true;
 }

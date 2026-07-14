@@ -2946,6 +2946,7 @@ Fix: implement both tests.
 **SST-C7** [MEDIUM] Missing test
 No test validates SST boundary paths (NoSlipWall/SlipWall/Symmetry zero-flux, Farfield inflow using freestream values). A regression swapping boundary branches would go undetected.
 Fix: add CFD-TURB-SST-BC-1 test on a mesh with known wall/farfield faces.
+[FIXED 2026-07-14] Added CFD-TURB-SST-BC-1 test: structured cube mesh with wall/farfield faces, SST solver produces finite forces and residuals.
 
 **SST-C8** [MEDIUM] Missing guard
 No guard against `viscous=true + SST`. The SST diffusion kernel in gpu_sst.cu computes k/omega diffusion independently, but the mean-flow viscous kernel does not include mu_t. Running viscous+SST produces incomplete physics. PLAN.md 13.3 marks this as deferred.
@@ -2965,6 +2966,7 @@ Fix: allocate `d_sst_f1_` scratch buffer in device_mesh, write F1 in source kern
 **SST-D2** [HIGH] `gpu_sst.cu:63-68,131-134,368-371`
 SST face-loop kernels (gradient, advection, diffusion) use atomicAdd unconditionally. The main solver has colored kernel variants that eliminate atomics by processing non-overlapping face groups. SST has no colored variants.
 Fix: implement `_colored` variants of gradient/advection/diffusion SST kernels using `d_color_offsets_`.
+[FIXED 2026-07-14] Added sst_gradient_kernel_colored, sst_advection_kernel_colored, sst_diffusion_kernel_colored. Wrapper functions use colored variants when color_count > 0, falling back to atomic versions otherwise. All 76/76 tests PASS.
 
 **SST-D3** [HIGH] `gpu_sst.cu:157,528,593,618,635`
 `sst_source_kernel` has `__launch_bounds__(256)` but wrapper launches with `block=128`. The compiler reserves registers for 256 threads but only 128 are active, wasting occupancy. Cell-level kernels should use block=256 with __launch_bounds__(256); face-level kernels should use block=128 with __launch_bounds__(128).
@@ -2987,11 +2989,11 @@ Fix: wrap read-only parameter accesses with __ldg() where beneficial.
 | Severity | Open | FIXED | IDs |
 |----------|------|-------|-----|
 | CRITICAL | 0 | 3 | SST-A1, SST-A3, SST-A4 |
-| HIGH     | 0 | 4 | SST-B1, SST-B2, SST-B3, SST-B4 |
-| MEDIUM   | 1 | 6 | SST-A2 (JFV, deferred), SST-C2 (test name), SST-C4 (CPU/GPU test), SST-C5 (enum test), SST-C6 (tests), SST-C7 (boundary test), SST-C8 (viscous guard) |
+| HIGH     | 0 | 5 | SST-B1, SST-B2, SST-B3, SST-B4, SST-D2 |
+| MEDIUM   | 1 | 7 | SST-A2 (JFV, deferred), SST-C2 (test name), SST-C4 (CPU/GPU test), SST-C5 (enum test), SST-C6 (tests), SST-C7 (boundary test), SST-C8 (viscous guard) |
 | LOW      | 2 | 5 | SST-C3 (wall_dist guard), SST-D1 (F1 buffer), SST-D3 (block size), SST-D4 (fuse clear+update), SST-C9 (JFV test), SST-C1 (residual check), SST-D5 (__ldg), SST-D6 (d_sst_F1 duplicate) |
 | INFO     | 1 | 0 | SST-D6 (d_sst_F1 duplicate) |
 
-Fixed this session (2026-07-14): SST-A4 (farfield inflow density), SST-B4 (d_failed guard in gradient kernel), SST-C2 (test name), SST-C4 (CPU/GPU source comparison test + wall_distance guard fix), SST-C5 (enum test lambda FAIL macro), SST-C6 (SST-1 finite forces, SST-3 zero k/omega laminar regression), SST-D1 (F1 scratch buffer), SST-D3 (block size mismatch), SST-D4 (fuse clear+update).
+Fixed this session (2026-07-14): SST-A4 (farfield inflow density), SST-B4 (d_failed guard in gradient kernel), SST-C2 (test name), SST-C4 (CPU/GPU source comparison test + wall_distance guard fix), SST-C5 (enum test lambda FAIL macro), SST-C6 (SST-1 finite forces, SST-3 zero k/omega laminar regression), SST-C7 (boundary path test), SST-D1 (F1 scratch buffer), SST-D2 (colored variants), SST-D3 (block size mismatch), SST-D4 (fuse clear+update).
 
 

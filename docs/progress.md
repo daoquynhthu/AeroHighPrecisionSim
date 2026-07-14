@@ -1108,3 +1108,7 @@
 
 2026-07-14
 - SST-C6 (missing tests): added CFD-TURB-SST-1 (SST finite forces on structured mesh) and CFD-TURB-SST-3 (SST zero k/omega matches laminar exactly, diff=0). Both tests passing. Flat plate SST test deferred (solver fails on flat plate mesh with SST). All 75/75 tests PASS.
+
+2026-07-14
+- SST-C7 (boundary path test): added CFD-TURB-SST-BC-1 test on structured cube mesh with wall/farfield faces. SST solver produces finite forces and residuals. All 76/76 tests PASS.
+- SST-D2 (colored variants): added sst_gradient_kernel_colored, sst_advection_kernel_colored, sst_diffusion_kernel_colored. Wrapper functions use colored variants when color_count > 0, falling back to atomic versions. Eliminates atomics in SST face-loop kernels. All 76/76 tests PASS.

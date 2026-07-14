@@ -3831,6 +3831,54 @@ static int test_sst_solver_sanity() {
     return 0;
 }
 
+static int test_sst_boundary_paths() {
+    TEST("CFD-TURB-SST-BC-1 SST boundary paths produce finite results");
+    {
+        CfdMesh mesh = generate_structured_cube_mesh(5.0f, 7);
+        compute_mesh_metrics(mesh);
+
+        int wall_count = 0, farfield_count = 0, sym_count = 0;
+        for (auto& face : mesh.faces) {
+            if (face.boundary == BoundaryKind::NoSlipWall ||
+                face.boundary == BoundaryKind::SlipWall) wall_count++;
+            else if (face.boundary == BoundaryKind::Farfield) farfield_count++;
+            else if (face.boundary == BoundaryKind::Symmetry) sym_count++;
+        }
+        std::printf("  [INFO] wall=%d farfield=%d sym=%d\n", wall_count, farfield_count, sym_count);
+
+        PrimitiveState w = make_freestream(0.5f, 2.0f, 0.0f, 1.4f);
+        std::vector<ConservativeState> q0(mesh.cells.size(), primitive_to_conservative(w, 1.4f));
+
+        CfdConfig cfg;
+        cfg.max_iter = 10;
+        cfg.convergence_tol = 1e-12f;
+        cfg.turbulence_model = TurbulenceModel::SST;
+        cfg.gamma = 1.4f;
+        cfg.Re = 1e5f;
+        cfg.mu_ref = 1.0f;
+        cfg.T_ref = 288.15f;
+        cfg.sutherland_T = 110.4f;
+
+        FreestreamCondition fcond;
+        fcond.mach = 2.0f;
+        fcond.alpha_deg = 0.0f;
+
+        CfdSolver solver;
+        solver.load_mesh(mesh);
+        CfdSolveSummary s = solver.solve_from_state(fcond, cfg, q0);
+        if (s.failed) FAIL("SST boundary path solve failed");
+
+        if (!std::isfinite(s.forces.CD)) FAIL("CD not finite: %g", s.forces.CD);
+        if (!std::isfinite(s.forces.CL)) FAIL("CL not finite: %g", s.forces.CL);
+        if (!std::isfinite(s.forces.CX)) FAIL("CX not finite: %g", s.forces.CX);
+
+        if (s.residual_history.empty() || !std::isfinite(s.residual_history.back()))
+            FAIL("non-finite final L2 residual");
+        PASS;
+    }
+    return 0;
+}
+
 static int test_ddes_length_scale() {
     TEST("CFD-TURB-DDES-LENGTH-1 DDES length scale kernel correctness");
     {
@@ -3970,6 +4018,7 @@ result |= test_recon_order2_converged_forces();
     result |= test_sst_zero_k_omega_laminar();
     result |= test_sst_flat_plate_cf();
     result |= test_sst_solver_sanity();
+    result |= test_sst_boundary_paths();
     result |= test_robust_nan_viscous_turb();
     std::printf("\n%d / %d tests PASSED.\n", pass_count, test_count);
     return result == 0 && pass_count == test_count ? 0 : 1;
