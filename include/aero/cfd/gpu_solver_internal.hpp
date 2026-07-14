@@ -60,6 +60,9 @@ bool compute_sst_gradients_gpu(DeviceMesh& mesh, int* d_failed,
 bool compute_sst_advection_gpu(DeviceMesh& mesh,
     Real inf_k, Real inf_omega,
     int* d_failed, std::string* error = nullptr, cudaStream_t stream = nullptr);
+bool compute_sst_diffusion_gpu(DeviceMesh& mesh, Real gamma,
+    Real mu_ref, Real T_ref, Real sutherland_T,
+    int* d_failed, std::string* error = nullptr, cudaStream_t stream = nullptr);
 bool compute_sst_source_gpu(DeviceMesh& mesh, Real gamma, Real Re,
     Real mu_ref, Real T_ref, Real sutherland_T,
     int* d_failed, std::string* error = nullptr, cudaStream_t stream = nullptr);
@@ -73,7 +76,8 @@ bool clear_sst_residual_gpu(DeviceMesh& mesh,
 
 bool compute_turbulence_source_gpu(DeviceMesh& mesh, const CfdConfig& config,
     int* d_failed, std::string* error = nullptr, cudaStream_t stream = nullptr,
-    Real inf_k = 0.0f, Real inf_omega = 0.0f);
+    Real inf_k = 0.0f, Real inf_omega = 0.0f,
+    const Real* d_min_dt = nullptr);
 
 bool apply_rans_implicit_gpu(DeviceMesh& mesh, Real Re,
     const Real* d_min_dt, std::string* error = nullptr,

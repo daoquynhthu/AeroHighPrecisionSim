@@ -243,6 +243,155 @@ __global__ void __launch_bounds__(256) sst_source_kernel(
     d_residual_omega[idx] += vol_w;
 }
 
+__device__ Real d_sst_F1(
+    Real k, Real omega, Real d, Real rho, Real mu,
+    Real gk_x, Real gk_y, Real gk_z,
+    Real gw_x, Real gw_y, Real gw_z)
+{
+    constexpr Real eps = 1e-30f;
+    Real d2 = d * d + eps;
+    Real sqrt_k = real_sqrt(k * k + eps * eps);
+    Real CD_kw = 2.0f * rho * sst_coeff::sigma_w2
+        * (gk_x * gw_x + gk_y * gw_y + gk_z * gw_z) / (omega + eps);
+    CD_kw = real_fmax(CD_kw, 1e-10f);
+    Real arg1a = sqrt_k / (sst_coeff::beta_star * omega * d + eps);
+    Real arg1b = 500.0f * mu / (rho * d2 * omega + eps);
+    Real arg1c = 4.0f * rho * sst_coeff::sigma_w2 * k / (CD_kw * d2 + eps);
+    Real Phi_1 = real_fmin(real_fmax(arg1a, arg1b), arg1c);
+    Real Phi_1_4 = Phi_1 * Phi_1 * Phi_1 * Phi_1;
+    Phi_1_4 = real_fmin(Phi_1_4, 80.0f);
+    return real_tanh(Phi_1_4);
+}
+
+__global__ void __launch_bounds__(128) sst_diffusion_kernel(
+    const Real* d_q,
+    const Real* d_q_k, const Real* d_q_omega,
+    Real* d_residual_k, Real* d_residual_omega,
+    const Real* d_grad_k, const Real* d_grad_omega,
+    const Real* d_wall_distance,
+    int n_cells, int n_faces, int nvar,
+    const int* d_left_cell, const int* d_right_cell, const int* d_boundary,
+    const Real* d_nx, const Real* d_ny, const Real* d_nz, const Real* d_area,
+    Real gamma, Real mu_ref, Real T_ref, Real sutherland_T,
+    int* d_failed)
+{
+    int idx = blockIdx.x * blockDim.x + threadIdx.x;
+    if (idx >= n_faces) return;
+
+    int left = d_left_cell[idx];
+    if (left < 0 || left >= n_cells) { atomicExch(d_failed, 1); return; }
+    int bnd = d_boundary[idx];
+
+    auto cell_mu = [&](int c, Real& mu_out, Real& mu_t_out) {
+        Real rho = d_q[c * nvar + 0];
+        if (rho <= 0.0f || !real_isfinite(rho)) { mu_out = 0.0f; mu_t_out = 0.0f; return false; }
+        Real inv_rho = 1.0f / rho;
+        Real u = d_q[c * nvar + 1] * inv_rho;
+        Real v = d_q[c * nvar + 2] * inv_rho;
+        Real w = d_q[c * nvar + 3] * inv_rho;
+        Real kinetic = 0.5f * (u*u + v*v + w*w);
+        Real p = (gamma - 1.0f) * (d_q[c * nvar + 4] - rho * kinetic);
+        if (!real_isfinite(p) || p <= 0.0f) { mu_out = 0.0f; mu_t_out = 0.0f; return false; }
+        Real T = p * inv_rho;
+        Real mu = mu_ref;
+        if (T > 0.0f) {
+            Real t_ratio = T / T_ref;
+            mu = mu_ref * t_ratio * real_sqrt(t_ratio) * (T_ref + sutherland_T) / (T + sutherland_T);
+        }
+        if (mu <= 0.0f) mu = mu_ref;
+        Real k = d_q_k[c];
+        Real omega = d_q_omega[c];
+        if (k < 0.0f) k = 0.0f;
+        if (omega <= 0.0f) omega = 1e-10f;
+        Real mu_t = rho * k / omega;
+        mu_out = mu;
+        mu_t_out = mu_t;
+        return true;
+    };
+
+    Real mu_L, mu_t_L;
+    if (!cell_mu(left, mu_L, mu_t_L)) return;
+    Real kL = d_q_k[left];
+    Real wL = d_q_omega[left];
+    Real gkL_x = d_grad_k[left * 3 + 0];
+    Real gkL_y = d_grad_k[left * 3 + 1];
+    Real gkL_z = d_grad_k[left * 3 + 2];
+    Real gwL_x = d_grad_omega[left * 3 + 0];
+    Real gwL_y = d_grad_omega[left * 3 + 1];
+    Real gwL_z = d_grad_omega[left * 3 + 2];
+    Real dL = d_wall_distance[left];
+
+    Real mu_F, mu_t_F, gk_dot_n, gw_dot_n;
+    Real nx = d_nx[idx], ny = d_ny[idx], nz = d_nz[idx];
+    Real area = d_area[idx];
+
+    if (bnd == static_cast<int>(BoundaryKind::Interior)) {
+        int right = d_right_cell[idx];
+        if (right < 0 || right >= n_cells) { atomicExch(d_failed, 1); return; }
+
+        Real mu_R, mu_t_R;
+        if (!cell_mu(right, mu_R, mu_t_R)) return;
+
+        Real kR = d_q_k[right];
+        Real wR = d_q_omega[right];
+        Real gkR_x = d_grad_k[right * 3 + 0];
+        Real gkR_y = d_grad_k[right * 3 + 1];
+        Real gkR_z = d_grad_k[right * 3 + 2];
+        Real gwR_x = d_grad_omega[right * 3 + 0];
+        Real gwR_y = d_grad_omega[right * 3 + 1];
+        Real gwR_z = d_grad_omega[right * 3 + 2];
+        Real dR = d_wall_distance[right];
+
+        Real F1_L = d_sst_F1(kL, wL, dL, d_q[left * nvar + 0], mu_L,
+            gkL_x, gkL_y, gkL_z, gwL_x, gwL_y, gwL_z);
+        Real F1_R = d_sst_F1(kR, wR, dR, d_q[right * nvar + 0], mu_R,
+            gkR_x, gkR_y, gkR_z, gwR_x, gwR_y, gwR_z);
+        Real F1_F = 0.5f * (F1_L + F1_R);
+
+        Real sigma_k_F = F1_F * sst_coeff::sigma_k1 + (1.0f - F1_F) * sst_coeff::sigma_k2;
+        Real sigma_w_F = F1_F * sst_coeff::sigma_w1 + (1.0f - F1_F) * sst_coeff::sigma_w2;
+
+        mu_F = 0.5f * (mu_L + mu_R);
+        mu_t_F = 0.5f * (mu_t_L + mu_t_R);
+
+        gk_dot_n = 0.5f * ((gkL_x + gkR_x) * nx + (gkL_y + gkR_y) * ny + (gkL_z + gkR_z) * nz);
+        gw_dot_n = 0.5f * ((gwL_x + gwR_x) * nx + (gwL_y + gwR_y) * ny + (gwL_z + gwR_z) * nz);
+
+        Real mu_eff_k_F = mu_F + sigma_k_F * mu_t_F;
+        Real mu_eff_w_F = mu_F + sigma_w_F * mu_t_F;
+        Real flux_k = mu_eff_k_F * gk_dot_n * area;
+        Real flux_w = mu_eff_w_F * gw_dot_n * area;
+
+        real_atomic_add(&d_residual_k[left], -flux_k);
+        real_atomic_add(&d_residual_omega[left], -flux_w);
+        real_atomic_add(&d_residual_k[right], flux_k);
+        real_atomic_add(&d_residual_omega[right], flux_w);
+    } else if (bnd == static_cast<int>(BoundaryKind::SlipWall) ||
+               bnd == static_cast<int>(BoundaryKind::NoSlipWall) ||
+               bnd == static_cast<int>(BoundaryKind::Symmetry)) {
+        return;
+    } else {
+        Real rhoL = d_q[left * nvar + 0];
+        Real F1_L = d_sst_F1(kL, wL, dL, rhoL, mu_L,
+            gkL_x, gkL_y, gkL_z, gwL_x, gwL_y, gwL_z);
+        Real sigma_k_L = F1_L * sst_coeff::sigma_k1 + (1.0f - F1_L) * sst_coeff::sigma_k2;
+        Real sigma_w_L = F1_L * sst_coeff::sigma_w1 + (1.0f - F1_L) * sst_coeff::sigma_w2;
+
+        mu_F = mu_L;
+        mu_t_F = mu_t_L;
+        gk_dot_n = gkL_x * nx + gkL_y * ny + gkL_z * nz;
+        gw_dot_n = gwL_x * nx + gwL_y * ny + gwL_z * nz;
+
+        Real mu_eff_k_F = mu_F + sigma_k_L * mu_t_F;
+        Real mu_eff_w_F = mu_F + sigma_w_L * mu_t_F;
+        Real flux_k = mu_eff_k_F * gk_dot_n * area;
+        Real flux_w = mu_eff_w_F * gw_dot_n * area;
+
+        real_atomic_add(&d_residual_k[left], -flux_k);
+        real_atomic_add(&d_residual_omega[left], -flux_w);
+    }
+}
+
 __global__ void __launch_bounds__(256) sst_init_kernel(
     Real* d_q_k, Real* d_q_omega, Real k_val, Real omega_val, int n_cells)
 {
@@ -388,6 +537,43 @@ bool compute_sst_source_gpu(DeviceMesh& mesh, Real gamma, Real Re,
         gamma, Re, mu_ref, T_ref, sutherland_T,
         d_failed);
     if (!cuda_check(cudaGetLastError(), "sst_source_kernel launch", error)) return false;
+
+    return true;
+}
+
+bool compute_sst_diffusion_gpu(DeviceMesh& mesh, Real gamma,
+    Real mu_ref, Real T_ref, Real sutherland_T,
+    int* d_failed, std::string* error, cudaStream_t stream)
+{
+    if (mesh.cell_count() == 0 || mesh.face_count() == 0) return true;
+    if (!mesh.has_sst()) {
+        if (error) *error = "SST buffers not allocated for diffusion";
+        return false;
+    }
+    if (!mesh.gradients_device()) {
+        if (error) *error = "gradients not allocated for SST diffusion";
+        return false;
+    }
+    int block = 128;
+    int nf = static_cast<int>(mesh.face_count());
+    int nc = static_cast<int>(mesh.cell_count());
+    int grid = (nf + block - 1) / block;
+
+    DeviceCellData cd = mesh.cell_data();
+    DeviceFaceData fd = mesh.face_data();
+
+    sst_diffusion_kernel<<<grid, block, 0, stream>>>(
+        mesh.state_device(),
+        mesh.q_k_device(), mesh.q_omega_device(),
+        mesh.residual_k_device(), mesh.residual_omega_device(),
+        mesh.grad_k_device(), mesh.grad_omega_device(),
+        cd.wall_distance,
+        nc, nf, DeviceMesh::NVAR,
+        fd.left_cell, fd.right_cell, fd.boundary,
+        fd.nx, fd.ny, fd.nz, fd.area,
+        gamma, mu_ref, T_ref, sutherland_T,
+        d_failed);
+    if (!cuda_check(cudaGetLastError(), "sst_diffusion_kernel launch", error)) return false;
 
     return true;
 }

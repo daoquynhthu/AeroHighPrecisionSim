@@ -225,11 +225,12 @@ if (config.viscous) {
             }
         }
 
-        if (!compute_turbulence_source_gpu(d_mesh, config, d_failed, error, stream_main, inf_k, inf_omega)) {
+        if (!compute_turbulence_source_gpu(d_mesh, config, d_failed, error, stream_main, inf_k, inf_omega, d_min_dt)) {
             if (error && error->empty()) *error = "turbulence source kernel failed";
             goto fail;
         }
-        if (config.turbulence_model != TurbulenceModel::LAMINAR && !config.implicit) {
+        if (config.turbulence_model != TurbulenceModel::LAMINAR &&
+                config.turbulence_model != TurbulenceModel::SST && !config.implicit) {
             if (!apply_rans_implicit_gpu(d_mesh, config.Re, d_min_dt, error, stream_main)) {
                 if (error && error->empty()) *error = "RANS implicit kernel failed";
                 goto fail;

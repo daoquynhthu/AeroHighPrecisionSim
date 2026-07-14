@@ -268,7 +268,8 @@ bool compute_rans_source_gpu(DeviceMesh& mesh, Real gamma, Real Re, Real mu_ref,
 
 bool compute_turbulence_source_gpu(DeviceMesh& mesh, const CfdConfig& config,
     int* d_failed, std::string* error, cudaStream_t stream,
-    Real inf_k, Real inf_omega) {
+    Real inf_k, Real inf_omega,
+    const Real* d_min_dt) {
     if (config.turbulence_model == TurbulenceModel::LAMINAR) return true;
 
     if (config.turbulence_model == TurbulenceModel::SST) {
@@ -279,9 +280,15 @@ bool compute_turbulence_source_gpu(DeviceMesh& mesh, const CfdConfig& config,
         if (!clear_sst_residual_gpu(mesh, error, stream)) return false;
         if (!compute_sst_gradients_gpu(mesh, d_failed, error, stream)) return false;
         if (!compute_sst_advection_gpu(mesh, inf_k, inf_omega, d_failed, error, stream)) return false;
+        if (!compute_sst_diffusion_gpu(mesh, config.gamma,
+                config.mu_ref, config.T_ref, config.sutherland_T,
+                d_failed, error, stream)) return false;
         if (!compute_sst_source_gpu(mesh, config.gamma, config.Re,
                 config.mu_ref, config.T_ref, config.sutherland_T,
                 d_failed, error, stream)) return false;
+        if (d_min_dt) {
+            if (!compute_sst_update_gpu(mesh, d_min_dt, error, stream)) return false;
+        }
         return true;
     }
 

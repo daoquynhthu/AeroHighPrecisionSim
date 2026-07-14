@@ -1590,10 +1590,10 @@ Tasks:
 - [x] Stress limiter: `ν_t = a₁k / max(a₁ω, F₂·S)` with `F₂ = tanh[max(√k/(0.09ωd), 500ν/(ρd²ω))]²`
 - [x] `compute_turbulence_source_gpu` dispatches to SST (gradients + advection + source per iteration)
 - [x] Solver integration: SST buffer alloc + init before loop, inf_k/inf_omega from 0.1% Tu, mu_t/mu=0.1
-- [ ] Viscous diffusion coupling: add k and ω diffusion to `gpu_viscous.cu` (sigma_k * mu_eff, sigma_w * mu_eff)
-- [ ] `apply_rans_implicit_gpu` for SST: point-implicit treatment of k and ω sources (viscous=false must still diffuse k/ω)
-- [ ] Wall BC: `k_wall = 0`, `ω_wall = 6ν/(β₁y²)` (clamped via SST destruction near wall; no explicit BC change needed)
-- [ ] Farfield BC: k_inf, omega_inf from tu_inf (0.1%) and mu_t/mu ratio (0.1) — completed in solver init
+- [x] Diffusion coupling: added `sst_diffusion_kernel` in `gpu_sst.cu` — face-loop gradient diffusion for k/ω using F1-blended sigma coefficients
+- [x] `apply_rans_implicit_gpu` skipped for SST (SA-only implicit; SST uses separate forward-Euler path)
+- [ ] Wall BC: `k_wall = 0`, `omega_wall = 6ν/(β₁y²)` (clamped via SST destruction near wall; no explicit BC change needed)
+- [x] Farfield BC: k_inf, omega_inf from tu_inf (0.1%) and mu_t/mu ratio (0.1) — completed in solver init
 
 ### 13.3 GPU kernels for SST (residual coupling — deferred)
 

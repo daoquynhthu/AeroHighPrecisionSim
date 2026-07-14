@@ -1092,3 +1092,5 @@
 
 2026-07-14
 - Phase 13.2 k-omega SST Phase 3 (GPU solver integration): added sst_init_kernel and clear_sst_residual_kernel to gpu_sst.cu; implemented SST dispatch in compute_turbulence_source_gpu (gpu_rans.cu) that calls clear/residual/advection/gradients/source per iteration; added SST buffer alloc + k/omega init in gpu_solver.cu before solve loop; passed inf_k/inf_omega to both explicit and Newton turbulence calls; added same computation in jacobian_free.cu for JFV product path. All CUDA files compile clean.
+2026-07-14
+- Phase 13.2 k-omega SST Phase 4 (diffusion + implicit handling): added sst_diffusion_kernel to gpu_sst.cu — face-loop kernel computing gradient diffusion for k and omega using F1-blended sigma_k/sigma_omega coefficients and Sutherland molecular viscosity. Added d_sst_F1 device function (reuses Menter 2003 blending formula). Added compute_sst_diffusion_gpu wrapper and declaration in gpu_solver_internal.hpp. SST dispatch in compute_turbulence_source_gpu now calls diffusion before source. Skipped apply_rans_implicit_gpu for SST in gpu_solver.cu (SA-only implicit). All existing tests pass: TestCfdGpu 69/69, TestCfdRans 16/16.
