@@ -2924,9 +2924,12 @@ CFD-TURB-SST-2 test name says "SST buffers present but unused" but never calls a
 `sst_diffusion_kernel` reads `d_wall_distance[left]` without validating it. Negative/NaN wall distance produces wrong F1 (arg1a = sqrt_k / (beta_star * omega * d + eps) with negative d), generating incorrect sigma coefficients and diffusion fluxes. In contrast, sst_source_kernel validates wall_distance at lines 199-201.
 [FIXED 2026-07-14] Added `if (dL < 0.0f || !real_isfinite(dL))` guard.
 
-**SST-C4** [MEDIUM] Missing test
+**SST-C4** [MEDIUM] Missing test — FIXED 2026-07-14
 No CPU/GPU numerical comparison for SST residuals (unlike CFD-ORACLE-RANS-4 which compares SA residuals at 5e-7 tolerance). This is the direct reason SST-A1 (gradient bug) was not caught.
-Fix: add CFD-TURB-SST-CPU-GPU-1 test that computes SST residual on CPU via rans_sst.hpp functions and compares against GPU results cell-by-cell.
+Fix: added CFD-TURB-SST-CPU-GPU-1 test (tolerance 1e-6 for source_k and source_w) to `test_cfd_gpu.cpp:3457`. Test mirrors SA oracle pattern: upload mesh+state to GPU, compute gradients, download all gradients for CPU SST source computation, compare cell-by-cell. 
+
+Root cause of initial 9.7e-05 failure: ghost cells have wall_distance=0. GPU sst_source_kernel guards `d <= 0 → d = 1e30` (F1=0), but CPU comparison code had no such guard. This caused different F1 values (GPU 0 vs CPU 1 due to float overflow by accident).
+Fix: added `if (d <= 0.0f || !std::isfinite(d)) d = 1e30f` to CPU comparison path, matching GPU kernel behavior. Also added proper wall_distance computation for interior cells in test mesh. Diagnostic kernel `compute_sst_diag_gpu` + `sst_diag_kernel` added to `gpu_sst.cu` for future debugging.
 
 **SST-C5** [MEDIUM] `test_cfd_gpu.cpp:3314-3328`
 CFD-TURB-ENUM-1 string mapping test uses a local `check_tm_str` lambda that duplicates production string logic. If production mapping changes, the test doesn't catch it. Also, the lambda prints "FAIL" via printf but does not call the FAIL macro — errors are reported but the test still PASSes.

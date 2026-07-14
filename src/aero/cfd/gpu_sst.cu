@@ -468,6 +468,84 @@ __global__ void __launch_bounds__(256) sst_update_kernel(
     d_q_omega_next[idx] = w_new;
 }
 
+__global__ void sst_diag_kernel(
+    const Real* d_q,
+    const Real* d_q_k, const Real* d_q_omega,
+    const Real* d_grad_k, const Real* d_grad_omega,
+    const Real* d_vel_grad,
+    const Real* d_wall_distance, const Real* d_volume,
+    Real* d_diag_f1, Real* d_diag_f2, Real* d_diag_cdkw,
+    Real* d_diag_smag, Real* d_diag_src_k, Real* d_diag_src_w,
+    int n_cells, int nvar, int ngrad,
+    Real gamma, Real mu_ref, Real T_ref, Real sutherland_T)
+{
+    int idx = blockIdx.x * blockDim.x + threadIdx.x;
+    if (idx >= n_cells) return;
+
+    Real rho = d_q[idx * nvar + 0];
+    if (rho <= 0.0f || !real_isfinite(rho)) return;
+    Real inv_rho = 1.0f / rho;
+    Real u = d_q[idx * nvar + 1] * inv_rho;
+    Real v = d_q[idx * nvar + 2] * inv_rho;
+    Real w = d_q[idx * nvar + 3] * inv_rho;
+    Real kinetic = 0.5f * (u*u + v*v + w*w);
+    Real p = (gamma - 1.0f) * (d_q[idx * nvar + 4] - rho * kinetic);
+    if (!real_isfinite(p) || p <= 0.0f) return;
+    Real T = p * inv_rho;
+    Real mu = mu_ref;
+    if (T > 0.0f) {
+        Real t_ratio = T / T_ref;
+        mu = mu_ref * t_ratio * real_sqrt(t_ratio) * (T_ref + sutherland_T) / (T + sutherland_T);
+    }
+    if (mu <= 0.0f) mu = mu_ref;
+
+    Real k = d_q_k[idx];
+    Real omega = d_q_omega[idx];
+    if (!real_isfinite(k) || k < 0.0f) k = 0.0f;
+    if (!real_isfinite(omega) || omega < 0.0f) omega = 1e-10f;
+
+    Real wall_distance = d_wall_distance[idx];
+    if (wall_distance <= 0.0f || !real_isfinite(wall_distance)) wall_distance = 1e30f;
+
+    Real gk_x = d_grad_k[idx * 3 + 0];
+    Real gk_y = d_grad_k[idx * 3 + 1];
+    Real gk_z = d_grad_k[idx * 3 + 2];
+    Real gw_x = d_grad_omega[idx * 3 + 0];
+    Real gw_y = d_grad_omega[idx * 3 + 1];
+    Real gw_z = d_grad_omega[idx * 3 + 2];
+
+    SstBlending b = compute_sst_blending(k, omega, wall_distance, rho, mu,
+        gk_x, gk_y, gk_z, gw_x, gw_y, gw_z);
+
+    Real mu_t = rho * k / (omega + 1e-30f);
+
+    Real S_mag = 0.0f;
+    {
+        constexpr Real eps = 1e-30f;
+        const Real* g = d_vel_grad + idx * ngrad;
+        Real du_dx = g[3]; Real du_dy = g[4]; Real du_dz = g[5];
+        Real dv_dx = g[6]; Real dv_dy = g[7]; Real dv_dz = g[8];
+        Real dw_dx = g[9]; Real dw_dy = g[10]; Real dw_dz = g[11];
+        Real S11 = du_dx;
+        Real S22 = dv_dy;
+        Real S33 = dw_dz;
+        Real S12 = 0.5f * (du_dy + dv_dx);
+        Real S13 = 0.5f * (du_dz + dw_dx);
+        Real S23 = 0.5f * (dv_dz + dw_dy);
+        S_mag = real_sqrt(2.0f * (S11*S11 + S22*S22 + S33*S33
+                    + 2.0f * (S12*S12 + S13*S13 + S23*S23)) + eps);
+    }
+
+    SstSource s = compute_sst_source(k, omega, rho, mu_t, b, S_mag);
+
+    d_diag_f1[idx] = b.F1;
+    d_diag_f2[idx] = b.F2;
+    d_diag_cdkw[idx] = b.CD_kw;
+    d_diag_smag[idx] = S_mag;
+    d_diag_src_k[idx] = s.source_k;
+    d_diag_src_w[idx] = s.source_w;
+}
+
 } // namespace
 
 bool compute_sst_gradients_gpu(DeviceMesh& mesh, int* d_failed,
@@ -664,6 +742,35 @@ bool clear_sst_residual_gpu(DeviceMesh& mesh,
         mesh.residual_k_device(), mesh.residual_omega_device(), nc);
     if (!cuda_check(cudaGetLastError(), "clear_sst_residual_kernel launch", error)) return false;
 
+    return true;
+}
+
+bool compute_sst_diag_gpu(DeviceMesh& mesh, Real gamma, Real mu_ref, Real T_ref,
+    Real sutherland_T, Real* d_diag_f1, Real* d_diag_f2, Real* d_diag_cdkw,
+    Real* d_diag_smag, Real* d_diag_src_k, Real* d_diag_src_w,
+    std::string* error, cudaStream_t stream)
+{
+    if (mesh.cell_count() == 0) return true;
+    if (!mesh.has_sst()) {
+        if (error) *error = "SST buffers not allocated for diag";
+        return false;
+    }
+    int block = 128;
+    int nc = static_cast<int>(mesh.cell_count());
+    int grid = (nc + block - 1) / block;
+    DeviceCellData cd = mesh.cell_data();
+
+    sst_diag_kernel<<<grid, block, 0, stream>>>(
+        mesh.state_device(),
+        mesh.q_k_device(), mesh.q_omega_device(),
+        mesh.grad_k_device(), mesh.grad_omega_device(),
+        mesh.gradients_device(),
+        cd.wall_distance, cd.volume,
+        d_diag_f1, d_diag_f2, d_diag_cdkw,
+        d_diag_smag, d_diag_src_k, d_diag_src_w,
+        nc, DeviceMesh::NVAR, DeviceMesh::NGRAD,
+        gamma, mu_ref, T_ref, sutherland_T);
+    if (!cuda_check(cudaGetLastError(), "sst_diag_kernel launch", error)) return false;
     return true;
 }
 

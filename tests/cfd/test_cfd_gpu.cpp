@@ -14,6 +14,7 @@
 #include "aero/cfd/krylov_ops.hpp"
 #include "aero/cfd/lusgs.hpp"
 #include "aero/cfd/rans.hpp"
+#include "aero/cfd/rans_sst.hpp"
 #include "aero/cfd/viscous.hpp"
 #include "aero/cfd/cfd_solver_gpu.hpp"
 
@@ -576,6 +577,10 @@ static int test_recon_constant_state_zero_gradients() {
     {
         CfdMesh mesh = generate_structured_cube_mesh(5.0f, 9);
         compute_mesh_metrics(mesh);
+        Real half = 2.5f;
+        for (auto& c : mesh.cells) {
+            c.wall_distance = std::min({c.cx + half, half - c.cx, c.cy + half, half - c.cy, c.cz + half, half - c.cz});
+        }
 
         PrimitiveState w;
         w.rho = 1.0f; w.u = 2.0f; w.v = -0.3f; w.w = 0.1f; w.p = 1.0f / 1.4f;
@@ -3453,6 +3458,208 @@ static int test_sst_kernel_sanity() {
     return 0;
 }
 
+static int test_sst_cpu_gpu_source() {
+    TEST("CFD-TURB-SST-CPU-GPU-1 CPU/GPU SST source match on cube mesh");
+    {
+        CfdMesh mesh = generate_structured_cube_mesh(5.0f, 9);
+        compute_mesh_metrics(mesh);
+        {
+            Real half = 2.5f;
+            for (auto& c : mesh.cells) {
+                c.wall_distance = std::min({c.cx + half, half - c.cx,
+                    c.cy + half, half - c.cy, c.cz + half, half - c.cz});
+            }
+        }
+
+        PrimitiveState w = make_freestream(0.5f, 2.0f, 0.0f, 1.4f);
+        std::vector<ConservativeState> q(mesh.cells.size(), primitive_to_conservative(w, 1.4f));
+        Real gamma = 1.4f, Re = 1e5f;
+        Real mu_ref = 1.0f, T_ref = 288.15f, sutherland_T = 110.4f;
+
+        Real U_inf = std::sqrt(w.u * w.u + w.v * w.v + w.w * w.w);
+        Real tu = 0.001f;
+        Real inf_k = 1.5f * (tu * tu) * U_inf * U_inf;
+        Real t_ratio = w.p / w.rho / T_ref;
+        Real mu_inf = mu_ref * t_ratio * std::sqrt(t_ratio) * (T_ref + sutherland_T) / (w.p / w.rho + sutherland_T);
+        Real nu_inf = mu_inf / w.rho;
+        Real inf_omega = inf_k / (0.09f * 0.1f * nu_inf + 1e-30f);
+
+        std::vector<Real> cpu_k(mesh.cells.size());
+        std::vector<Real> cpu_omega(mesh.cells.size());
+        Real cx = 0.0f, cy = 0.0f, cz = 0.0f;
+        for (auto& c : mesh.cells) { cx += c.cx; cy += c.cy; cz += c.cz; }
+        cx /= mesh.cells.size(); cy /= mesh.cells.size(); cz /= mesh.cells.size();
+        Real L = 5.0f;
+        for (std::size_t i = 0; i < mesh.cells.size(); ++i) {
+            Real x = mesh.cells[i].cx;
+            cpu_k[i] = inf_k * (1.0f + 0.3f * (x - cx) / L);
+            cpu_omega[i] = inf_omega * (1.0f + 0.2f * (x - cx) / L);
+            if (cpu_k[i] < 0.0f) cpu_k[i] = 0.0f;
+            if (cpu_omega[i] <= 0.0f) cpu_omega[i] = 1e-10f;
+        }
+
+        DeviceMesh d_mesh;
+        std::string error;
+        if (!d_mesh.upload_mesh(mesh, &error)) FAIL("%s", error.c_str());
+        if (!d_mesh.upload_state(q, &error)) FAIL("%s", error.c_str());
+        if (!d_mesh.allocate_sst()) FAIL("allocate_sst failed");
+        if (!cuda_check(cudaMemcpy(d_mesh.q_k_device(), cpu_k.data(), mesh.cells.size() * sizeof(Real), cudaMemcpyHostToDevice), "upload k", &error)) FAIL("%s", error.c_str());
+        if (!cuda_check(cudaMemcpy(d_mesh.q_omega_device(), cpu_omega.data(), mesh.cells.size() * sizeof(Real), cudaMemcpyHostToDevice), "upload omega", &error)) FAIL("%s", error.c_str());
+        if (!compute_gradients_gpu(d_mesh, gamma, &error)) FAIL("GPU gradients: %s", error.c_str());
+
+        std::vector<PrimitiveGradient> gpu_grads(mesh.cells.size());
+        if (!d_mesh.download_gradients(gpu_grads, &error)) FAIL("download gradients: %s", error.c_str());
+
+        int* d_failed = nullptr;
+        if (!cuda_check(cudaMalloc(&d_failed, sizeof(int)), "malloc d_failed", &error)) FAIL("%s", error.c_str());
+        if (!cuda_check(cudaMemset(d_failed, 0, sizeof(int)), "memset d_failed", &error)) FAIL("%s", error.c_str());
+
+        if (!compute_sst_gradients_gpu(d_mesh, d_failed, &error)) FAIL("sst_gradients: %s", error.c_str());
+
+        if (!clear_sst_residual_gpu(d_mesh, &error)) FAIL("clear_residual: %s", error.c_str());
+
+        std::vector<Real> diag_f1(mesh.cells.size()), diag_f2(mesh.cells.size()), diag_cdkw(mesh.cells.size());
+        std::vector<Real> diag_smag(mesh.cells.size()), diag_src_k(mesh.cells.size()), diag_src_w(mesh.cells.size());
+        Real* d_diag_f1 = nullptr, *d_diag_f2 = nullptr, *d_diag_cdkw = nullptr;
+        Real* d_diag_smag = nullptr, *d_diag_src_k = nullptr, *d_diag_src_w = nullptr;
+        std::size_t diag_bytes = mesh.cells.size() * sizeof(Real);
+        if (!cuda_check(cudaMalloc(&d_diag_f1, diag_bytes), "malloc diag", &error) ||
+            !cuda_check(cudaMalloc(&d_diag_f2, diag_bytes), "malloc diag", &error) ||
+            !cuda_check(cudaMalloc(&d_diag_cdkw, diag_bytes), "malloc diag", &error) ||
+            !cuda_check(cudaMalloc(&d_diag_smag, diag_bytes), "malloc diag", &error) ||
+            !cuda_check(cudaMalloc(&d_diag_src_k, diag_bytes), "malloc diag", &error) ||
+            !cuda_check(cudaMalloc(&d_diag_src_w, diag_bytes), "malloc diag", &error))
+            FAIL("diag alloc: %s", error.c_str());
+
+        if (!compute_sst_diag_gpu(d_mesh, gamma, mu_ref, T_ref, sutherland_T,
+                d_diag_f1, d_diag_f2, d_diag_cdkw, d_diag_smag, d_diag_src_k, d_diag_src_w, &error))
+            FAIL("sst_diag: %s", error.c_str());
+
+        if (!cuda_check(cudaMemcpy(diag_f1.data(), d_diag_f1, diag_bytes, cudaMemcpyDeviceToHost), "download diag", &error)) FAIL("%s", error.c_str());
+        if (!cuda_check(cudaMemcpy(diag_f2.data(), d_diag_f2, diag_bytes, cudaMemcpyDeviceToHost), "download diag", &error)) FAIL("%s", error.c_str());
+        if (!cuda_check(cudaMemcpy(diag_cdkw.data(), d_diag_cdkw, diag_bytes, cudaMemcpyDeviceToHost), "download diag", &error)) FAIL("%s", error.c_str());
+        if (!cuda_check(cudaMemcpy(diag_smag.data(), d_diag_smag, diag_bytes, cudaMemcpyDeviceToHost), "download diag", &error)) FAIL("%s", error.c_str());
+        if (!cuda_check(cudaMemcpy(diag_src_k.data(), d_diag_src_k, diag_bytes, cudaMemcpyDeviceToHost), "download diag", &error)) FAIL("%s", error.c_str());
+        if (!cuda_check(cudaMemcpy(diag_src_w.data(), d_diag_src_w, diag_bytes, cudaMemcpyDeviceToHost), "download diag", &error)) FAIL("%s", error.c_str());
+
+        cudaFree(d_diag_f1); cudaFree(d_diag_f2); cudaFree(d_diag_cdkw);
+        cudaFree(d_diag_smag); cudaFree(d_diag_src_k); cudaFree(d_diag_src_w);
+
+        if (!compute_sst_source_gpu(d_mesh, gamma, Re, mu_ref, T_ref, sutherland_T, d_failed, &error))
+            FAIL("sst_source: %s", error.c_str());
+
+        std::vector<Real> gpu_res_k(mesh.cells.size()), gpu_res_w(mesh.cells.size());
+        if (!cuda_check(cudaMemcpy(gpu_res_k.data(), d_mesh.residual_k_device(), mesh.cells.size() * sizeof(Real), cudaMemcpyDeviceToHost), "download res_k", &error)) FAIL("%s", error.c_str());
+        if (!cuda_check(cudaMemcpy(gpu_res_w.data(), d_mesh.residual_omega_device(), mesh.cells.size() * sizeof(Real), cudaMemcpyDeviceToHost), "download res_w", &error)) FAIL("%s", error.c_str());
+
+        std::vector<Real> gpu_grad_k(mesh.cells.size() * 3), gpu_grad_w(mesh.cells.size() * 3);
+        if (!cuda_check(cudaMemcpy(gpu_grad_k.data(), d_mesh.grad_k_device(), mesh.cells.size() * 3 * sizeof(Real), cudaMemcpyDeviceToHost), "download grad_k", &error)) FAIL("%s", error.c_str());
+        if (!cuda_check(cudaMemcpy(gpu_grad_w.data(), d_mesh.grad_omega_device(), mesh.cells.size() * 3 * sizeof(Real), cudaMemcpyDeviceToHost), "download grad_w", &error)) FAIL("%s", error.c_str());
+
+        cudaFree(d_failed);
+
+        Real max_diff_k = 0.0f, max_diff_w = 0.0f;
+        std::size_t worst_cell = 0;
+        for (std::size_t i = 0; i < mesh.cells.size(); ++i) {
+            PrimitiveState wc;
+            conservative_to_primitive(q[i], gamma, wc);
+            Real T = wc.p / std::max(wc.rho, Real(1e-30));
+            Real mu = sutherland_viscosity(T, T_ref, sutherland_T);
+            if (mu <= 0.0f) mu = 1.0f;
+            Real rho = wc.rho;
+            Real k_val = cpu_k[i];
+            Real omega_val = cpu_omega[i];
+
+            Real gk_x = gpu_grad_k[i * 3 + 0];
+            Real gk_y = gpu_grad_k[i * 3 + 1];
+            Real gk_z = gpu_grad_k[i * 3 + 2];
+            Real gw_x = gpu_grad_w[i * 3 + 0];
+            Real gw_y = gpu_grad_w[i * 3 + 1];
+            Real gw_z = gpu_grad_w[i * 3 + 2];
+
+            Real d = mesh.cells[i].wall_distance;
+            if (d <= 0.0f || !std::isfinite(d)) d = 1e30f;
+
+            SstBlending b = compute_sst_blending(k_val, omega_val, d, rho, mu,
+                gk_x, gk_y, gk_z, gw_x, gw_y, gw_z);
+
+            Real mu_t = rho * k_val / (omega_val + 1e-30f);
+
+            const auto& pg = gpu_grads[i];
+            Real du_dx = pg.du_dx, du_dy = pg.du_dy, du_dz = pg.du_dz;
+            Real dv_dx = pg.dv_dx, dv_dy = pg.dv_dy, dv_dz = pg.dv_dz;
+            Real dw_dx = pg.dw_dx, dw_dy = pg.dw_dy, dw_dz = pg.dw_dz;
+            Real S11 = du_dx, S22 = dv_dy, S33 = dw_dz;
+            Real S12 = 0.5f * (du_dy + dv_dx);
+            Real S13 = 0.5f * (du_dz + dw_dx);
+            Real S23 = 0.5f * (dv_dz + dw_dy);
+            Real S_mag = std::sqrt(2.0f * (S11*S11 + S22*S22 + S33*S33
+                        + 2.0f * (S12*S12 + S13*S13 + S23*S23)) + 1e-30f);
+
+            SstSource s = compute_sst_source(k_val, omega_val, rho, mu_t, b, S_mag);
+
+            Real cpu_src_k = s.source_k;
+            Real cpu_src_w = s.source_w;
+            Real gpu_src_k = gpu_res_k[i];
+            Real gpu_src_w = gpu_res_w[i];
+
+            if (!std::isfinite(cpu_src_k) || !std::isfinite(cpu_src_w))
+                FAIL("non-finite CPU source at cell %zu", i);
+
+            Real dk = std::fabs(gpu_src_k - cpu_src_k);
+            Real dw = std::fabs(gpu_src_w - cpu_src_w);
+            Real base_k = 1.0f + std::max(std::fabs(gpu_src_k), std::fabs(cpu_src_k));
+            Real base_w = 1.0f + std::max(std::fabs(gpu_src_w), std::fabs(cpu_src_w));
+            if (dk / base_k > max_diff_k) { max_diff_k = dk / base_k; }
+            if (dw / base_w > max_diff_w) { max_diff_w = dw / base_w; worst_cell = i; }
+        }
+
+        if (max_diff_k > 1e-6f || max_diff_w > 1e-6f) {
+            std::size_t i = worst_cell;
+            PrimitiveState wc;
+            conservative_to_primitive(q[i], gamma, wc);
+            Real T = wc.p / std::max(wc.rho, Real(1e-30));
+            Real mu = sutherland_viscosity(T, T_ref, sutherland_T);
+            Real rho = wc.rho;
+            Real mu_t = rho * cpu_k[i] / (cpu_omega[i] + 1e-30f);
+
+            const auto& pg = gpu_grads[i];
+            Real du_dx = pg.du_dx, du_dy = pg.du_dy, du_dz = pg.du_dz;
+            Real dv_dx = pg.dv_dx, dv_dy = pg.dv_dy, dv_dz = pg.dv_dz;
+            Real dw_dx = pg.dw_dx, dw_dy = pg.dw_dy, dw_dz = pg.dw_dz;
+            Real S11 = du_dx, S22 = dv_dy, S33 = dw_dz;
+            Real S12 = 0.5f * (du_dy + dv_dx);
+            Real S13 = 0.5f * (du_dz + dw_dx);
+            Real S23 = 0.5f * (dv_dz + dw_dy);
+            Real S_mag_cpu = std::sqrt(2.0f * (S11*S11 + S22*S22 + S33*S33
+                        + 2.0f * (S12*S12 + S13*S13 + S23*S23)) + 1e-30f);
+
+            SstBlending b = compute_sst_blending(cpu_k[i], cpu_omega[i],
+                mesh.cells[i].wall_distance, rho, mu,
+                gpu_grad_k[i*3+0], gpu_grad_k[i*3+1], gpu_grad_k[i*3+2],
+                gpu_grad_w[i*3+0], gpu_grad_w[i*3+1], gpu_grad_w[i*3+2]);
+
+            SstSource cpu_s = compute_sst_source(cpu_k[i], cpu_omega[i], rho, mu_t, b, S_mag_cpu);
+
+            FAIL("CPU/GPU SST source_omega max rel diff=%g at cell %zu:\n"
+                 "  CPU: F1=%.6g F2=%.6g CD_kw=%.6g S_mag=%.6g src_k=%.6g src_w=%.6g\n"
+                 "  GPU: F1=%.6g F2=%.6g CD_kw=%.6g S_mag=%.6g src_k=%.6g src_w=%.6g\n"
+                 "  inputs: k=%.6g w=%.6g rho=%.6g mu=%.6g mu_t=%.6g d=%.6g center=(%.4g,%.4g,%.4g)\n"
+                 "  kGrad=(%.6g,%.6g,%.6g) wGrad=(%.6g,%.6g,%.6g)",
+                 max_diff_w, i,
+                 b.F1, b.F2, b.CD_kw, S_mag_cpu, cpu_s.source_k, cpu_s.source_w,
+                 diag_f1[i], diag_f2[i], diag_cdkw[i], diag_smag[i], diag_src_k[i], diag_src_w[i],
+                 cpu_k[i], cpu_omega[i], rho, mu, mu_t, mesh.cells[i].wall_distance,
+                 mesh.cells[i].cx, mesh.cells[i].cy, mesh.cells[i].cz,
+                 gpu_grad_k[i*3+0], gpu_grad_k[i*3+1], gpu_grad_k[i*3+2],
+                 gpu_grad_w[i*3+0], gpu_grad_w[i*3+1], gpu_grad_w[i*3+2]);
+        }
+
+        PASS;
+    }
+    return 0;
+}
+
 static int test_sst_laminar_regression() {
     TEST("CFD-TURB-SST-2 LAMINAR model regression (no SST allocation)");
     {
@@ -3674,6 +3881,7 @@ result |= test_recon_order2_converged_forces();
     result |= test_turbulence_model_enum();
     result |= test_ddes_length_scale();
     result |= test_sst_kernel_sanity();
+    result |= test_sst_cpu_gpu_source();
     result |= test_sst_laminar_regression();
     result |= test_sst_solver_sanity();
     result |= test_robust_nan_viscous_turb();

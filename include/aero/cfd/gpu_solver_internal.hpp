@@ -74,6 +74,11 @@ bool compute_sst_init_gpu(DeviceMesh& mesh,
 bool clear_sst_residual_gpu(DeviceMesh& mesh,
     std::string* error = nullptr, cudaStream_t stream = nullptr);
 
+bool compute_sst_diag_gpu(DeviceMesh& mesh, Real gamma, Real mu_ref, Real T_ref,
+    Real sutherland_T, Real* d_diag_f1, Real* d_diag_f2, Real* d_diag_cdkw,
+    Real* d_diag_smag, Real* d_diag_src_k, Real* d_diag_src_w,
+    std::string* error = nullptr, cudaStream_t stream = nullptr);
+
 bool compute_turbulence_source_gpu(DeviceMesh& mesh, const CfdConfig& config,
     int* d_failed, std::string* error = nullptr, cudaStream_t stream = nullptr,
     Real inf_k = 0.0f, Real inf_omega = 0.0f, Real inf_rho = 0.0f,
