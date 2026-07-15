@@ -61,7 +61,7 @@ All `cudaFree` calls pair with `cudaMalloc`. The `DeviceMesh` destructor release
 
 Analysis shows `release()` nulls pointers after `cuda_free_and_null`, and `cuda_free_and_null` guards against nullptr. No double-free possible.
 
-**PH2-C-3: Potential memory leak in compute_euler_residual_gpu_timed on cudaEventCreate failure** [HIGH]
+**PH2-C-3: Potential memory leak in compute_euler_residual_gpu_timed on cudaEventCreate failure** [HIGH] — FIXED (see PH2-B-1)
 `src/aero_cfd/cfd_residual_gpu.cu:290-292`
 
 If `cudaMalloc(&d_failed)` succeeds but `cudaEventCreate(&start)` fails at line 291, the `goto fail` path at line 306 calls `cudaEventDestroy(start)` (null, UB) and `cudaEventDestroy(stop)` (null, UB) and `cudaFree(d_failed)` (correct). But `d_failed` is correctly freed. The issue is the UB on event destroy, not a leak per se.
@@ -315,7 +315,7 @@ All 24 previously-fixed issues verified as correctly applied: PH2-A-1, PH2-A-2, 
 
 #### HIGH
 
-**PH3-H-1: CfdSolveSummary{true} silently reports success on allocation failure** [HIGH]
+**PH3-H-1: CfdSolveSummary{true} silently reports success on allocation failure** [HIGH] — FIXED
 `src/aero_cfd/gpu_solver.cu:149-152`
 
 `CfdSolveSummary{true}` uses aggregate initialization — `true` converts to `float(1.0f)` and initializes `CfdForceResult::CX`. The `failed` member stays `false` (default member initializer). If `cudaMalloc` fails, the caller receives a summary with `failed = false` and `forces.CX = 1.0f` (garbage).
@@ -1259,7 +1259,7 @@ int node_id = static_cast<int>(conn[...]) - 1 + base_offset;
 
 #### HIGH
 
-**AUDIT-FREE-H1: GPU BJ 限制器 + 梯度核缺少 nu_tilde 分量** [HIGH]
+**AUDIT-FREE-H1: GPU BJ 限制器 + 梯度核缺少 nu_tilde 分量** [HIGH] — FIXED
 `src/aero/cfd/reconstruction_gpu.cu:256-424`, `src/aero/cfd/reconstruction_gpu.cu:101-136,144-244`
 
 原报告仅覆盖 BJ 限制器管道（`update_minmax_kernel` / `bj_limiter_kernel` 不处理第 6 个变量 `nu_tilde`）。进一步审计发现 `gg_gradient_kernel_atomic` 和 `gg_gradient_kernel_colored` 同样缺失 nu_tilde 梯度计算——两个核函数均使用硬编码步长 15（rho/u/v/w/p），不累加 nu_tilde 梯度分量（索引 15-17）。
@@ -1268,19 +1268,19 @@ int node_id = static_cast<int>(conn[...]) - 1 + base_offset;
 
 修复：两个梯度核函数均添加 `d_rho_nu_tilde` 读取和 3 个 nu_tilde 梯度分量的 `atomicAdd` 累加。
 
-**AUDIT-FREE-H2: GPU RANS 用 powf/expf，双精度精度损失** [HIGH]
+**AUDIT-FREE-H2: GPU RANS 用 powf/expf，双精度精度损失** [HIGH] — FIXED
 `src/aero/cfd/gpu_rans.cu:109,114`
 
 `Real=double` 时 `powf`/`expf` 将中间结果截断为 float。`real.hpp` 无 `real_pow`/`real_exp` 包装器。
 
 影响：`AEROSIM_REAL_DOUBLE` 构建中 SA 源项失去 6 位有效数字，无法达到双精度收敛。
 
-**AUDIT-FREE-H3: GPU 检测错误后无效状态继续在内核间传播** [HIGH]
+**AUDIT-FREE-H3: GPU 检测错误后无效状态继续在内核间传播** [HIGH] — FIXED
 `src/aero/cfd/reconstruction_gpu.cu:265-273`
 
 `d_conservative_to_primitive` 失败时设置 `d_failed` 并写入哨兵值后 `return`。后续 `update_minmax_kernel`/`bj_limiter_kernel` 不检查 `d_failed`，继续使用可能无效的数据。错误仅在下一次 `cudaDeviceSynchronize` 被捕获。
 
-**AUDIT-FREE-H4: MPI_ENABLED 路径 CUDA 流泄漏** [HIGH]
+**AUDIT-FREE-H4: MPI_ENABLED 路径 CUDA 流泄漏** [HIGH] — FIXED
 `src/aero/cfd/gpu_solver.cu:76-79`
 
 ```cpp
@@ -1404,21 +1404,21 @@ GPU RANS 用 `powf`/`expf`，CPU 用 `std::pow`/`std::exp`。`real.hpp` 提供�
 
 #### Category A: Correctness Bugs
 
-**PH9-1-H1: NELEM 段出现面元素类型 (TRI/QUAD) 导致越界崩溃** [HIGH]
+**PH9-1-H1: NELEM 段出现面元素类型 (TRI/QUAD) 导致越界崩溃** [HIGH] — FIXED (su2_type==5||13 拒绝)
 `src/aero/cfd/mesh_io_su2.cpp:27-36`
 
 `su2_to_elem` 将 SU2 类型 5 (TRI, 3 节点) 和 13 (QUAD, 4 节点) 映射为 `ElementType::TET4`，但 `n_nodes` 分别设为 3/4。如果 SU2 文件在 `NELEM` 段（非 `NMARK`）包含 TRI 或 QUAD，`cell.node[3]` 保持默认值 -1，在 `compute_mesh_metrics()` 中 `mesh.nodes[-1]` 导致越界崩溃。
 
 Fix: 在 NELEM 解析路径拒绝类型 5/13: `if (su2_type == 5 || su2_type == 13) { err; return false; }`。
 
-**PH9-1-H2: 无节点索引范围检查** [HIGH]
+**PH9-1-H2: 无节点索引范围检查** [HIGH] — FIXED (ni <0 || >=nodes.size() 拒绝)
 `src/aero/cfd/mesh_io_su2.cpp:302`
 
 `cell.node[i] = std::stoi(tokens[2 + i])` 未验证节点索引在 `[0, mesh.nodes.size())` 内。负数或越界索引导致下游 `mesh.nodes[...]` 越界访问。
 
 Fix: 添加范围检查。
 
-**PH9-1-H3: 坐标值无 NaN/Inf 检查** [HIGH]
+**PH9-1-H3: 坐标值无 NaN/Inf 检查** [HIGH] — FIXED (std::isfinite 检查)
 `src/aero/cfd/mesh_io_su2.cpp:282-284`
 
 `std::stod` 解析后的坐标值未调用 `std::isfinite`。文件中的 NaN/Inf 坐标无声存入网格，污染后续所有计算。
