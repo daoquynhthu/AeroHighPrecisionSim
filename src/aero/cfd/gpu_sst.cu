@@ -403,26 +403,6 @@ __global__ void __launch_bounds__(256) sst_source_kernel(
     d_residual_omega[idx] += vol_w;
 }
 
-__device__ Real d_sst_F1(
-    Real k, Real omega, Real d, Real rho, Real mu,
-    Real gk_x, Real gk_y, Real gk_z,
-    Real gw_x, Real gw_y, Real gw_z)
-{
-    constexpr Real eps = 1e-30f;
-    Real d2 = d * d + eps;
-    Real sqrt_k = real_sqrt(k * k + eps * eps);
-    Real CD_kw = 2.0f * rho * sst_coeff::sigma_w2
-        * (gk_x * gw_x + gk_y * gw_y + gk_z * gw_z) / (omega + eps);
-    CD_kw = real_fmax(CD_kw, 1e-10f);
-    Real arg1a = sqrt_k / (sst_coeff::beta_star * omega * d + eps);
-    Real arg1b = 500.0f * mu / (rho * d2 * omega + eps);
-    Real arg1c = 4.0f * rho * sst_coeff::sigma_w2 * k / (CD_kw * d2 + eps);
-    Real Phi_1 = real_fmin(real_fmax(arg1a, arg1b), arg1c);
-    Real Phi_1_4 = Phi_1 * Phi_1 * Phi_1 * Phi_1;
-    Phi_1_4 = real_fmin(Phi_1_4, 80.0f);
-    return real_tanh(Phi_1_4);
-}
-
 __global__ void __launch_bounds__(128) sst_diffusion_kernel(
     const Real* d_q,
     const Real* d_q_k, const Real* d_q_omega,
