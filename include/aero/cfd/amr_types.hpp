@@ -38,12 +38,28 @@ struct CoarsenInfo {
     int n_children = 0;
 };
 
+// Geometrically-defined wake refinement cone
+struct WakeConeConfig {
+    Real origin_x = 0.0f;
+    Real origin_y = 0.0f;
+    Real origin_z = 0.0f;
+    Real axis_x = 1.0f;
+    Real axis_y = 0.0f;
+    Real axis_z = 0.0f;
+    Real half_angle_deg = 10.0f;
+    Real length = 1.0f;
+};
+
 struct AmrConfig {
     bool enabled = false;
     int interval = 50;
     int max_level = 5;
     Real refine_tol = 0.1f;
     Real coarsen_tol = 0.01f;
+    Real yplus_target = 1.0f;           // target y+ for wall-adjacent cells (y+ sensor)
+    Real tke_ratio_threshold = 0.05f;   // k / (0.5*U^2) threshold for TKE ratio sensor
+    Real shear_layer_threshold = 0.3f;  // resolved_k/(resolved_k+modeled_k) threshold for shear-layer sensor
+    WakeConeConfig wake_cone;           // wake refinement region (empty = disabled)
 };
 
 struct CfdMesh;

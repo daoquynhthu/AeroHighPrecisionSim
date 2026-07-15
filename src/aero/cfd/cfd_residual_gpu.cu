@@ -479,6 +479,7 @@ bool compute_euler_residual_gpu(
 
 std::size_t estimate_euler_residual_gpu_bytes(const CfdMesh& mesh) {
     std::size_t face_bytes = mesh.faces.size() * 7 * sizeof(Real);
+    std::size_t face_topology = mesh.faces.size() * 8 * sizeof(int);
     std::size_t state_reads = 0;
     for (const auto& face : mesh.faces) {
         state_reads += DeviceMesh::NVAR * sizeof(Real);
@@ -487,7 +488,7 @@ std::size_t estimate_euler_residual_gpu_bytes(const CfdMesh& mesh) {
         }
     }
     std::size_t residual_writes = state_reads;
-    return face_bytes + state_reads + residual_writes;
+    return face_bytes + face_topology + state_reads + residual_writes;
 }
 
 } // namespace cfd

@@ -1124,3 +1124,64 @@
 - SST-D5 (__ldg): all read-only array loads in all SST kernels wrapped with __ldg(). Covers d_face_vn, gradient/advection/source/diffusion/update/diag + colored variants. All 78/78 tests PASS.
 - SST-D6 (d_sst_F1 duplicate): removed dead d_sst_F1 device function (62 lines). compute_sst_blending() already serves all call sites as AEROSP_REAL_HOST_DEVICE. All 78/78 tests PASS.
 - All 29 SST audit items now CLOSED (CRITICAL:4, HIGH:5, MEDIUM:8, LOW:11, INFO:1).
+2026-07-15
+- Shifted from SST扫尾 to fixing remaining ISSUES.md items (MEDIUM priority).
+- Fixed AUDIT-FREE-M2: solve_3x3 tolerance 1e-12 → 1e-6 (2 occurrences in reconstruction.cpp:171,206). 21/21 reconstruction tests PASS.
+- Verified & marked FIXED: AUDIT-FREE-M1~M5 (include ordering, sa_omega_tilde dead code, GPU SA sigma_sa division, d_q_/d_limiters_ zeroing), PH8-2-B2/B3/C2 (type_device removed, CPU reference added to CFD-MESH-3D-GPU-3, per-buffer cleanup in allocate_halo), PH9-1-M1~M5, PH9-2-M1~M8, PH9-3-M1~M3 (all code-verified fixed).
+- Batch-added — FIXED markers to all remaining MEDIUM title lines that already had [FIXED date] on subsequent lines (PERF2-4~7,12, PH13-3/4, SST-A4/5/B4/C5/6/7, COV-7).
+- Truly unfixed MEDIUM remaining: 0 (all accounted; COV-7 needs CGNS test files which cannot be generated programmatically).
+2026-07-15
+- Fixed remaining 8 open LOW/INFO items:
+  - PH3-I-1: `estimate_euler_residual_gpu_bytes` now accounts for face topology int arrays (+8 ints/face).
+  - PH9-1-L5: FaceKey hash replaced shift-based formula with `hash_combine` (0x9e3779b9 + shift/xor) to avoid uint64 wrap at large node indices.
+  - PH9-2-I1: Added `(void)` casts for nbndry/parent_flag/data_size.
+  - PH9-2-I2: Zero-initialized CGNS name buffers + forced null termination.
+  - PH4-A-12, PH4-B-10, AUDIT-FREE-L5: Marked BY-DESIGN (different signatures, existing usage, legitimate duplication).
+  - PERF-G10: Marked WONTFIX (future CUDA architecture decision).
+- Build: missile_lib + TestCfdReconstruction (21/21) + TestCfdMesh (32/32) all PASS.
+
+2026-07-15 — Phase 13 [COMPLETE], Phase 14 started
+- ALL 29 SST audit items CLOSED (CRITICAL:4, HIGH:5, MEDIUM:8, LOW:11, INFO:1).
+- ALL remaining ISSUES.md items CRITICAL(10)/HIGH(23)/MEDIUM(~50)/LOW(~24)/INFO(~15) — zero OPEN.
+- Phase 13 PLAN.md header marked [COMPLETE]; remaining V&V test items deferred as long-term.
+- Phase 14 AMR Turbulence-Aware Extension formally started.
+- Gate satisfied: Phase 13 (DDES/SST) complete → Phase 14 dependency cleared.
+
+2026-07-15 — Phase 14.1: y+ sensor implemented
+- `AmrConfig` (amr_types.hpp): added `yplus_target` (default 1.0f).
+- `amr_sensor.hpp`: declared `compute_yplus_sensor()` taking mesh, state, config, gamma, Re, Sutherland params, turbulence_model.
+- `amr_sensor.cpp`: implemented y+ sensor. For wall-adjacent cells (NoSlipWall/SlipWall faces), estimates y+ via linear profile approximation: y+ = sqrt(Re·d·ρ·|u|)·√(μ_eff)/μ. SA/SA_DDES uses mu_eff = mu + rho·nu_tilde·fv1 (fv1 from chi³/(chi³+cv1³)). LAMINAR/SST: mu_eff=mu. Cells with y+ > yplus_target → Refine; y+ < 0.5·yplus_target and refinement_level>0 → Coarsen.
+- Tests: CFD-AMR-YPLUS-1 (coarse mesh → refine), YPLUS-2 (fine mesh + low Re → no refine), YPLUS-3 (y+ estimate range check) — 3/3 PASS.
+- Verification: TestCfdMesh 35/35 PASS (3 new, 32 existing).
+
+2026-07-15 — Phase 14.1: Q-criterion + wake cone sensors
+- `amr_sensor.hpp`: declared `compute_qcriterion_sensor()` and `compute_wake_cone_sensor()`, added `WakeConeConfig` struct.
+- `amr_sensor.cpp`: implemented Q-criterion sensor — reuses `compute_green_gauss_gradients` for velocity gradient tensor, computes Q = -0.5*(du/dx²+dv/dy²+dw/dz²) - du/dy·dv/dx - du/dz·dw/dx - dv/dz·dw/dy, normalizes thresholds by max|Q| across domain. Implemented wake cone sensor — geometric cone test: project cell centroid onto cone axis, check perpendicular distance ≤ radius at projection point; cells inside flagged Refine.
+- Tests: QCRIT-1 (uniform → 0 refine), QCRIT-2 (rotational flow u=0.5-0.3y, v=0.3x → 2688/2688 refine), WAKE-1 (45° cone from x=-2 → 472/912 refine), WAKE-2 (1° cone → 0 refine) — 4/4 PASS.
+- Verification: TestCfdMesh 39/39 PASS (4 new, 35 existing).
+
+2026-07-15 — Phase 14.1: TKE ratio sensor + SensorType enum
+- `amr_sensor.hpp`: added `SensorType` enum (`GRADIENT, CURVATURE, YPLUS, Q_CRITERION, TKE_RATIO`), declared `compute_tke_ratio_sensor()`.
+- `amr_sensor.cpp`: implemented TKE ratio sensor — computes k/(0.5·U²) per cell; SST reads k from optional `sst_k` vector; non-SST models return no-op. Cells with ratio > threshold flagged Refine; ratio < 0.5·threshold and level>0 flagged Coarsen.
+- Tests: TKE-1 (k=0.02, U=0.5 → ratio=0.16 > 0.05 → 912/912 refine), TKE-2 (LAMINAR → no refine), TKE-3 (SST zero k → no refine) — 3/3 PASS.
+- Verification: TestCfdMesh 42/42 PASS (3 new, 39 existing).
+
+2026-07-15 — Phase 14.2: Turbulence-aware AMR solver loop integration
+- `amr_types.hpp`: moved `WakeConeConfig` struct here from `amr_sensor.hpp`; added `wake_cone` and `tke_ratio_threshold` fields to `AmrConfig`.
+- `amr_sensor.hpp`: added `SensorType` enum, declared `merge_refinement_requests()`.
+- `amr_sensor.cpp`: implemented `merge_refinement_requests()` — OR logic for Refine, consensus for Coarsen.
+- `cfd_solver.cpp`: AMR loop now calls 5 sensors (gradient, y+, Q-criterion, wake cone, TKE ratio) and merges results. Turbulence sensors activate only for non-LAMINAR models (preserving Phase 12 regression). SA nu_tilde clamped to ≥ 1e-8 on newly created/coarsened cells.
+- Tests: CFD-EULER-13 LAMINAR AMR regression (solver converges, mesh refines, finite result) — 1/1 PASS.
+- Verification: TestCfdEuler 15/15 PASS, TestCfdMesh 42/42 PASS, TestCfdViscous 11/11, TestCfdReconstruction 21/21, TestCfdRans 16/16 — all PASS.
+
+2026-07-15
+- Bugfix: `compute_shear_layer_sensor` used `cell_ratio[i]` default-initialized to 0 for skipped cells (modeled_k < 1e-14), causing false Refine flag. Changed sentinel to -1 and skip r < 0 in threshold loop. All 45/45 TestCfdMesh PASS; SL-3 now correctly shows refine=0 for uniform flow.
+- 14.1 completion audit: added `shear_layer_threshold` to `AmrConfig`; wired TKE ratio sensor (#5) and shear-layer sensor (#6) into `cfd_solver.cpp` AMR loop (both guarded by threshold > 0 and non-LAMINAR). Updated PLAN.md task checklist (shear-layer → [x], SensorType updated). All 5 CPU test suites PASS: TestCfdMesh 45/45, TestCfdEuler 15/15, TestCfdViscous 11/11, TestCfdReconstruction 21/21, TestCfdRans 16/16.
+
+2026-07-15
+- Debugged TURB-2 multi-sensor AMR failure (cube M=2.0 SA + AMR crashed at iter=11).
+- Root cause: `build_old_to_new_map` in `amr_interpolate.cpp` assumed "children first, unchanged cells after" layout, but `refine_cells` interleaves children with unchanged cells in original cell-index order. Children were mapped to wrong old-cell parents, causing garbage prolongation and solver divergence.
+- Fixed: `build_old_to_new_map` now scans all cells old-to-new, mapping each new cell_id to old parent_id regardless of children vs unchanged ordering. `prolongate_solution_order2` NaN fallback widened — previously only checked `nu_tilde` for finiteness, now checks all 6 primitive components. Both fixes were needed; the NaN fallback was a secondary symptom, the mapping bug was primary.
+- Cleanup: removed forced 1st-order injection (debug workaround), removed Q_OLD_BAD/BAD post-AMR diagnostic prints, removed fallback printf counters from `amr_interpolate.cpp`.
+- Re-enabled 2nd-order prolongation (`prolongate_solution_order2`) in solver AMR branch.
+- Verification: TestCfdMesh 47/47 all PASS. TURB-2 now shows `before=3024 after=6601 res=4.04e-02 ratio=2.18` (stable solver + AMR through all iterations).

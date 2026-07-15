@@ -168,7 +168,7 @@ bool solve_3x3(Real a[3][3], Real b[3], Real x[3]) {
         }
         Real col_max = 0.0f;
         for (int r = 0; r < 3; ++r) col_max = (std::fabs(m[r][col]) > col_max) ? std::fabs(m[r][col]) : col_max;
-        if (col_max < Real(1e-30) || std::fabs(m[pivot][col]) < col_max * Real(1e-12)) return false;
+        if (col_max < Real(1e-30) || std::fabs(m[pivot][col]) < col_max * Real(1e-6)) return false;
         if (pivot != col) {
             for (int j = col; j < 4; ++j) std::swap(m[col][j], m[pivot][j]);
         }
@@ -203,7 +203,7 @@ bool lu_factor_3x3(const Real a[3][3], Real lu[3][3], int pivot[3]) {
         Real col_max = 0.0f;
         for (int r = k; r < 3; ++r)
             col_max = std::max(col_max, std::fabs(lu[r][k]));
-        if (col_max < Real(1e-30) || max_abs < col_max * Real(1e-12)) return false;
+        if (col_max < Real(1e-30) || max_abs < col_max * Real(1e-6)) return false;
 
         if (p != k) {
             for (int j = 0; j < 3; ++j) std::swap(lu[k][j], lu[p][j]);

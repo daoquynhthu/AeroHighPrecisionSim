@@ -101,9 +101,10 @@ bool read_mesh_cgns(const std::string& path, CfdMesh& mesh, std::string* err) {
         CGNS_CALL(cg_nbases(fn, &nbases), (void)0);
         if (nbases < 1) { if (err) *err = "CGNS file has no base"; return false; }
 
-        char basename[33];
+        char basename[33] = {};
         int celldim, physdim;
         CGNS_CALL(cg_base_read(fn, 1, basename, &celldim, &physdim), (void)0);
+        basename[sizeof(basename) - 1] = '\0';
         if (celldim != 3 || physdim != 3) {
             if (err) *err = "CGNS: only 3D meshes supported";
             return false;
@@ -179,11 +180,13 @@ bool read_mesh_cgns(const std::string& path, CfdMesh& mesh, std::string* err) {
                 CGNS_CALL(cg_nsections(fn, 1, Z, &nsections), (void)0);
 
                 for (int S = 1; S <= nsections; ++S) {
-                    char secname[33];
+                    char secname[33] = {};
                     ElementType_t elem_type;
                     cgsize_t start, end;
                     int nbndry, parent_flag;
                     CGNS_CALL(cg_section_read(fn, 1, Z, S, secname, &elem_type, &start, &end, &nbndry, &parent_flag), (void)0);
+                    secname[sizeof(secname) - 1] = '\0';
+                    (void)nbndry; (void)parent_flag;
 
                     cgsize_t nelem64 = end - start + 1;
                     if (nelem64 > INT_MAX) { if (err) *err = "CGNS: too many elements in section"; return false; }
@@ -199,6 +202,7 @@ bool read_mesh_cgns(const std::string& path, CfdMesh& mesh, std::string* err) {
                     std::vector<cgsize_t> conn(total_conn);
                     cgsize_t data_size;
                     CGNS_CALL(cg_elements_read(fn, 1, Z, S, &conn[0], &data_size), (void)0);
+                    (void)data_size;
 
                     bool is_volume = (elem_type == TETRA_4 || elem_type == HEXA_8 ||
                                       elem_type == PENTA_6 || elem_type == PYRA_5);
@@ -235,7 +239,7 @@ bool read_mesh_cgns(const std::string& path, CfdMesh& mesh, std::string* err) {
                 CGNS_CALL(cg_nbocos(fn, 1, Z, &nbocos), (void)0);
 
                 for (int BC = 1; BC <= nbocos; ++BC) {
-                    char boconame[33];
+                    char boconame[33] = {};
                     BCType_t bocotype;
                     PointSetType_t ptset_type;
                     cgsize_t npnts, normal_list_size;

@@ -150,9 +150,10 @@ struct FaceKey {
 };
 struct FaceKeyHash {
     std::size_t operator()(const FaceKey& key) const {
-        std::uint64_t h = static_cast<std::uint64_t>(key.n);
-        for (int i = 0; i < 4; ++i) h ^= static_cast<std::uint64_t>(key.v[i]) << (i * 11);
-        return static_cast<std::size_t>(h);
+        std::size_t h = static_cast<std::size_t>(key.n);
+        for (int i = 0; i < 4; ++i)
+            h ^= static_cast<std::size_t>(key.v[i]) + 0x9e3779b9 + (h << 6) + (h >> 2);
+        return h;
     }
 };
 struct PendingFace {

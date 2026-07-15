@@ -15,25 +15,30 @@ namespace cfd {
 std::vector<int> build_old_to_new_map(
     const CfdMesh& mesh_old,
     const std::vector<RefinementRecord>& records,
-    int n_coarsened_parents) {
+    int /*n_coarsened_parents*/) {
 
     int n_old = static_cast<int>(mesh_old.cells.size());
     std::vector<int> old_to_new(n_old, -1);
 
+    // Which old cells are replaced by their children?
     std::vector<bool> replaced(n_old, false);
     for (const auto& rec : records) {
         if (rec.parent_cell_id >= 0 && rec.parent_cell_id < n_old)
             replaced[rec.parent_cell_id] = true;
     }
 
-    int n_children = 0;
-    for (const auto& rec : records) n_children += rec.n_children;
-
-    int idx = n_children + n_coarsened_parents;  // children + coarsened parents first, then unchanged cells
+    // Match the actual layout produced by refine_cells:
+    //   For each old cell in order:
+    //     If replaced → 8 children occupy indices cur..cur+7
+    //     If unchanged → 1 cell occupies index cur
+    //   Then coarsened parents are appended (not mapped here)
+    int cur = 0;
     for (int ci = 0; ci < n_old; ++ci) {
-        if (!replaced[ci]) {
-            old_to_new[ci] = idx;
-            ++idx;
+        if (replaced[ci]) {
+            cur += 8;  // children occupy positions, skip them
+        } else {
+            old_to_new[ci] = cur;
+            ++cur;
         }
     }
 
@@ -113,9 +118,21 @@ void prolongate_solution_order2(
 
             PrimitiveState w_child = reconstruct_primitive(wp, gp, dx, dy, dz);
 
-            // Fall back to injection if reconstruction is invalid
-            if (w_child.rho <= 0.0f || w_child.p <= 0.0f) {
+            // Fall back to injection if reconstruction produces invalid state.
+            // NaN checks use !real_isfinite because IEEE 754 NaN <= 0 is false.
+            if (w_child.rho <= 0.0f || w_child.p <= 0.0f ||
+                !real_isfinite(w_child.rho) || !real_isfinite(w_child.p) ||
+                !real_isfinite(w_child.nu_tilde) ||
+                !real_isfinite(w_child.u) || !real_isfinite(w_child.v) || !real_isfinite(w_child.w)) {
+                // Use injection — parent state is always valid
                 q_new[child_id] = q_old[parent_id];
+                // Ensure nu_tilde >= 1e-8 on SA child cells
+                if (w_child.rho > 0.0f) {
+                    PrimitiveState wc;
+                    if (conservative_to_primitive(q_new[child_id], gamma, wc) &&
+                        wc.nu_tilde < Real(1e-8))
+                        q_new[child_id].rho_nu_tilde = wc.rho * Real(1e-8);
+                }
             } else {
                 q_new[child_id] = primitive_to_conservative(w_child, gamma);
             }

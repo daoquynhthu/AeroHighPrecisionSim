@@ -561,12 +561,57 @@ CfdSolveSummary CfdSolver::solve_from_state(
             CfdMesh mesh_old = mesh_;
             std::vector<ConservativeState> q_old = q;
 
-            auto requests = compute_gradient_sensor(mesh_, q, config.amr, config.gamma);
+            // Collect refinement requests from all active sensors
+            std::vector<std::vector<RefinementRequest>> sensor_outputs;
+
+            // 1. Euler gradient sensor (density/pressure/velocity jumps) — always active
+            sensor_outputs.push_back(
+                compute_gradient_sensor(mesh_, q, config.amr, config.gamma));
+
+            // Turbulence-aware sensors only activate for non-LAMINAR models.
+            // For LAMINAR this preserves exact Phase 12 regression behavior.
+            if (config.turbulence_model != TurbulenceModel::LAMINAR) {
+                // 2. y+ sensor (wall-adjacent cells)
+                if (config.amr.yplus_target > Real(0)) {
+                    sensor_outputs.push_back(
+                        compute_yplus_sensor(mesh_, q, config.amr, config.gamma,
+                            config.Re, config.mu_ref, config.T_ref,
+                            config.sutherland_T, config.turbulence_model));
+                }
+
+                // 3. Q-criterion sensor (vortex/wake detection)
+                sensor_outputs.push_back(
+                    compute_qcriterion_sensor(mesh_, q, config.amr, config.gamma));
+
+                // 4. Wake cone sensor (geometric refinement region)
+                if (config.amr.wake_cone.length > Real(0)) {
+                    sensor_outputs.push_back(
+                        compute_wake_cone_sensor(mesh_, config.amr, config.amr.wake_cone));
+                }
+
+                // 5. TKE ratio sensor (k / 0.5*U² — requires SST k data; no-op for
+                //    non-SST models via nullptr sst_k)
+                if (config.amr.tke_ratio_threshold > Real(0)) {
+                    sensor_outputs.push_back(
+                        compute_tke_ratio_sensor(mesh_, q, config.amr, config.gamma,
+                            config.turbulence_model, nullptr,
+                            config.amr.tke_ratio_threshold));
+                }
+
+                // 6. Shear-layer sensor (resolved_k / (resolved_k + modeled_k) ratio)
+                if (config.amr.shear_layer_threshold > Real(0)) {
+                    sensor_outputs.push_back(
+                        compute_shear_layer_sensor(mesh_, q, config.amr, config.gamma,
+                            config.turbulence_model, nullptr,
+                            config.amr.shear_layer_threshold));
+                }
+            }
+
+            // Merge all sensor outputs: Refine dominates, all Coarsen → Coarsen
+            auto requests = merge_refinement_requests(sensor_outputs);
 
             // Enforce 2:1 balance after coarsening: prevent coarsening a cell if
             // a face neighbor at a higher refinement level is not also being coarsened.
-            // (Coarsening would drop the cell's level by 1, potentially creating
-            //  a level difference > 1 with neighbors that stay at their current level.)
             {
                 std::vector<bool> is_coarsening_request(mesh_.cells.size(), false);
                 for (const auto& req : requests)
@@ -605,6 +650,19 @@ CfdSolveSummary CfdSolver::solve_from_state(
                     } else {
                         prolongate_solution(q_old, mesh_old, mesh_, new_records, q);
                     }
+                    // Clamp turbulence variables on newly created cells
+                    for (const auto& rec : new_records) {
+                        for (int c = 0; c < rec.n_children; ++c) {
+                            int child_id = rec.child_cell_ids[c];
+                            if (child_id < 0 || child_id >= static_cast<int>(q.size())) continue;
+                            if (config.turbulence_model == TurbulenceModel::SA ||
+                                config.turbulence_model == TurbulenceModel::SA_DDES) {
+                                PrimitiveState wc;
+                                if (conservative_to_primitive(q[child_id], config.gamma, wc) && wc.nu_tilde < Real(1e-8))
+                                    q[child_id].rho_nu_tilde = wc.rho * Real(1e-8);
+                            }
+                        }
+                    }
                     for (const auto& ci : coarsen_info) {
                         Real vol_sum = 0.0f;
                         ConservativeState avg;
@@ -626,6 +684,13 @@ CfdSolveSummary CfdSolver::solve_from_state(
                             avg.rho_w *= inv; avg.rho_E *= inv; avg.rho_nu_tilde *= inv;
                         }
                         q[ci.new_parent_id] = avg;
+                        // Clamp turbulence on coarsened parent
+                        if (config.turbulence_model == TurbulenceModel::SA ||
+                            config.turbulence_model == TurbulenceModel::SA_DDES) {
+                            PrimitiveState wc;
+                            if (conservative_to_primitive(q[ci.new_parent_id], config.gamma, wc) && wc.nu_tilde < Real(1e-8))
+                                q[ci.new_parent_id].rho_nu_tilde = wc.rho * Real(1e-8);
+                        }
                     }
                     amr_records.insert(amr_records.end(), new_records.begin(), new_records.end());
                     if (!coarsen_info.empty()) {

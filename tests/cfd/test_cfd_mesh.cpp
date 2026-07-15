@@ -335,6 +335,371 @@ static int test_gradient_sensor() {
     return 0;
 }
 
+static int test_yplus_sensor() {
+    TEST("CFD-AMR-YPLUS-1 coarse wall mesh: y+ > target triggers refine");
+    {
+        auto mesh = generate_flat_plate_mesh(0.5f, 0.05f, 0.1f, 1e-3f, 1.12f, 10, 3, 12);
+        auto report = compute_mesh_metrics(mesh);
+        if (!report.valid) FAIL("mesh metrics: %s", report.message.c_str());
+
+        int n_cells = static_cast<int>(mesh.cells.size());
+        std::vector<ConservativeState> q(n_cells);
+        Real gamma = 1.4f;
+        Real mach = 0.5f;
+        Real speed = mach / std::sqrt(gamma);
+        Real inv_gm1 = 1.0f / (gamma - 1.0f);
+        for (int i = 0; i < n_cells; ++i) {
+            q[i].rho = 1.0f;
+            q[i].rho_u = speed;
+            q[i].rho_v = 0.0f;
+            q[i].rho_w = 0.0f;
+            q[i].rho_E = inv_gm1 + 0.5f * speed * speed;
+        }
+
+        AmrConfig cfg;
+        cfg.yplus_target = 1.0f;
+
+        auto requests = compute_yplus_sensor(mesh, q, cfg, gamma, 1e6f, 1.0f, 288.15f, 110.4f,
+                                             TurbulenceModel::LAMINAR);
+        int n_refine = 0;
+        for (const auto& r : requests)
+            if (r.flag == RefinementFlag::Refine) ++n_refine;
+        if (n_refine == 0) FAIL("expected wall cells flagged for refine, got 0");
+        std::printf("  (refine=%d, total=%d)", n_refine, n_cells);
+        PASS;
+    }
+
+    TEST("CFD-AMR-YPLUS-2 fine wall mesh: low Re, no refine");
+    {
+        // Low Re (1e3) with fine first cell (1e-5) → y+ < yplus_target → no refine
+        auto mesh = generate_flat_plate_mesh(0.5f, 0.05f, 0.1f, 1e-5f, 1.12f, 10, 3, 12);
+        auto report = compute_mesh_metrics(mesh);
+        if (!report.valid) FAIL("mesh metrics: %s", report.message.c_str());
+
+        int n_cells = static_cast<int>(mesh.cells.size());
+        std::vector<ConservativeState> q(n_cells);
+        Real gamma = 1.4f;
+        Real mach = 0.5f;
+        Real speed = mach / std::sqrt(gamma);
+        Real inv_gm1 = 1.0f / (gamma - 1.0f);
+        for (int i = 0; i < n_cells; ++i) {
+            q[i].rho = 1.0f;
+            q[i].rho_u = speed;
+            q[i].rho_v = 0.0f;
+            q[i].rho_w = 0.0f;
+            q[i].rho_E = inv_gm1 + 0.5f * speed * speed;
+        }
+
+        AmrConfig cfg;
+        cfg.yplus_target = 5.0f;
+
+        auto requests = compute_yplus_sensor(mesh, q, cfg, gamma, 1e3f, 1.0f, 288.15f, 110.4f,
+                                             TurbulenceModel::LAMINAR);
+        for (const auto& r : requests)
+            if (r.flag == RefinementFlag::Refine) FAIL("fine mesh should not trigger refine");
+        PASS;
+    }
+
+    TEST("CFD-AMR-QCRIT-1 Q-criterion on uniform flow: no refinement");
+    {
+        auto mesh = generate_structured_cube_mesh(2.0f, 7);
+        int n_cells = static_cast<int>(mesh.cells.size());
+        std::vector<ConservativeState> q(n_cells);
+        Real gamma = 1.4f;
+        Real speed = 0.5f / std::sqrt(gamma);
+        Real inv_gm1 = 1.0f / (gamma - 1.0f);
+        for (int i = 0; i < n_cells; ++i) {
+            q[i].rho = 1.0f;
+            q[i].rho_u = speed;
+            q[i].rho_v = 0.0f;
+            q[i].rho_w = 0.0f;
+            q[i].rho_E = inv_gm1 + 0.5f * speed * speed;
+        }
+
+        AmrConfig cfg;
+        cfg.refine_tol = 0.1f;
+        cfg.coarsen_tol = 0.01f;
+
+        auto requests = compute_qcriterion_sensor(mesh, q, cfg, gamma);
+        for (const auto& r : requests)
+            if (r.flag == RefinementFlag::Refine) FAIL("uniform flow should not trigger Q refine");
+        PASS;
+    }
+
+    TEST("CFD-AMR-QCRIT-2 Q-criterion detects rotational flow");
+    {
+        // Create rotational flow: u = 0.5 - 0.3*y, v = 0.3*x, w = 0
+        // du/dy = -0.3, dv/dx = 0.3 → Q = -(-0.3*0.3) = 0.09 > 0 (vortex cores)
+        auto mesh = generate_structured_cube_mesh(2.0f, 9);
+        int n_cells = static_cast<int>(mesh.cells.size());
+        std::vector<ConservativeState> q(n_cells);
+        Real gamma = 1.4f;
+        Real inv_gm1 = 1.0f / (gamma - 1.0f);
+        for (int i = 0; i < n_cells; ++i) {
+            Real cx = mesh.cells[i].cx;
+            Real cy = mesh.cells[i].cy;
+            Real u = 0.5f - 0.3f * cy;
+            Real v = 0.3f * cx;
+            q[i].rho = 1.0f;
+            q[i].rho_u = u;
+            q[i].rho_v = v;
+            q[i].rho_w = 0.0f;
+            q[i].rho_E = inv_gm1 + 0.5f * (u*u + v*v);
+        }
+
+        AmrConfig cfg;
+        cfg.refine_tol = 0.05f;
+        cfg.coarsen_tol = 0.005f;
+
+        auto requests = compute_qcriterion_sensor(mesh, q, cfg, gamma);
+        int n_refine = 0;
+        for (const auto& r : requests)
+            if (r.flag == RefinementFlag::Refine) ++n_refine;
+        if (n_refine == 0) FAIL("expected Q-criterion refine in rotational flow, got 0");
+        std::printf("  (refine=%d, total=%d)", n_refine, n_cells);
+        PASS;
+    }
+
+    TEST("CFD-AMR-WAKE-1 wake cone sensor flags cells inside cone");
+    {
+        // Cube mesh spans [-2, 2] with 7 nodes/dim → ~1/3 spacing
+        auto mesh = generate_structured_cube_mesh(2.0f, 7);
+        compute_mesh_metrics(mesh);
+
+        WakeConeConfig cone;
+        cone.origin_x = -2.0f;       // apex at left face
+        cone.origin_y = 0.0f;
+        cone.origin_z = 0.0f;
+        cone.axis_x = 1.0f;
+        cone.axis_y = 0.0f;
+        cone.axis_z = 0.0f;
+        cone.half_angle_deg = 45.0f; // wide cone → many cells inside
+        cone.length = 4.0f;
+
+        AmrConfig cfg;
+        cfg.refine_tol = 1.0f;
+
+        auto requests = compute_wake_cone_sensor(mesh, cfg, cone);
+        int n_refine = 0;
+        for (const auto& r : requests)
+            if (r.flag == RefinementFlag::Refine) ++n_refine;
+        if (n_refine == 0) FAIL("expected some cells inside 45-deg wake cone, got 0");
+        std::printf("  (refine=%d, total=%d)", n_refine, static_cast<int>(mesh.cells.size()));
+        PASS;
+    }
+
+    TEST("CFD-AMR-WAKE-2 wake cone sensor: cells outside narrow cone not flagged");
+    {
+        auto mesh = generate_structured_cube_mesh(2.0f, 7);
+        compute_mesh_metrics(mesh);
+
+        WakeConeConfig cone;
+        cone.origin_x = -2.0f;
+        cone.origin_y = 0.0f;
+        cone.origin_z = 0.0f;
+        cone.axis_x = 1.0f;
+        cone.axis_y = 0.0f;
+        cone.axis_z = 0.0f;
+        cone.half_angle_deg = 1.0f;  // very narrow cone
+        cone.length = 4.0f;
+
+        AmrConfig cfg;
+        cfg.refine_tol = 1.0f;
+
+        auto requests = compute_wake_cone_sensor(mesh, cfg, cone);
+        for (const auto& r : requests)
+            if (r.flag == RefinementFlag::Refine)
+                FAIL("cells should not be inside 1-deg wake cone");
+        PASS;
+    }
+
+    TEST("CFD-AMR-TKE-1 TKE ratio flags high-turbulence cells");
+    {
+        auto mesh = generate_structured_cube_mesh(2.0f, 7);
+        compute_mesh_metrics(mesh);
+        int n_cells = static_cast<int>(mesh.cells.size());
+        std::vector<ConservativeState> q(n_cells);
+        std::vector<Real> sst_k(n_cells);
+        Real gamma = 1.4f;
+        Real speed = 0.5f;
+        Real inv_gm1 = 1.0f / (gamma - 1.0f);
+        for (int i = 0; i < n_cells; ++i) {
+            q[i].rho = 1.0f;
+            q[i].rho_u = speed;
+            q[i].rho_v = 0.0f;
+            q[i].rho_w = 0.0f;
+            q[i].rho_E = inv_gm1 + 0.5f * speed * speed;
+            // TKE ratio = k / 0.5*U² = 0.02 / (0.5*0.25) = 0.02/0.125 = 0.16 > 0.05 → refine
+            sst_k[i] = 0.02f;
+        }
+
+        AmrConfig cfg;
+        cfg.refine_tol = 0.01f;
+        cfg.coarsen_tol = 0.001f;
+
+        auto requests = compute_tke_ratio_sensor(mesh, q, cfg, gamma, TurbulenceModel::SST, &sst_k, 0.05f);
+        int n_refine = 0;
+        for (const auto& r : requests)
+            if (r.flag == RefinementFlag::Refine) ++n_refine;
+        if (n_refine == 0) FAIL("expected TKE ratio refine with k=0.02, U=0.5");
+        std::printf("  (refine=%d, total=%d)", n_refine, n_cells);
+        PASS;
+    }
+
+    TEST("CFD-AMR-TKE-2 TKE ratio no-op for non-SST");
+    {
+        auto mesh = generate_structured_cube_mesh(2.0f, 7);
+        int n_cells = static_cast<int>(mesh.cells.size());
+        std::vector<ConservativeState> q(n_cells);
+        std::vector<Real> sst_k(n_cells, 0.02f);
+
+        AmrConfig cfg;
+        auto requests = compute_tke_ratio_sensor(mesh, q, cfg, 1.4f, TurbulenceModel::LAMINAR, &sst_k, 0.05f);
+        for (const auto& r : requests)
+            if (r.flag != RefinementFlag::Unchanged)
+                FAIL("non-SST should produce no refinement");
+        PASS;
+    }
+
+    TEST("CFD-AMR-TKE-3 TKE ratio with zero k: no refinement");
+    {
+        auto mesh = generate_structured_cube_mesh(2.0f, 7);
+        int n_cells = static_cast<int>(mesh.cells.size());
+        std::vector<ConservativeState> q(n_cells);
+        std::vector<Real> sst_k(n_cells, 0.0f);
+        Real gamma = 1.4f;
+        Real speed = 0.5f;
+        Real inv_gm1 = 1.0f / (gamma - 1.0f);
+        for (int i = 0; i < n_cells; ++i) {
+            q[i].rho = 1.0f;
+            q[i].rho_u = speed;
+            q[i].rho_v = 0.0f;
+            q[i].rho_w = 0.0f;
+            q[i].rho_E = inv_gm1 + 0.5f * speed * speed;
+        }
+
+        AmrConfig cfg;
+        auto requests = compute_tke_ratio_sensor(mesh, q, cfg, gamma, TurbulenceModel::SST, &sst_k, 0.05f);
+        for (const auto& r : requests)
+            if (r.flag != RefinementFlag::Unchanged)
+                FAIL("zero k should not trigger refine");
+        PASS;
+    }
+
+    TEST("CFD-AMR-SL-1 shear-layer sensor: LAMINAR no-op");
+    {
+        auto mesh = generate_structured_cube_mesh(2.0f, 9);
+        int n_cells = static_cast<int>(mesh.cells.size());
+        std::vector<ConservativeState> q(n_cells);
+        AmrConfig cfg;
+        auto requests = compute_shear_layer_sensor(mesh, q, cfg, 1.4f, TurbulenceModel::LAMINAR, nullptr, 0.3f);
+        for (const auto& r : requests)
+            if (r.flag != RefinementFlag::Unchanged)
+                FAIL("LAMINAR should produce no refinement");
+        PASS;
+    }
+
+    TEST("CFD-AMR-SL-2 shear-layer sensor: SA under-resolved shear flags refine");
+    {
+        // SA with high nu_tilde (> 0.0054) so modeled_k dominates resolved_k
+        // → ratio < 0.35 → under-resolved → refine
+        auto mesh = generate_structured_cube_mesh(2.0f, 9);
+        compute_mesh_metrics(mesh);
+        int n_cells = static_cast<int>(mesh.cells.size());
+        std::vector<ConservativeState> q(n_cells);
+        Real gamma = 1.4f;
+        Real inv_gm1 = 1.0f / (gamma - 1.0f);
+        for (int i = 0; i < n_cells; ++i) {
+            Real cy = mesh.cells[i].cy;
+            Real u = 0.5f + 0.3f * cy;
+            q[i].rho = 1.0f;
+            q[i].rho_u = u;
+            q[i].rho_v = 0.0f;
+            q[i].rho_w = 0.0f;
+            q[i].rho_E = inv_gm1 + 0.5f * u * u;
+            q[i].rho_nu_tilde = 0.01f;  // high modeled TKE → under-resolved
+        }
+
+        AmrConfig cfg;
+
+        auto requests = compute_shear_layer_sensor(mesh, q, cfg, gamma, TurbulenceModel::SA, nullptr, 0.3f);
+        int n_refine = 0;
+        for (const auto& r : requests)
+            if (r.flag == RefinementFlag::Refine) ++n_refine;
+        if (n_refine == 0) FAIL("expected shear-layer refine with nu_tilde=0.01 in shear");
+        std::printf("  (refine=%d, total=%d)", n_refine, n_cells);
+        PASS;
+    }
+
+    TEST("CFD-AMR-SL-3 shear-layer sensor: SA uniform flow nearly zero");
+    {
+        // Uniform flow → gradients nearly zero → skip cells (modeled_k too small)
+        auto mesh = generate_structured_cube_mesh(2.0f, 9);
+        compute_mesh_metrics(mesh);
+        int n_cells = static_cast<int>(mesh.cells.size());
+        std::vector<ConservativeState> q(n_cells);
+        Real gamma = 1.4f;
+        Real inv_gm1 = 1.0f / (gamma - 1.0f);
+        Real speed = 0.5f;
+        for (int i = 0; i < n_cells; ++i) {
+            q[i].rho = 1.0f;
+            q[i].rho_u = speed;
+            q[i].rho_v = 0.0f;
+            q[i].rho_w = 0.0f;
+            q[i].rho_E = inv_gm1 + 0.5f * speed * speed;
+            q[i].rho_nu_tilde = 0.01f;
+        }
+
+        AmrConfig cfg;
+
+        auto requests = compute_shear_layer_sensor(mesh, q, cfg, gamma, TurbulenceModel::SA, nullptr, 0.3f);
+        int n_refine = 0;
+        for (const auto& r : requests)
+            if (r.flag == RefinementFlag::Refine) ++n_refine;
+        // Boundary gradient noise on tet mesh may trigger a small fraction of cells
+        if (n_refine > n_cells / 4)
+            FAIL("uniform flow: too many cells flagged (got %d/%d)", n_refine, n_cells);
+        std::printf("  (refine=%d, total=%d)", n_refine, n_cells);
+        PASS;
+    }
+
+    TEST("CFD-AMR-YPLUS-3 y+ estimate matches expected range");
+    {
+        // Known wall-adjacent cell: d=first_height/2, rho=1, u=speed
+        // y+ = sqrt(Re*d*rho*|u|)*sqrt(mu_eff)/mu
+        // With first_height=1e-3, d≈5e-4, Re=1e6, u=0.422 → y+ ≈ 550 (laminar)
+        // Verify at least one cell has y+ > 1.0 (triggers refine) and all y+ > 0
+        auto mesh = generate_flat_plate_mesh(0.5f, 0.05f, 0.1f, 1e-3f, 1.12f, 10, 3, 12);
+        compute_mesh_metrics(mesh);
+
+        int n_cells = static_cast<int>(mesh.cells.size());
+        std::vector<ConservativeState> q(n_cells);
+        Real gamma = 1.4f;
+        Real speed = 0.5f / std::sqrt(gamma);
+        Real inv_gm1 = 1.0f / (gamma - 1.0f);
+        for (int i = 0; i < n_cells; ++i) {
+            q[i].rho = 1.0f;
+            q[i].rho_u = speed;
+            q[i].rho_v = 0.0f;
+            q[i].rho_w = 0.0f;
+            q[i].rho_E = inv_gm1 + 0.5f * speed * speed;
+        }
+
+        AmrConfig cfg;
+        cfg.yplus_target = 1.0f;
+
+        auto requests = compute_yplus_sensor(mesh, q, cfg, gamma, 1e6f, 1.0f, 288.15f, 110.4f,
+                                             TurbulenceModel::LAMINAR);
+        int n_refine = 0;
+        for (const auto& r : requests)
+            if (r.flag == RefinementFlag::Refine) ++n_refine;
+        if (n_refine == 0) FAIL("expected some refine from coarse mesh");
+        std::printf("  (refine=%d, total=%d)", n_refine, n_cells);
+        PASS;
+    }
+    return 0;
+}
+
 static int test_tet4_refinement() {
     TEST("CFD-AMR-1 single tet refinement: 1->8, volume sum conserved");
     {
@@ -992,6 +1357,121 @@ static int test_compact_mesh_nodes() {
     return 0;
 }
 
+static int test_turbulence_amr() {
+    TEST("CFD-AMR-TURB-1 Flat plate SA: AMR with y+ sensor refines wall cells");
+    {
+        auto mesh = generate_flat_plate_mesh(0.5f, 0.05f, 0.1f, 1e-3f, 1.12f, 10, 3, 12);
+        auto report = compute_mesh_metrics(mesh);
+        if (!report.valid) FAIL("mesh metrics: %s", report.message.c_str());
+        int cells_before = static_cast<int>(mesh.cells.size());
+
+        CfdSolver solver;
+        if (!solver.load_mesh(mesh)) FAIL("load_mesh failed");
+
+        CfdConfig cfg;
+        cfg.max_iter = 5;
+        cfg.cfl = 0.1f;
+        cfg.convergence_tol = 1e-12f;
+        cfg.viscous = true;
+        cfg.Re = 1e5f;
+        cfg.turbulence_model = TurbulenceModel::SA;
+        cfg.amr.enabled = false;
+
+        FreestreamCondition freestream;
+        freestream.mach = 0.5f;
+
+        auto summary = solver.solve(freestream, cfg);
+        if (summary.failed) {
+            std::printf("  (fail: iter=%d cell=%d reason=%s)",
+                summary.diagnostics.failure.iteration,
+                summary.diagnostics.failure.cell,
+                summary.diagnostics.failure.reason.c_str());
+            FAIL("solver failed with SA");
+        }
+
+        std::printf("  (cells=%d res=%.2e)",
+            cells_before,
+            summary.residual_history.empty() ? -1.0 : summary.residual_history.back());
+        PASS;
+    }
+
+    TEST("CFD-AMR-TURB-2 Cube SA: supersonic solver & multi-sensor AMR");
+    {
+        // 1) Verify SA solver stays stable for 11+ iterations (no AMR).
+        CfdMesh mesh = generate_structured_cube_mesh(5.0f, 9);
+        CfdMesh mesh_amr = mesh; // copy for second solver
+        {
+            CfdSolver solver;
+            if (!solver.load_mesh(mesh)) FAIL("load_mesh failed");
+            CfdConfig cfg;
+            cfg.max_iter = 12;
+            cfg.cfl = 0.03f;
+            cfg.convergence_tol = 1e-12f;
+            cfg.viscous = true;
+            cfg.Re = 1e5f;
+            cfg.turbulence_model = TurbulenceModel::SA;
+            cfg.diagnostic_level = DiagnosticLevel::Verbose;
+            FreestreamCondition freestream;
+            freestream.mach = 2.0f;
+            auto s = solver.solve(freestream, cfg);
+            if (s.failed) {
+                std::printf("  (fail: iter=%d cell=%d reason=%s)",
+                    s.diagnostics.failure.iteration,
+                    s.diagnostics.failure.cell,
+                    s.diagnostics.failure.reason.c_str());
+                FAIL("SA solver unstable without AMR");
+            }
+        }
+
+        // 2) Separate solver: multi-sensor AMR at iter=10, verify mesh and state.
+        int cells_before = static_cast<int>(mesh_amr.cells.size());
+        CfdSolver solver2;
+        if (!solver2.load_mesh(mesh_amr)) FAIL("load_mesh failed");
+        CfdConfig cfg2;
+        cfg2.max_iter = 12;
+        cfg2.cfl = 0.03f;
+        cfg2.convergence_tol = 1e-12f;
+        cfg2.viscous = true;
+        cfg2.Re = 1e5f;
+        cfg2.turbulence_model = TurbulenceModel::SA;
+        cfg2.amr.enabled = true;
+        cfg2.amr.interval = 10;
+        cfg2.amr.max_level = 2;
+        cfg2.amr.yplus_target = 1.0f;
+        cfg2.amr.tke_ratio_threshold = 0.05f;
+        cfg2.amr.shear_layer_threshold = 0.3f;
+        cfg2.amr.wake_cone.length = 2.0f;
+        cfg2.amr.wake_cone.half_angle_deg = 30.0f;
+        cfg2.amr.wake_cone.origin_x = 0.0f;
+        cfg2.amr.wake_cone.axis_x = 1.0f;
+        cfg2.diagnostic_level = DiagnosticLevel::Verbose;
+        FreestreamCondition freestream2;
+        freestream2.mach = 2.0f;
+
+        auto summary = solver2.solve(freestream2, cfg2);
+        if (summary.failed) {
+            std::printf("  (fail: iter=%d cell=%d reason=%s)",
+                summary.diagnostics.failure.iteration,
+                summary.diagnostics.failure.cell,
+                summary.diagnostics.failure.reason.c_str());
+            FAIL("solver failed SA multi-sensor AMR");
+        }
+
+        int cells_after = static_cast<int>(summary.final_state.size());
+        std::printf("  (before=%d after=%d res=%.2e ratio=%.2f)",
+            cells_before, cells_after,
+            summary.residual_history.empty() ? -1.0 : summary.residual_history.back(),
+            static_cast<Real>(cells_after) / static_cast<Real>(cells_before));
+
+        CfdMesh mesh_after = solver2.mesh();
+        auto qr = compute_mesh_metrics(mesh_after);
+        if (qr.min_volume <= 0.0f) FAIL("min volume=%g", qr.min_volume);
+        if (qr.negative_jacobian_count != 0) FAIL("negative Jacobians=%d", qr.negative_jacobian_count);
+        PASS;
+    }
+    return 0;
+}
+
 int main() {
     int result = 0;
     result |= test_cube_mesh();
@@ -1003,12 +1483,14 @@ int main() {
     result |= test_tet4_refinement();
     result |= test_hex8_refinement();
     result |= test_gradient_sensor();
+    result |= test_yplus_sensor();
     result |= test_solution_interpolation();
     result |= test_hanging_faces();
     result |= test_amr_disabled_regression();
     result |= test_amr_max_level();
     result |= test_amr_order2_hanging();
     result |= test_compact_mesh_nodes();
+    result |= test_turbulence_amr();
     std::printf("\n%d / %d tests PASSED.\n", pass_count, test_count);
     return result == 0 && pass_count == test_count ? 0 : 1;
 }

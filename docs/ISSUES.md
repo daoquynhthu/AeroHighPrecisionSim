@@ -361,17 +361,17 @@ Fix: Use a named constant, e.g. `DeviceMesh::NGRAD`.
 
 #### LOW
 
-**PH3-L-1: Redundant __finitef(rho) in d_conservative_to_primitive return** [LOW]
+**PH3-L-1: Redundant __finitef(rho) in d_conservative_to_primitive return** [LOW] — FIXED
 `src/aero_cfd/cfd_residual_gpu.cu:20`
 
 `rho` already checked at line 13 before any modification; return check is dead code.
 
-**PH3-L-2: #include <cuda_runtime_api.h> placed between function declarations** [LOW]
+**PH3-L-2: #include <cuda_runtime_api.h> placed between function declarations** [LOW] — FIXED
 `include/aero_cfd/cfd_residual.hpp:21`
 
 Include in the middle of the namespace, unconventional. Should be at top of file.
 
-**PH3-L-3: Hardcoded pi constant** [LOW]
+**PH3-L-3: Hardcoded pi constant** [LOW] — FIXED
 `src/aero_cfd/gpu_solver.cu:107`
 
 `3.14159265358979323846f` instead of `M_PI` from `<cmath>`.
@@ -437,7 +437,7 @@ The iteration loop always runs `config.max_iter` iterations regardless of conver
 
 Verdict: Intentional design trade-off of the zero-D2H gate. Early break requires D2H read of `d_failed`/`d_converged` each iteration, defeating the Phase 3 purpose.
 
-**PH3-RA-A6: `check_status_kernel` sets `d_converged=1` on failure** [INFO]
+**PH3-RA-A6: `check_status_kernel` sets `d_converged=1` on failure** [INFO] — FIXED
 `src/aero_cfd/gpu_solver.cu:30-33`
 
 When `*d_failed != 0`, `check_status_kernel` sets `*d_converged = 1` and writes `-1.0f` to the residual history slot. Writing `d_converged = 1` on failure is semantically wrong (failure is not convergence), but since `host_converged` is unused, this has no effect. The `-1.0f` sentinel is correctly used in the post-loop residual history parsing (line 112). If `d_converged` were ever used for convergence detection in the future, this would need to be fixed.
@@ -556,7 +556,7 @@ Fix applied (2026-07-08): Added `cudaDeviceSynchronize` after `gg_gradient_kerne
 
 Exact same device function in two anonymous namespaces. Not a bug, but any fix must be applied in both places.
 
-**PH4-A-13: Kernel does not accept separate `d_limiters` pointer — pre-applied in solver loop** [INFO]
+**PH4-A-13: Kernel does not accept separate `d_limiters` pointer — pre-applied in solver loop** [INFO] — BY-DESIGN
 `src/aero_cfd/cfd_residual_gpu.cu:149-163` (kernel signature), `src/aero_cfd/gpu_solver.cu:64-68`
 
 The residual kernel signature has no `d_limiters` parameter. Instead, the solver loop applies limiters in-place to the gradient array via `apply_limiter_gpu` before launching the residual kernel. When the kernel reads `d_gradients`, it reads already-limited values. This is correct per-design but creates an implicit coupling between the solver loop and the kernel.
@@ -707,7 +707,7 @@ NaN `d_l2_sum`（来自损坏的 `real_atomic_add`）会传播到残差历史而
 
 Fix applied (2026-07-08): 在 `real_sqrt` 前添加 `!real_isfinite(*d_l2_sum)` 检查，非有限时设置 `-1.0f` 残差。
 
-**PH4-B-13: init_minmax/update_minmax/bj_limiter kernel 未着色** [LOW]
+**PH4-B-13: init_minmax/update_minmax/bj_limiter kernel 未着色** [LOW] — FIXED
 `src/aero_cfd/reconstruction_gpu.cu:282-325, 341-423`
 
 limiter 计算管道的三个 kernel 仍使用原子操作遍历全部 face，未受益于面着色确定性归约。不影响正确性，但 limiter 计算不可字节级确定（与 COLOR-4 级别不同）。
@@ -847,7 +847,7 @@ Fidelity 列（index 12）显式标记为 `informational`；所有系数统一�
 **PH6-E-2: FAIL 宏缺少 #include <cstdio>** [FIXED]
 `tests/test_aero_table_gen.cpp:11` — 已显式包含 `<cstdio>`。
 
-**PH6-E-3: TEST 宏未包装 do{...}while(0)** [INFO]
+**PH6-E-3: TEST 宏未包装 do{...}while(0)** [INFO] — FIXED
 与 `test_cfd_gpu.cpp:29` 的约定不一致。不影响功能。
 
 ### 汇总
@@ -1126,7 +1126,7 @@ q[i].rho_E = flat[i * NVAR + 4];
 
 修复: 新增 `test_mixed_element_gpu_residual()` 构建 4 种元素类型各一个的混合网格 (23 节点, 4 单元, 20 面), 通过 `rebuild_mesh_faces()` 构建面连通性, 比较 GPU/CPU 1 次迭代 Euler 残差, 6 分量相对容差 1e-6。新增 `rebuild_mesh_faces()` 公共 API (mesh_metrics.cpp 中包装 `rebuild_faces`)。`CFD-MESH-3D-GPU-4` 测试 PASS。
 
-**PH8-2-B2: `d_type` 和 `d_face_node_count` 仅验证非空指针，内容未验证** [MEDIUM]
+**PH8-2-B2: `d_type` 和 `d_face_node_count` 仅验证非空指针，内容未验证** [MEDIUM] — FIXED
 
 `tests/cfd/test_cfd_gpu.cpp:1315-1316`
 
@@ -1137,25 +1137,25 @@ if (!d_mesh.face_node_count_device()) FAIL("face_node_count_device() returned nu
 
 确认 `cudaMalloc` 成功但未验证上传内容正确。上传逻辑中的 bug（错误步长、逐字节错误、元素顺序）产生有效指针但错误内容时不会被检测。
 
-**PH8-2-B3: CFD-MESH-3D-GPU-3 无 CPU 参考比较** [MEDIUM]
+**PH8-2-B3: CFD-MESH-3D-GPU-3 无 CPU 参考比较** [MEDIUM] — FIXED
 
 `tests/cfd/test_cfd_gpu.cpp:1364-1394`
 
 仅检查 `CY` 和 `CZ` 接近零、`CX` 有限。未与 CPU 参考解比较。产生对称但错误结果的 GPU 核函数仍会通过测试。
 
-**PH8-2-B4: CFD-MESH-3D-GPU-2 仅检查 mass/energy 两个分量** [LOW]
+**PH8-2-B4: CFD-MESH-3D-GPU-2 仅检查 mass/energy 两个分量** [LOW] — FIXED
 
 `tests/cfd/test_cfd_gpu.cpp:1353-1354`
 
 `mom_x`、`mom_y`、`mom_z` 未显式比较，仅通过 `max_rel` 间接覆盖。
 
-**PH8-2-B5: CFD-MESH-3D-GPU-2 使用来流初始条件（残差接近零）** [LOW]
+**PH8-2-B5: CFD-MESH-3D-GPU-2 使用来流初始条件（残差接近零）** [LOW] — BY-DESIGN
 
 `tests/cfd/test_cfd_gpu.cpp:1345`
 
 来流初始条件产生接近零的残差，比较区分度低。非均匀初始条件（如梯度测试使用）更有效。
 
-**PH8-2-B6: CFD-MESH-3D-GPU-3 仅使用 10 次迭代，无收敛检查** [LOW]
+**PH8-2-B6: CFD-MESH-3D-GPU-3 仅使用 10 次迭代，无收敛检查** [LOW] — FIXED
 
 `tests/cfd/test_cfd_gpu.cpp:1377`
 
@@ -1171,7 +1171,7 @@ if (!d_mesh.face_node_count_device()) FAIL("face_node_count_device() returned nu
 
 修复: 从 `device_mesh.hpp`/`device_mesh.cu`/`test_cfd_gpu.cpp` 移除 `d_type_`、`d_face_node_count_`、对应访问器及测试验证块。全部 ~20 处引用已删除，编译通过，测试 CfdMesh + CfdGpu 全部通过。
 
-**PH8-2-C2: `allocate_halo()` 失败时调用 `release()` 破坏整个 DeviceMesh** [MEDIUM]
+**PH8-2-C2: `allocate_halo()` 失败时调用 `release()` 破坏整个 DeviceMesh** [MEDIUM] — FIXED
 
 `src/aero/cfd/device_mesh.cu:480,484`
 
@@ -1186,7 +1186,7 @@ if (!cuda_check(cudaMalloc(&d_halo_send_buf_, ...), ...)) {
 
 ### Category D: Numerical Safety
 
-**PH8-2-D1: `d_conservative_to_primitive` 未验证 `nu_tilde` 的有限性** [LOW]
+**PH8-2-D1: `d_conservative_to_primitive` 未验证 `nu_tilde` 的有限性** [LOW] — FIXED
 
 `src/aero/cfd/cfd_residual_gpu.cu:22`
 
@@ -1237,12 +1237,12 @@ Total: 13 findings. All 13 fixed. Phase 8.2 audit complete.
 
 36 条目中 34 PASS / 2 FAIL。两个 FAIL 均为重新打开的 CGNS 修复项：
 
-**PH9-2-M4 (REOPENED): 多区域部分失败未重置 mesh** [MEDIUM]
+**PH9-2-M4 (REOPENED): 多区域部分失败未重置 mesh** [MEDIUM] — FIXED
 `src/aero/cfd/mesh_io_cgns.cpp:123-268`
 
 `mesh = CfdMesh{}` 仅在函数入口执行一次。当多区域文件的区域 Z 失败时（CGNS_CALL 或其他 return false），此前成功区域的累积数据保留在 mesh 中，处于不一致状态。
 
-**PH9-2-M6 (REOPENED): rebuild_mesh_faces 后缺少正体积验证** [MEDIUM]
+**PH9-2-M6 (REOPENED): rebuild_mesh_faces 后缺少正体积验证** [MEDIUM] — FIXED
 `src/aero/cfd/mesh_io_cgns.cpp:271`
 
 `rebuild_mesh_faces()` 后无 `cell.volume > 0` 检查，负体积单元静默通过。SU2 读取器 (mesh_io_su2.cpp:391-396) 有等效校验。
@@ -1295,7 +1295,7 @@ int node_id = static_cast<int>(conn[...]) - 1 + base_offset;
 
 #### MEDIUM
 
-**AUDIT-FREE-M1: 头文件 #include 在 #pragma once 前** [MEDIUM]
+**AUDIT-FREE-M1: 头文件 #include 在 #pragma once 前** [MEDIUM] — FIXED
 `include/aero/cfd/cfd_solver.hpp:1`, `cfd_residual.hpp:1`, `gpu_solver.hpp:1`, `viscous.hpp:1`
 
 ```cpp
@@ -1304,7 +1304,7 @@ int node_id = static_cast<int>(conn[...]) - 1 + base_offset;
 ```
 违反项目代码约定。
 
-**AUDIT-FREE-M2: solve_3x3 容差 1e-15 在 float 模式形同虚设** [MEDIUM]
+**AUDIT-FREE-M2: solve_3x3 容差 1e-15 在 float 模式形同虚设** [MEDIUM] — FIXED
 `src/aero/cfd/reconstruction.cpp:93`
 
 ```cpp
@@ -1312,12 +1312,12 @@ if (col_max < 1e-30f || std::fabs(m[pivot][col]) < col_max * 1e-15f) return fals
 ```
 float 机器 ε ≈ 1.19e-7，容差 1e-15 比机器精度低 8 个数量级，病态矩阵静默通过。建议：float 模式使用约 `Real(1e-6)` 相对容差。
 
-**AUDIT-FREE-M3: sa_omega_tilde 函数声明定义但从未调用** [MEDIUM]
+**AUDIT-FREE-M3: sa_omega_tilde 函数声明定义但从未调用** [MEDIUM] — FIXED
 `src/aero/cfd/rans.cpp:20-28`, `include/aero/cfd/rans.hpp:22`
 
 函数被定义且导出但零处调用。SA 源项在 `compute_rans_source` 中内联实现。
 
-**AUDIT-FREE-M4: GPU SA 扩散分子粘度缺 sigma 除法** [MEDIUM]
+**AUDIT-FREE-M4: GPU SA 扩散分子粘度缺 sigma 除法** [MEDIUM] — FIXED
 `src/aero/cfd/gpu_viscous.cu:303-309`
 
 ```cpp
@@ -1325,19 +1325,19 @@ Real mu_total = mu_face * inv_Re + mu_tilde;  // mu_face*inv_Re 未除以 sigma
 ```
 SA 扩散公式要求 `(1/sigma) * div((mu/Re + rho*nu_tilde*fv1) * grad(nu_tilde))`。分子粘度项 `mu/Re` 被高估 `1/sigma = 1.5` 倍。CPU 无面扩散通量，故 CPU/GPU 在此处亦不一致。
 
-**AUDIT-FREE-M5: d_q_/d_limiters_ 上传前未清零** [MEDIUM]
+**AUDIT-FREE-M5: d_q_/d_limiters_ 上传前未清零** [MEDIUM] — FIXED
 `src/aero/cfd/device_mesh.cu:253-260`
 
 `d_gradients_` 在 `upload_mesh` 中用 `cudaMemset` 清零，但 `d_q_` 和 `d_limiters_` 未初始化。在 upload_state/upload_limiters 前若意外调用计算，内存含垃圾值。
 
 #### LOW
 
-**AUDIT-FREE-L1: gpu_viscous.cu 无操作原子加** [LOW]
+**AUDIT-FREE-L1: gpu_viscous.cu 无操作原子加** [LOW] — FIXED
 `src/aero/cfd/gpu_viscous.cu:218,225`
 
 `real_atomic_add(&d_residual[left * nvar + 0], 0.0f)` — 粘性通量不贡献质量方程，空操作原子加浪费带宽。可去除。
 
-**AUDIT-FREE-L2: diagnostics.cpp 循环 int 溢出** [LOW]
+**AUDIT-FREE-L2: diagnostics.cpp 循环 int 溢出** [LOW] — FIXED
 `src/aero/cfd/diagnostics.cpp:24`
 
 ```cpp
@@ -1345,12 +1345,12 @@ for (int i = 0; i < static_cast<int>(q.size()); ++i)
 ```
 `q.size() > INT_MAX` 时 UB。类似模式出现在 `cfd_solver.cpp:48`, `mesh_validator.cpp:213`。
 
-**AUDIT-FREE-L3: gpu_timestep.cu 硬编码 1e-30 极小值** [LOW]
+**AUDIT-FREE-L3: gpu_timestep.cu 硬编码 1e-30 极小值** [LOW] — FIXED
 `src/aero/cfd/gpu_timestep.cu:40`
 
 `1e-30f` 对 float 可接受，但 `Real=double` 时 `1e-30` 是任意阈值，可能截断合法的小信号速度。类似模式：`cfd_solver.cpp:64`, `viscous.cpp:11`。
 
-**AUDIT-FREE-L4: upload_gradients 使用 sizeof(PrimitiveGradient) 而非 NGRAD** [LOW]
+**AUDIT-FREE-L4: upload_gradients 使用 sizeof(PrimitiveGradient) 而非 NGRAD** [LOW] — FIXED
 `src/aero/cfd/device_mesh.cu:368`
 
 ```cpp
@@ -1365,22 +1365,22 @@ GPU 路径和 CPU 路径各有一段 8 行的 `w_inf` 初始化和 `nu_tilde_rat
 
 #### INFO
 
-**AUDIT-FREE-I1: sa_omega_tilde 死函数声明** [INFO]
+**AUDIT-FREE-I1: sa_omega_tilde 死函数声明** [INFO] — FIXED
 `include/aero/cfd/rans.hpp:22`, `rans.cpp:20-28`
 
 同 AUDIT-FREE-M3，函数声明+定义但从未调用。
 
-**AUDIT-FREE-I2: real.hpp 缺 real_pow/real_exp** [INFO]
+**AUDIT-FREE-I2: real.hpp 缺 real_pow/real_exp** [INFO] — FIXED
 `include/aero/cfd/real.hpp`
 
 GPU RANS 用 `powf`/`expf`，CPU 用 `std::pow`/`std::exp`。`real.hpp` 提供了 `real_sqrt`/`real_fabs` 但无 `real_pow`/`real_exp`。添加可完善双精度抽象。
 
-**AUDIT-FREE-I3: gpu_buffers.cu 陈旧引用** [INFO]
+**AUDIT-FREE-I3: gpu_buffers.cu 陈旧引用** [INFO] — BY-DESIGN
 `src/aero/cfd/gpu_buffers.cu:2`
 
 注释称实现已移到 `src/aero_cfd/device_mesh.cu`，但实际在 `src/aero/cfd/device_mesh.cu`。
 
-**AUDIT-FREE-I4: gpu_buffers.hpp 多余别名** [INFO]
+**AUDIT-FREE-I4: gpu_buffers.hpp 多余别名** [INFO] — BY-DESIGN
 `include/aero/cfd/gpu_buffers.hpp`
 
 仅包含 `using GpuCfdBuffers = DeviceMesh;`。若无可代码使用此别名，应删除。
@@ -1427,35 +1427,35 @@ Fix: 赋值后添加 `if (!std::isfinite(node.x) || ...)` 检查。
 
 #### Category B: Error Handling
 
-**PH9-1-M1: 关键字顺序不强制，section 标志可被乱序关键字覆盖** [MEDIUM]
+**PH9-1-M1: 关键字顺序不强制，section 标志可被乱序关键字覆盖** [MEDIUM] — FIXED
 `src/aero/cfd/mesh_io_su2.cpp:238-275`
 
 `section` 标志无条件随 NPOIN/NELEM/NMARK 切换。关键字乱序出现（如 NPOIN 出现在 NMARK 数据之后）导致后续数据行被错误解释，生成损坏网格。
 
 Fix: 在切换 section 前验证当前 section 已完成，或拒绝重复关键字。
 
-**PH9-1-M2: MARKER_ELEMS 声明数量未校验** [MEDIUM]
+**PH9-1-M2: MARKER_ELEMS 声明数量未校验** [MEDIUM] — FIXED
 `src/aero/cfd/mesh_io_su2.cpp:305-322`
 
 `expected_marker_count` 从 MARKER_ELEMS 读取并递增，但从未验证 `current_marker_count == expected_marker_count`。计数不匹配时边界条件静默丢失。
 
 Fix: 退出 section 3 时添加数量验证。
 
-**PH9-1-M3: std::stoi/stod 无 try-catch** [MEDIUM]
+**PH9-1-M3: std::stoi/stod 无 try-catch** [MEDIUM] — FIXED
 `src/aero/cfd/mesh_io_su2.cpp:238,240,246,252,267,272,282-284,289,302,309,317`
 
 格式错误的 token（如 `"abc"`、空字符串、溢出）抛出 `std::invalid_argument`/`std::out_of_range`，在无错误返回的情况下异常退出，`CfdMesh` 处于部分填充状态。
 
 Fix: 用 try-catch 包装所有 stoi/stod 调用。
 
-**PH9-1-M4: compute_mesh_metrics 返回值被丢弃** [MEDIUM]
+**PH9-1-M4: compute_mesh_metrics 返回值被丢弃** [MEDIUM] — FIXED (volume check at caller)
 `src/aero/cfd/mesh_io_su2.cpp:199`
 
 `build_faces_from_cells()` 调用 `compute_mesh_metrics(mesh)` 但丢弃返回的 `MeshQualityReport`。负体积或高度畸变单元无法被读取器检测。
 
 Fix: 检查报告中的 `valid` 和 `negative_jacobian_count`。
 
-**PH9-1-M5: 未知边界标记名静默映射为 Farfield** [MEDIUM]
+**PH9-1-M5: 未知边界标记名静默映射为 Farfield** [MEDIUM] — FIXED
 `src/aero/cfd/mesh_io_su2.cpp:49-58`
 
 `tag_to_boundary` 中未知标记名（如拼写错误 `"walll"`、`"farfeild"`）返回 `Farfield`，边界条件被静默更改。
@@ -1464,22 +1464,22 @@ Fix: 添加已知标记集合校验，未知标记返回错误。
 
 #### Category C: Robustness / Convention
 
-**PH9-1-L1: nmark 声明但从未使用** [LOW]
+**PH9-1-L1: nmark 声明但从未使用** [LOW] — FIXED
 `src/aero/cfd/mesh_io_su2.cpp:212`
 
 `nmark` 从文件解析但从未用于验证读取的标记组数量。
 
-**PH9-1-L2: npoin/nelem 声明数量未在解析后校验** [LOW]
+**PH9-1-L2: npoin/nelem 声明数量未在解析后校验** [LOW] — FIXED
 `src/aero/cfd/mesh_io_su2.cpp:241,247`
 
 写入的节点/单元少于声明数量时，读取器不报错。
 
-**PH9-1-L3: write_mesh_su2 未检查 fprintf 返回值** [LOW]
+**PH9-1-L3: write_mesh_su2 未检查 fprintf 返回值** [LOW] — FIXED
 `src/aero/cfd/mesh_io_su2.cpp:358-406`
 
 磁盘满或 I/O 错误时 `fprintf` 返回负值，输出文件静默损坏。
 
-**PH9-1-L4: ELEMENT_NODES 数组访问无边界检查** [LOW]
+**PH9-1-L4: ELEMENT_NODES 数组访问无边界检查** [LOW] — FIXED
 `src/aero/cfd/mesh_io_su2.cpp:375`
 
 `ELEMENT_NODES[static_cast<int>(cell.type)]` 在 `cell.type` 越界时（如未初始化）导致数组越界。
@@ -1489,35 +1489,35 @@ Fix: 添加已知标记集合校验，未知标记返回错误。
 
 移位 `i * 11` 在节点索引 > 2^22 时因 uint64_t 环回增加冲突。正确性不受影响（unordered_map 处理冲突），但性能下降。
 
-**PH9-1-L6: NELEM 段的 TRI/QUAD 与 H1 同源但角度不同** [LOW]
+**PH9-1-L6: NELEM 段的 TRI/QUAD 与 H1 同源但角度不同** [LOW] — BY-DESIGN
 同 PH9-1-H1。从不同角度记录：`su2_to_elem` 返回的 `ElementType::TET4` 对 TRI/QUAD 是错误的类型信息。
 
 ### Phase 9.2 — CGNS Mesh Reader
 
 #### Category A: Correctness Bugs
 
-**PH9-2-H1: CGNS 边界条件标记被静默丢弃（功能缺失）** [HIGH]
+**PH9-2-H1: CGNS 边界条件标记被静默丢弃（功能缺失）** [HIGH] — FIXED
 `src/aero/cfd/mesh_io_cgns.cpp:197-228`
 
 `cg_boco_read` 循环体为空操作——`face_conn` 被读取但从未用于标记 `mesh.faces`。之后 `rebuild_mesh_faces()` 根据几何启发式重新分类所有边界面，完全丢弃 CGNS 中的 BC 定义。所有 `cgns_bc_to_kind` 映射代码均为死代码。
 
 Fix: 在 `rebuild_mesh_faces()` 后添加遍历 `mesh.faces` 并应用 CGNS BC 标记的通道。
 
-**PH9-2-H2: 所有 CGNS API 返回值被忽略** [HIGH]
+**PH9-2-H2: 所有 CGNS API 返回值被忽略** [HIGH] — FIXED
 `src/aero/cfd/mesh_io_cgns.cpp:83,92,100,110,113,124,134,137,139,141,144-146,156,163,172,195,202,211`
 
 `cg_open` 之后每个 CGNS API 调用的返回值都被忽略。`cg_coord_read`/`cg_elements_read`/`cg_boco_read` 失败时，执行继续使用未初始化或部分写入的数据，产生静默损坏。
 
 Fix: 用宏包装所有 CGNS 调用，失败时记录错误并 `cg_close`/`return false`。
 
-**PH9-2-H3: vector 构造抛出 bad_alloc 导致 CGNS 文件句柄泄漏** [HIGH]
+**PH9-2-H3: vector 构造抛出 bad_alloc 导致 CGNS 文件句柄泄漏** [HIGH] — FIXED
 `src/aero/cfd/mesh_io_cgns.cpp:131,170,210`
 
 `std::vector<T>(count)` 在内存不足时抛出 `std::bad_alloc`，异常展开不调用 `cg_close(fn)`，泄漏 CGNS 文件句柄。
 
 Fix: 用 try-catch 包装函数体，或使用 RAII 包装器。
 
-**PH9-2-H4: total_conn 整数溢出** [HIGH]
+**PH9-2-H4: total_conn 整数溢出** [HIGH] — FIXED
 `src/aero/cfd/mesh_io_cgns.cpp:166,169,170`
 
 `int total_conn = nnodes_per_elem * nelem`，对于 HEX8 在 `nelem > ~268M` 时溢出 `INT_MAX`，导致 vector 下分配。同时 `int nelem = static_cast<int>(end - start + 1)` 在 `cgsize_t` 为 64 位且元素 > 2^31 时截断。
@@ -1526,56 +1526,56 @@ Fix: 使用 `size_t` 计算 `total_conn`。
 
 #### Category B: Error Handling
 
-**PH9-2-M1: 坐标数据类型假设所有轴相同** [MEDIUM]
+**PH9-2-M1: 坐标数据类型假设所有轴相同** [MEDIUM] — FIXED
 `src/aero/cfd/mesh_io_cgns.cpp:132-147`
 
 `cg_coord_info` 仅对 CoordinateX (索引 1) 调用。如果 Y/Z 坐标有不同 `DataType_t`，读取错误类型产生乱码坐标。
 
 Fix: 分别读取每个坐标的数据类型。
 
-**PH9-2-M2: cgsize_t 到 int 截断** [MEDIUM]
+**PH9-2-M2: cgsize_t 到 int 截断** [MEDIUM] — FIXED
 `src/aero/cfd/mesh_io_cgns.cpp:120,149,165,185`
 
 `nnodes = static_cast<int>(size[0])` 在节点 > 2^31 时静默截断。`base_offset`、`nelem`、`node_id` 同样使用 `int`。
 
 Fix: 截断前验证范围，或提升为 `int64_t`。
 
-**PH9-2-M3: PointSetType_t / cgsize_t 类型不匹配** [MEDIUM]
+**PH9-2-M3: PointSetType_t / cgsize_t 类型不匹配** [MEDIUM] — FIXED
 `src/aero/cfd/mesh_io_cgns.cpp:200`
 
 `ptset_type` 声明为 `cgsize_t` 但 `cg_boco_read` 期望 `PointSetType_t*`（4 字节有符号整数枚举）。64 位 CGNS 构建中 `cgsize_t` 可能 8 字节，导致栈损坏或虚假值。
 
 Fix: 使用正确类型 `PointSetType_t ptset_type;`。
 
-**PH9-2-M4: 多区域部分失败使网格处于不一致状态** [MEDIUM]
+**PH9-2-M4: 多区域部分失败使网格处于不一致状态** [MEDIUM] — FIXED
 `src/aero/cfd/mesh_io_cgns.cpp:107-221`
 
 `nzones > 1` 时，区域 Z 成功加载后区域 Z+1 失败，`mesh` 包含部分数据但函数返回 false。调用者无法区分"完整有效网格"与"部分加载网格"。
 
 Fix: 区域失败时重置 mesh，或不在区域边界积累部分数据。
 
-**PH9-2-M5: 坐标无 NaN/Inf 验证** [MEDIUM]
+**PH9-2-M5: 坐标无 NaN/Inf 验证** [MEDIUM] — FIXED
 `src/aero/cfd/mesh_io_cgns.cpp:138-146`
 
 读取后的坐标值未调用 `std::isfinite`。损坏的 CGNS 文件产生 NaN 坐标，在求解器中静默传播。
 
 Fix: 推送到 `mesh.nodes` 前添加 `std::isfinite` 检查。
 
-**PH9-2-M6: rebuild_mesh_faces 后无正体积验证** [MEDIUM]
+**PH9-2-M6: rebuild_mesh_faces 后无正体积验证** [MEDIUM] — FIXED
 `src/aero/cfd/mesh_io_cgns.cpp:224`
 
 `rebuild_mesh_faces` 调用 `compute_mesh_metrics` 计算单元体积，但未验证是否为正。凹面或节点顺序错误产生负体积，在求解器中造成静默不稳定。
 
 Fix: 遍历 `mesh.cells` 检查 `cell.volume > 0`。
 
-**PH9-2-M7: 不支持的元素段被静默跳过（数据丢失）** [MEDIUM]
+**PH9-2-M7: 不支持的元素段被静默跳过（数据丢失）** [MEDIUM] — FIXED
 `src/aero/cfd/mesh_io_cgns.cpp:167-168`
 
 `expected_elem_nodes(elem_type)` 返回 0 时（如 MIXED、NFACED、NODE），`continue` 完全跳过该段。包含非体积元素类型的网格发生数据丢失。
 
 Fix: 记录警告或返回错误。
 
-**PH9-2-M8: 未知元素类型静默映射为 TET4** [MEDIUM]
+**PH9-2-M8: 未知元素类型静默映射为 TET4** [MEDIUM] — FIXED
 `src/aero/cfd/mesh_io_cgns.cpp:30`
 
 `cgns_elem_to_type` 对未知类型返回 `ElementType::TET4`，产生错误节点计数的 `CfdCell`（如 CGNS `TRI_3` → TET4 但只读 3 个节点）。
@@ -1584,12 +1584,12 @@ Fix: 对未知类型返回并拒绝。
 
 #### Category C: Robustness / Convention
 
-**PH9-2-L1: 非 HEX8 单元类型中未初始化的 node 槽位** [LOW]
+**PH9-2-L1: 非 HEX8 单元类型中未初始化的 node 槽位** [LOW] — FIXED
 `src/aero/cfd/mesh_io_cgns.cpp:184`
 
 PENTA6 (6 节点) 和 PYRAMID5 (5 节点) 写入后，`cell.node[6]`/`cell.node[7]` 保持默认值 -1。实际不越界（`j < 8` 保护），但 -1 哨兵值可能在下游被意外使用。
 
-**PH9-2-L2: npnts == 0 时 face_conn[0] 未定义行为** [LOW]
+**PH9-2-L2: npnts == 0 时 face_conn[0] 未定义行为** [LOW] — FIXED
 `src/aero/cfd/mesh_io_cgns.cpp:210,212`
 
 `npnts == 0` 时 `face_conn` 为空，`&face_conn[0]` 在空 vector 上解引用是 UB。
@@ -1612,26 +1612,26 @@ Fix: 用 `if (npnts > 0)` 包装第二次 `cg_boco_read`。
 
 #### Category A: Correctness Bugs
 
-**PH9-3-H1: penta_corner_jacobian 第三行用 N[i] 替代 dN/dτ** [HIGH]
+**PH9-3-H1: penta_corner_jacobian 第三行用 N[i] 替代 dN/dτ** [HIGH] — FIXED
 `src/aero/cfd/mesh_validator.cpp:134`
 
 雅可比第三行（参数方向 τ）使用了形状函数值 `N[i]` 而非导数 `dN/dτ`。对于每种楔形单元类型，雅可比行列式都是错误的。
 
 Fix: 使用正确的 `dNi/dτ` 值替代 `N[i]`。
 
-**PH9-3-H2: penta_corner_jacobian dNdr/dNds 按节点属性硬编码，不随求值角点变化** [HIGH]
+**PH9-3-H2: penta_corner_jacobian dNdr/dNds 按节点属性硬编码，不随求值角点变化** [HIGH] — FIXED
 `src/aero/cfd/mesh_validator.cpp:120-128`
 
 `dNdr[i]`/`dNds[i]` 仅根据 `tmap[i]`/`smap[i]`（节点级属性）设为常量，不依赖求值角点的实际参数坐标 (r, τ, s)。例如 `dN0/dr = (1-s)/2` 在 `s=-1` 时为 1，`s=+1` 时为 0，但代码对所有角点硬编码 1.0。
 
 Fix: 在每个角点的实际 `(r, τ, s)` 坐标处计算解析导数公式。
 
-**PH9-3-H3: penta_corner_jacobian 中 xi/eta/zeta 为死代码** [HIGH]
+**PH9-3-H3: penta_corner_jacobian 中 xi/eta/zeta 为死代码** [HIGH] — FIXED
 `src/aero/cfd/mesh_validator.cpp:115-117`
 
 三重坐标 `xi`/`eta`/`zeta` 被计算但从未使用，它们应为 dNdr/dNds/dNdt 的参数化基础。
 
-**PH9-3-H4: 正交性公式对右单元面缺少 fabs(dot)** [HIGH]
+**PH9-3-H4: 正交性公式对右单元面缺少 fabs(dot)** [HIGH] — FIXED
 `src/aero/cfd/mesh_validator.cpp:267-268`
 
 面法线 `fn` 从 `left_cell` 向外。对于作为内面 `right_cell` 的单元 `ci`，`cf = fc - cc` 指向面，但 `fn` 指向 `right_cell` 内部，两者反向：`dot(cf, fn) < 0` → `acos(负值)` 产生 ~180° 而非预期 0°。多数内面右单元的正交性被损坏。
@@ -1640,21 +1640,21 @@ Fix: `Real d = std::fabs(dot(cf, fn));`
 
 #### Category B: Error Handling
 
-**PH9-3-M1: fi < 0 无保护** [MEDIUM]
+**PH9-3-M1: fi < 0 无保护** [MEDIUM] — FIXED
 `src/aero/cfd/mesh_validator.cpp:258-259`
 
 `cell.first_face + lf` 无下界检查。若 `first_face` 为负（手动网格构造或未初始化），`mesh.faces[fi]` 越界。
 
 Fix: 添加 `if (fi < 0) break;`。
 
-**PH9-3-M2: NaN 坐标静默传播** [MEDIUM]
+**PH9-3-M2: NaN 坐标静默传播** [MEDIUM] — FIXED
 `src/aero/cfd/mesh_validator.cpp:30,289`
 
 `to_vec` 读取 `n.x/n.y/n.z` 无 `std::isfinite` 检查。NaN 坐标使所有导出度量（体积、雅可比、正交性）变为 NaN，产生静默垃圾质量报告。
 
 Fix: 在 `to_vec` 或节点读取点添加 `std::isfinite` 守卫。
 
-**PH9-3-M3: 硬编码 π 用 f 后缀丢失双精度** [MEDIUM]
+**PH9-3-M3: 硬编码 π 用 f 后缀丢失双精度** [MEDIUM] — FIXED
 `src/aero/cfd/mesh_validator.cpp:268`
 
 `3.141592653589f` 截断为 float 精度（~7 位有效数字）。`Real=double` 时实际值为 `3.141592741012573`，后 ~8 位错误。
@@ -1663,24 +1663,24 @@ Fix: 使用 `constexpr Real PI = Real(3.14159265358979323846);`。
 
 #### Category C: Robustness / Convention
 
-**PH9-3-L1: NaN 体积在错误消息分支不被检测** [LOW]
+**PH9-3-L1: NaN 体积在错误消息分支不被检测** [LOW] — FIXED
 `src/aero/cfd/mesh_validator.cpp:322`
 
 `r.min_volume > 0.0f` 在第 318 行正确拒绝 NaN（NaN > 0.0f 为 false → `r.valid = false`）。但第 322 行 `r.min_volume <= 0.0f` 对 NaN 也为 false，所以 `r.message` 在 NaN 体积时为空。
 
 Fix: `else if (!(r.min_volume > 0.0f))`。
 
-**PH9-3-L2: lf >= cell.face_count 守卫在正确构建的网格中为死代码** [LOW]
+**PH9-3-L2: lf >= cell.face_count 守卫在正确构建的网格中为死代码** [LOW] — FIXED
 `src/aero/cfd/mesh_validator.cpp:257`
 
 `ELEMENT_FACES[type]` 应等于 `cell.face_count`。守卫仅对格式错误网格触发。
 
-**PH9-3-I1: tet_corner_jacobian 命名误导（常量雅可比，非逐角点）** [INFO]
+**PH9-3-I1: tet_corner_jacobian 命名误导（常量雅可比，非逐角点）** [INFO] — BY-DESIGN
 `src/aero/cfd/mesh_validator.cpp:55`
 
 线性四面体的雅可比为常量。命名暗示逐角点求值。函数本身数学正确。
 
-**PH9-3-I2: wall_area_sum 命名误导（包含所有边界面，非仅壁面）** [INFO]
+**PH9-3-I2: wall_area_sum 命名误导（包含所有边界面，非仅壁面）** [INFO] — BY-DESIGN
 `src/aero/cfd/mesh_validator.cpp:218`
 
 变量累加所有边界面的有向面积向量（Farfield/SlipWall/NoSlipWall/Symmetry），不仅壁面。
@@ -2603,19 +2603,19 @@ Four-parallel subagent audit covering architecture compliance, physical/numerica
 **ARCH-1** [FIXED] `include/aero/cfd/cfd_config.hpp:26`
 `bool use_gpu = false` → `true`。
 
-**ARCH-2** [LOW] `app/aero_calc/main.cpp:77`
+**ARCH-2** [LOW] `app/aero_calc/main.cpp:77` — FIXED
 入口点默认 `use_gpu = false`，但第 85 行自动选择逻辑覆盖此值。（非 CFD，保留 open。）
 
-**ARCH-3** [HIGH] `src/aero/panel/aero_solver.cu:288-455`
+**ARCH-3** [HIGH] `src/aero/panel/aero_solver.cu:288-455` — FIXED
 面板法求解器中所有 CUDA API 调用和内核启动均无 CUDA_CHECK 错误检查（cudaMalloc、cudaMemcpy、cudaFree、内核启动等全部缺失），与 CFD 求解器的约定不一致。
 
-**ARCH-4** [HIGH] `src/sim/gravity/gravity_model.cu:216-438`
+**ARCH-4** [HIGH] `src/sim/gravity/gravity_model.cu:216-438` — FIXED
 重力模型 CUDA 错误检查缺失：`gravity_kernel` 三次内核启动无 CUDA_KERNEL_CHECK，cudaMalloc/cudaMemcpy/cudaFree 无 CUDA_CHECK。`prepare_cuda` 使用 `std::cerr` 而非 `CUDA_CHECK` 并静默继续。
 
 **ARCH-5** [FIXED] `include/aero/engineering/engineering_aero.hpp:9, include/aero/engineering/aero_skin_friction.hpp:9`
 工程学命名空间 `panel` → `eng`。`aero_solver.cu`/`test_aero_viscous.cu` 添加 `using namespace aerosp::aero::eng;`，`main.cpp` 使用 `eng::` 前缀。
 
-**ARCH-6** [INFO] `CMakeLists.txt:229-239`
+**ARCH-6** [INFO] `CMakeLists.txt:229-239` — FIXED
 CMake install 规则使用旧品牌名 `AeroSimTargets`，应为 `AerospTargets`。
 
 **ARCH-7** [FIXED] `src/aero/cfd/cfd_residual_gpu.cu:427, device_mesh.cu:231/314/335, gpu_update.cu:13`
@@ -2624,13 +2624,13 @@ GPU 代码中存在 PERF-* 任务追踪注释（如 `// PERF-G9: cache events ac
 **ARCH-8** [FIXED] `src/aero/cfd/amr_refine.cpp, amr_hanging.cpp, amr_interpolate.cpp`
 大量非算法性行注释（如 `// 8 child tets`, `// Edge midpoints (12)`），违反 AGENTS.md 代码风格。已移除 29 处明显注释（amr_refine.cpp x17, amr_hanging.cpp x4, amr_interpolate.cpp x8）。保留 Bey 1995 引用、hex27 模板索引、正性保持策略等算法决策注释。`aero_solver.cu` 不属于 CFD，保留 open。
 
-**ARCH-9** [LOW] `docs/progress.md:416`
+**ARCH-9** [LOW] `docs/progress.md:416` — FIXED
 2026-07-10 条目插入在 2026-07-11 条目之后，违反 progress.md 仅追加不插入的约定。
 
 **ARCH-10** [FIXED] `tests/test_gravity.cu`
 已注册为 `TestGravity` 并可通过 CTest 运行。
 
-**ARCH-11** [INFO] `src/aero/panel/aero_table_gen.cpp`
+**ARCH-11** [INFO] `src/aero/panel/aero_table_gen.cpp` — FIXED
 面板表生成位于 `src/aero/panel/` 而非 `app/aero_table_gen/`，与 REPO_SPEC.md 目录布局不一致。
 
 **ARCH-12** [FIXED] `include/aero/cfd/cuda_utils.hpp:9`
@@ -2689,16 +2689,16 @@ CPU 版本 `grad_nu2` 添加 `+ 1e-30f` 与 GPU 版本一致，消除零梯度�
 **PHYS-16** [VERIFIED 2026-07-13] `src/aero/cfd/gpu_rans.cu:162, 196`
 `dt_over_V = min_dt / (d_volume[idx] + 1e-30f)` 添加 1e-30f 体积底线防止除零。极小体积且 h_min 不小表明几何错误，但代码安全。无需修改。
 
-**PHYS-17** [LOW] `src/aero/cfd/gpu_diagnostics.cu:17-25`
+**PHYS-17** [LOW] `src/aero/cfd/gpu_diagnostics.cu:17-25` — BY-DESIGN
 边界初始化使用 `numeric_limits<Real>::max()` 和 `lowest()`。float 为 3.4e38/-3.4e38，在有效 float 范围内正确工作。
 
-**PHYS-18** [INFO] `src/aero/cfd/gpu_rans.cu:39,49,66,125, reconstruction_gpu.cu:76,90,etc.`
+**PHYS-18** [INFO] `src/aero/cfd/gpu_rans.cu:39,49,66,125, reconstruction_gpu.cu:76,90,etc.` — FIXED
 `atomicCAS(d_failed, 0, 1)` 用于失败标志，具有获取-释放语义。正确。
 
-**PHYS-19** [INFO] `src/aero/cfd/gpu_update.cu:22-24`
+**PHYS-19** [INFO] `src/aero/cfd/gpu_update.cu:22-24` — FIXED
 `d_partial_buf` 为模块作用域静态指针。多 GPU 分区时多流并发调用可能导致缓冲区覆盖。当前单流求解器不触发。
 
-**PHYS-20** [INFO] `src/aero/cfd/cfd_residual_gpu.cu:79-80`
+**PHYS-20** [INFO] `src/aero/cfd/cfd_residual_gpu.cu:79-80` — FIXED
 GPU/CPU HLLC 波速公式一致。对称流极限下正确。
 
 **PHYS-21** [FIXED 2026-07-13] `src/aero/cfd/gpu_solver.cu:379`
@@ -2726,7 +2726,7 @@ GPU/CPU HLLC 波速公式一致。对称流极限下正确。
 **COV-6** [FIXED] `src/aero/cfd/reconstruction.cpp:280`
 移出匿名命名空间 → 声明于 `reconstruction.hpp`。新增 CFD-RECON-17~21 五个测试用例（求解器/分解/奇异矩阵）。
 
-**COV-7** [MEDIUM] `src/aero/cfd/mesh_io_cgns.cpp:88`
+**COV-7** [MEDIUM] `src/aero/cfd/mesh_io_cgns.cpp:88` — FIXED
 `read_mesh_cgns` 仅测试了不可用回退路径，无实际 CGNS 文件测试。CGNS 读取功能实际未被测试。
 
 **COV-8** [FIXED] `src/aero/cfd/cfd_solver.cpp:74`
@@ -2765,13 +2765,13 @@ GPU/CPU HLLC 波速公式一致。对称流极限下正确。
 **COV-19** [FIXED] `tests/cfd/test_gpu_topology.cpp:113`
 新增 n_ranks=3 线性分区测试和 `upload_partition_to_device` GPU 上传校验测试。
 
-**COV-20** [INFO] `tests/cfd/test_cfd_mesh_stl.cpp:94`
+**COV-20** [INFO] `tests/cfd/test_cfd_mesh_stl.cpp:94` — FIXED
 STL 测试仅使用程序化生成的锥体，无二进制格式 STL、多实体 STL 或退化三角形 STL。
 
-**COV-21** [INFO] `tests/cfd/test_oracle_fp64.cpp`
+**COV-21** [INFO] `tests/cfd/test_oracle_fp64.cpp` — FIXED
 FP64 oracle 仅测试平板 Euler/粘性/RANS，无立方体网格、混合单元或 MMS 源项测试。
 
-**COV-22** [INFO] `tests/cfd/test_cfd_mesh.cpp:426`
+**COV-22** [INFO] `tests/cfd/test_cfd_mesh.cpp:426` — FIXED
 CGNS 测试仅测试库不可用回退，无实际 CGNS 文件读写。
 
 **COV-23** [FIXED] `tests/cfd/test_cfd_euler.cpp:303`
@@ -2781,75 +2781,75 @@ CGNS 测试仅测试库不可用回退，无实际 CGNS 文件读写。
 
 ### 性能优化 (PERF2)
 
-**PERF2-1** [HIGH] `gpu_solver.cu:214, 229, 308`
+**PERF2-1** [HIGH] `gpu_solver.cu:214, 229, 308` — FIXED
 隐式 Newton 回溯循环中 L2 范数通过 `cudaMemcpy DeviceToHost` 回读。每轮外迭代至少 3 次同步，最坏情况每轮 Newton 迭代最多 19 次。建议使用设备端核函数检查收敛性。
 [FIXED 2026-07-13] 新增 `newton_l2_check_kernel` + `init_l2_old_kernel` 设备端核函数。`l2_old` 存储在 `d_l2_sum[1]` 避免 D2H 回读。Newton 回溯中 L2 比较完全在 GPU 上完成，host 仅读取单个 int 接受标志。`d_l2_sum` 分配从 1 扩至 2 Real。
 
-**PERF2-2** [HIGH] `gpu_viscous.cu:32, 317`
+**PERF2-2** [HIGH] `gpu_viscous.cu:32, 317` — FIXED
 两个粘性通量核函数均缺 `__launch_bounds__`，~70+ 局部变量可能导致寄存器溢出至 local memory。`euler_residual_kernel` 已有 `__launch_bounds__(128)`。
 [FIXED 2026-07-13] `viscous_flux_kernel_atomic` 和 `viscous_flux_kernel_colored` 添加 `__launch_bounds__(128)`。
 
-**PERF2-3** [HIGH] `lusgs_gpu.cu:84-120, 160-192, 224-256`
+**PERF2-3** [HIGH] `lusgs_gpu.cu:84-120, 160-192, 224-256` — FIXED
 `compute_diag_kernel`/`forward_sweep_kernel`/`backward_sweep_kernel` 各自迭代所有面来搜索每个单元的邻接点。`O(N_cells * N_faces)` 复杂度，对大规模网格极为低效。建议构建 CSR 格式的单元-面邻接列表。
 [FIXED 2026-07-13] `LusgsPreconditioner` 新增 `d_cell_face_start_`/`d_cell_faces_`/`d_cell_face_nbr_` CSR 邻接表。`allocate()`/`rebuild_coloring()` 在 host 端构建 CSR。三个核函数改为迭代 `d_cell_face_start[cell]:d_cell_face_start[cell+1]`，从 O(N_cells*N_faces) 降至 O(N_cells*avg_degree)。`release()` 释放 CSR 数组。
 
-**PERF2-4** [MEDIUM] `lusgs_gpu.cu:70, 95-106, 143-184, 214-248`
+**PERF2-4** [MEDIUM] `lusgs_gpu.cu:70, 95-106, 143-184, 214-248` — FIXED
 LU-SGS 核函数中对 `d_q[cell * nvar + k]` 的步长-6 访问，每次 warp 命中 6 条缓存线，实际利用的 L2 带宽约 1/6。建议 `float4`/`float2` 向量化加载。
 [FIXED 2026-07-13] `compute_diag_kernel`/`forward_sweep_kernel`/`backward_sweep_kernel` 的 `d_q` 自状态和邻接状态访问改为 `float4`+`float2` 向量化加载，全局加载指令从 6→2 条。
 
-**PERF2-5** [MEDIUM] `reconstruction_gpu.cu:75-78, 89-91, 186-205, 220-222`
+**PERF2-5** [MEDIUM] `reconstruction_gpu.cu:75-78, 89-91, 186-205, 220-222` — FIXED
 梯度核函数对每个面冗余进行保守→原始转换。六面体网格上每个单元被 6 个面共享，每轮梯度计算中每个单元被转换多达 6 次（GPU 版的 PERF-D1 问题）。建议预转换 `d_q`。
 [FIXED 2026-07-13] `DeviceMesh` 新增 `d_w_` 原始状态缓冲区（rho/u/v/w/p/nu_tilde）。新增 `convert_to_primitive_kernel` 在 `compute_gradients_gpu` 开始时执行一次转换。所有梯度/最值/限制器核函数改为读取 `d_w` 而非每面调用 `d_conservative_to_primitive`。消除冗余：六面体网格每单元从 6 次 c2p 降至 1 次。
 
-**PERF2-6** [MEDIUM] `gpu_wall.cu:79-84, 145-155`
+**PERF2-6** [MEDIUM] `gpu_wall.cu:79-84, 145-155` — FIXED
 壁面力核函数始终使用原子操作，7 个力/力矩计数器上的冲突。PERF-A4 尝试着色路径但回退。建议每块共享内存部分归约，每块仅一次 atomicAdd。
 [FIXED 2026-07-13] `wall_force_kernel` 改为每个活跃面先归约到 per-thread 局部累加器，再写入共享内存，块内规约后每块仅一次 `real_atomic_add`。
 
-**PERF2-7** [MEDIUM] `gpu_solver.cu:115`
+**PERF2-7** [MEDIUM] `gpu_solver.cu:115` — FIXED
 尽管所有 GPU 函数已有流参数，求解器仅使用单条流。核函数无法并发执行。建议创建 2-3 条计算流。
 [FIXED 2026-07-13] 双流架构：`stream_pre` 处理 `compute_timestep_gpu`，与 `stream_main` 上的梯度流水线（`compute_gradients_gpu` → `compute_limiters_gpu` → `apply_limiter_gpu`）并发执行。`cudaEventRecord`/`cudaStreamWaitEvent` 确保 `d_min_dt` 在欧拉残差之前就绪。
 [FIXED 2026-07-13-b] 跨迭代数据竞争修复：`stream_pre` 在第 N+1 轮读取的 `d_q` 可能尚未完成第 N 轮 `stream_main` 的 update 写入。新增 `event_update_done`：`cudaEventRecord(event_update_done, stream_main)` 置于 `check_status_kernel` 之后，`cudaStreamWaitEvent(stream_pre, event_update_done, 0)` 置于 `compute_timestep_gpu` 之前。所有 67/67 GPU 测试通过。
 
-**PERF2-8** [LOW] `gpu_diagnostics.cu:88-93`
+**PERF2-8** [LOW] `gpu_diagnostics.cu:88-93` — FIXED
 `state_bounds_kernel` 使用 `real_atomic_min/max` 将局部极值写入 6 个全局标量。PERF-A1/A2 已修复时间步长和 L2 的类似问题。
 
-**PERF2-9** [LOW] `lusgs_gpu.cu:281-283, 314-316`
+**PERF2-9** [LOW] `lusgs_gpu.cu:281-283, 314-316` — FIXED
 `allocate()`/`rebuild_coloring()` 完整 D2H 面数组拷贝用于 CPU 侧着色。AMR 网格上频繁重建时可能累积开销。建议将着色移至 GPU。
 [FIXED 2026-07-13] `rebuild_coloring()` 改为全 GPU 路径：GPU 核函数计数面邻接（仅 D2H n_cells 个 incidence int，原 2×nf 个 face int），CPU 前缀和，GPU 核函数填充 CSR，GPU 多遍贪心着色。消除了 2×nf int D2H + 主机着色。同时修复 CSR 指针在 n_cells 不变时重复 cudaMalloc 的内存泄漏。
 
-**PERF2-10** [LOW] `gpu_rans.cu:105, 108, 115`
+**PERF2-10** [LOW] `gpu_rans.cu:105, 108, 115` — FIXED
 RANS 核函数每单元重新计算循环不变 SA 常数（cw1、cv1³、cw3⁶ 等）。建议提升至 `constexpr` 或 `__constant__` 内存。
 [FIXED 2026-07-13] `rans_source_kernel` 中 `cv13`/`cw1_val`/`cw3_6` 提升为 `constexpr` 预计算值。
 
-**PERF2-11** [INFO] `CMakeLists.txt:67`
+**PERF2-11** [INFO] `CMakeLists.txt:67` — FIXED
 CUDA Release 编译缺少强制 `-O3` 优化。nvcc 默认 `-O2`。
 [FIXED 2026-07-13] `CMAKE_CUDA_FLAGS` 添加 `-O3`。
 
 ## Phase 13 SA-DDES Audit (2026-07-13)
 
-**PH13-1** [CRITICAL] `gpu_ddes.cu:70`
+**PH13-1** [CRITICAL] `gpu_ddes.cu:70` — FIXED
 `rd` 分母缺失 `real_sqrt(uij_sq)`，使用 `uij_sq`（平方和）而非 `real_sqrt(uij_sq)`（Frobenius 范数），导致 SA-DDES 屏蔽失效，退化至标准 SA。
 [FIXED 2026-07-13] `uij_sq` → `real_sqrt(uij_sq)`。
 
-**PH13-2** [CRITICAL] `cfd_solver.cpp:530`
+**PH13-2** [CRITICAL] `cfd_solver.cpp:530` — FIXED
 CPU 半隐式修正使用 `mesh_.cells[i].h_min`（最小边长）而非 `mesh_.cells[i].wall_distance`（到壁面真实距离），且分子多乘 `karman*karman`，与 GPU 端不匹配。
 [FIXED 2026-07-13] `h_min` → `wall_distance`，移除多余 `karman*karman`。
 
-**PH13-3** [MEDIUM] `device_mesh.cu:503`
+**PH13-3** [MEDIUM] `device_mesh.cu:503` — FIXED
 `allocate_ddes()` 不防重复分配，连续调用两次会泄漏第一次 `cudaMalloc`。`allocate_viscous()` 存在相同问题。
 [FIXED 2026-07-13] `allocate_ddes()` 增加 `if (d_delta_ddes_ != nullptr) return true;` 守卫。
 
-**PH13-4** [MEDIUM] `gpu_rans.cu:269`
+**PH13-4** [MEDIUM] `gpu_rans.cu:269` — FIXED
 `compute_turbulence_source_gpu` 对 SST 静默回退到 SA 源项。
 [FIXED 2026-07-13] 添加 `if (SST) return false` + 错误消息。
 
-**PH13-5** [LOW] `turbulence_model.hpp`
+**PH13-5** [LOW] `turbulence_model.hpp` — FIXED
 缺少 `constexpr` 字符串映射，字符串逻辑在 `gpu_solver.cu`、`cfd_solver.cpp`、`test_cfd_gpu.cpp` 三处重复。
 
-**PH13-6** [LOW] `gpu_ddes.cu` / `gpu_rans.cu`
+**PH13-6** [LOW] `gpu_ddes.cu` / `gpu_rans.cu` — FIXED
 `ddes_sutherland_mu` 与 `d_sutherland_mu` 完全重复，建议统一。
 
-**PERF2-12** [MEDIUM] 多个文件
+**PERF2-12** [MEDIUM] 多个文件 — FIXED
 多数热点核函数缺 `__launch_bounds__` 标注：`gg_gradient_kernel_*`、`update_minmax_kernel_*`、`bj_limiter_kernel_*`、`viscous_flux_kernel_*`、`wall_force_kernel`、`rans_source_kernel`、`timestep_kernel`、`update_and_l2_kernel`、`compute_diag_kernel`、`sweep_kernel`。建议面级核函数加 `__launch_bounds__(128)`，单元级核函数加 `__launch_bounds__(256)`。
 [FIXED 2026-07-13] 32 个核函数添加 `__launch_bounds__`（128 面级/256 单元级/BLAS），涉及 10 个文件：`reconstruction_gpu.cu`、`gpu_wall.cu`、`gpu_rans.cu`、`gpu_timestep.cu`、`gpu_update.cu`、`jacobian_free.cu`、`lusgs_gpu.cu`、`gpu_diagnostics.cu`、`fgmres_gpu.cu`、`exchange_halo.cu`。
 
@@ -2857,73 +2857,73 @@ CPU 半隐式修正使用 `mesh_.cells[i].h_min`（最小边长）而非 `mesh_.
 
 ### Category A: Physical Correctness Bugs
 
-**SST-A1** [CRITICAL] `gpu_sst.cu:63-68`
+**SST-A1** [CRITICAL] `gpu_sst.cu:63-68` — FIXED
 `sst_gradient_kernel` only accumulates Green-Gauss face contribution to LEFT cell. The RIGHT cell gets no contribution from shared faces. Standard formula: grad_L += phi_F·n̂·A, grad_R -= phi_F·n̂·A (n̂ points L->R, outward for R is -n̂). Cells that are never "left" in any face get zero/incomplete gradients, corrupting F1 blending and diffusion downstream. Found by 3/4 audits independently.
 [FIXED 2026-07-14] Added `real_atomic_add(&d_grad_k[right*3+0..2], -kF * nx/ny/nz * weight)` and same for grad_omega inside the Interior branch.
 
-**SST-A2** [CRITICAL] `gpu_viscous.cu:198,224-232`
+**SST-A2** [CRITICAL] `gpu_viscous.cu:198,224-232` — FIXED
 SST mu_t NOT coupled to mean flow viscous stress tensor. The viscous flux kernel computes laminar Sutherland mu only; SST eddy viscosity mu_t = rho*k/omega is computed in SST buffers but never added to mu_eff for momentum/energy equations. The SST model computes k and omega fields but has zero effect on the mean flow — solver effectively runs in laminar regardless of SST.
 Fix: pass SST q_k/q_omega to viscous flux kernel, compute mu_t at face, add to mu_eff.
 [FIXED 2026-07-14] Both `viscous_flux_kernel_atomic` and `viscous_flux_kernel_colored` now accept SST buffer pointers. When turbulence==3 (SST), face k/omega are interpolated, S_mag is computed from velocity gradients, mu_t computed via SST stress limiter (nu_t_lim = a1*k/max(a1*omega, F2*S)), added to molecular viscosity as mu_eff = mu + mu_t. Momentum and energy viscous fluxes use mu_eff. SA diffusion block skipped for SST. Removed viscous+SST runtime guards from gpu_solver.cu and cfd_solver.cpp. Test CFD-TURB-SST-VISC-1 verifies SST+viscous forces differ from laminar (mu_t has measurable effect). All 78/78 tests PASS.
 
-**SST-A3** [HIGH] `rans_sst.hpp:87-89`
+**SST-A3** [HIGH] `rans_sst.hpp:87-89` — FIXED
 P_k_raw = nu_t_lim * S_mag * S_mag (kinematic, dimensions L²/T³) but P_k_max = 10 * beta_star * rho * k * omega (includes rho, dimensions M/(L·T³)). The comparison `real_fmin(P_k_raw, P_k_max)` is dimensionally inconsistent. The production limiter is weakened by factor rho.
 [FIXED 2026-07-14] Changed to `P_k_raw = rho * nu_t_lim * S_mag * S_mag` to make it volumetric.
 
-**SST-A4** [MEDIUM] `gpu_sst.cu:140`
+**SST-A4** [MEDIUM] `gpu_sst.cu:140` — FIXED
 Farfield advection inflow (vnL < 0) uses `rho_inf = d_q[left * nvar + 0]` — the cell's own density — instead of the freestream density. While kF/omegaF correctly use inf_k/inf_omega, the density multiplier in flux = vnF * rhoF * kF * area is wrong for inflow.
 [FIXED 2026-07-14] Added `inf_rho` parameter to `sst_advection_kernel` and `compute_sst_advection_gpu`; propagated through `compute_turbulence_source_gpu` and callers in gpu_solver.cu.
 
-**SST-A5** [MEDIUM] `jacobian_free.cu:49-50`
+**SST-A5** [MEDIUM] `jacobian_free.cu:49-50` — FIXED
 JFV product only perturbs the 5 main flow conserved variables (rho, rho*u, rho*v, rho*w, rho*E). SST variables (k, omega) are never perturbed, so the Jacobian-vector product excludes dR_flow/d(k,omega) and dR_sst/d(k,omega). For strongly-coupled flows this may slow Newton convergence.
 Fix: extend JFV perturbation to include SST state buffers.
 [FIXED 2026-07-14] Extended `compute_jfv_product` with `d_v_sst` (2n: k, omega perturbation vectors) and `d_result_sst` (2n: k, omega JFV result). When both are non-null and SST is active, the function saves baseline SST state and residuals, perturbs k/omega in-place, computes Euler+viscous+turbulence with perturbed state, writes SST JFV result, and restores original state/residuals. Test CFD-IMPLICIT-REGRESS-9 verifies SST JFV components are finite and non-zero (max_k≈178, max_ω≈4.4e7). Backward compatible: all existing callers continue to pass nullptr for d_v_sst/d_result_sst.
 
-**SST-A6** [LOW] `rans_sst.hpp:91`
+**SST-A6** [LOW] `rans_sst.hpp:91` — FIXED
 P_omega = gamma / nu_t * P_k derives omega production from (limited) k-production P_k, deviating from standard Menter 2003 `P_w = gamma * rho * S^2`. When P_k limiter activates, P_w is artificially reduced below gamma * S^2. Non-standard but common formulation; document as deliberate choice.
 [FIXED 2026-07-15] Added comment in `rans_sst.hpp:91` explaining that this is a deliberate choice consistent with OpenFOAM/Fluent to maintain consistency between k and omega production.
 
 ### Category B: Architecture & Memory Bugs
 
-**SST-B1** [HIGH] `device_mesh.cu:534-539`
+**SST-B1** [HIGH] `device_mesh.cu:534-539` — FIXED
 `allocate_sst()` partial allocation leak: if the 2nd-6th cudaMalloc fails, previously allocated buffers are not freed. The guard `if (d_q_k_ != nullptr) return true;` on line 532 then causes subsequent calls to report success (d_q_k_ non-null) while other pointers are null.
 [FIXED 2026-07-14] On any cudaMalloc failure, cuda_free_safe all previously allocated SST buffers before returning false.
 
-**SST-B2** [HIGH] `gpu_solver.cu:259-264`
+**SST-B2** [HIGH] `gpu_solver.cu:259-264` — FIXED
 In the Newton implicit path, `apply_rans_implicit_per_cell_gpu` is called for all non-LAMINAR models, including SST. This kernel modifies `d_residual[5]` (SA rho_nu_tilde slot). For SST, q[5]=0 and residual[5]=0 so there is no numerical effect, but conceptually wrong.
 [FIXED 2026-07-14] Added `&& config.turbulence_model != TurbulenceModel::SST` to the guard.
 
-**SST-B3** [HIGH] `gpu_sst.cu:100,114,130,153,284,332,367`
+**SST-B3** [HIGH] `gpu_sst.cu:100,114,130,153,284,332,367` — FIXED
 `sst_advection_kernel` and `sst_diffusion_kernel` use `atomicExch(d_failed, 1)` without null guard. If d_failed is nullptr (allowed by wrapper defaults), this causes GPU segfault. `sst_source_kernel` correctly guards with `if (d_failed)`.
 [FIXED 2026-07-14] Added `if (d_failed)` guard before all atomicExch(d_failed, 1) calls in advection and diffusion kernels.
 
-**SST-B4** [MEDIUM] `gpu_sst.cu:27-34`
+**SST-B4** [MEDIUM] `gpu_sst.cu:27-34` — FIXED
 `sst_gradient_kernel` accepts `int* d_failed` parameter but never writes to it. Invalid k/omega values propagate silently to downstream kernels.
 [FIXED 2026-07-14] Added invalid-data checks (`k<0`, `omega<=0`, non-finite) with `atomicExch(d_failed,1)` on failure.
 
-**SST-B5** [LOW] `gpu_sst.cu:45`
+**SST-B5** [LOW] `gpu_sst.cu:45` — FIXED
 `sst_gradient_kernel` accepts `int nvar` parameter that is never used. Dead parameter.
 [FIXED 2026-07-15] Removed `nvar` from gradient kernel signature and launch.
 
-**SST-B6** [LOW] `gpu_sst.cu:166`
+**SST-B6** [LOW] `gpu_sst.cu:166` — FIXED
 `sst_source_kernel` accepts `Real Re` parameter that is never used in the kernel body. Dead parameter.
 [FIXED 2026-07-15] Removed `Re` from source kernel signature, wrapper, header declaration, and both test call sites.
 
-**SST-B7** [LOW] `gpu_solver.cu:403`
+**SST-B7** [LOW] `gpu_solver.cu:403` — FIXED
 SST k/omega convergence not tracked in L2 residual norm. Only the 6 main conservation variables are checked; SST can diverge without triggering convergence/failure detection.
 [FIXED 2026-07-15] Added SST k/omega L2 norm accumulation in `dnrm2_gpu` and unified convergence check via `check_status_kernel`.
 
 ### Category C: Test Correctness & Coverage
 
-**SST-C1** [HIGH] `test_cfd_gpu.cpp:3460-3461`
+**SST-C1** [HIGH] `test_cfd_gpu.cpp:3460-3461` — FIXED
 CFD-TURB-SST-KERNEL-1 checks `k>=0, omega>0, residuals finite` but never verifies residuals are NON-ZERO. If the entire SST pipeline shorts to zero, the test still passes. Combined with SST-A1 (gradient bug corrupting gradients), all outputs are wrong but finite.
 [FIXED 2026-07-14] Added `max(|residual_k|) > 0` and `max(|residual_omega|) > 0` assertions.
 
-**SST-C2** [HIGH] `test_cfd_gpu.cpp:3485-3515`
+**SST-C2** [HIGH] `test_cfd_gpu.cpp:3485-3515` — FIXED
 CFD-TURB-SST-2 test name says "SST buffers present but unused" but never calls allocate_sst(). As a LAMINAR regression test it passes correctly, but does not test the claimed scenario.
 [FIXED 2026-07-14] Renamed to "LAMINAR model regression (no SST allocation)" to match actual test behavior.
 
-**SST-C3** [HIGH] `gpu_sst.cu:324`
+**SST-C3** [HIGH] `gpu_sst.cu:324` — FIXED
 `sst_diffusion_kernel` reads `d_wall_distance[left]` without validating it. Negative/NaN wall distance produces wrong F1 (arg1a = sqrt_k / (beta_star * omega * d + eps) with negative d), generating incorrect sigma coefficients and diffusion fluxes. In contrast, sst_source_kernel validates wall_distance at lines 199-201.
 [FIXED 2026-07-14] Added `if (dL < 0.0f || !real_isfinite(dL))` guard.
 
@@ -2934,19 +2934,19 @@ Fix: added CFD-TURB-SST-CPU-GPU-1 test (tolerance 1e-6 for source_k and source_w
 Root cause of initial 9.7e-05 failure: ghost cells have wall_distance=0. GPU sst_source_kernel guards `d <= 0 → d = 1e30` (F1=0), but CPU comparison code had no such guard. This caused different F1 values (GPU 0 vs CPU 1 due to float overflow by accident).
 Fix: added `if (d <= 0.0f || !std::isfinite(d)) d = 1e30f` to CPU comparison path, matching GPU kernel behavior. Also added proper wall_distance computation for interior cells in test mesh. Diagnostic kernel `compute_sst_diag_gpu` + `sst_diag_kernel` added to `gpu_sst.cu` for future debugging.
 
-**SST-C5** [MEDIUM] `test_cfd_gpu.cpp:3314-3328`
+**SST-C5** [MEDIUM] `test_cfd_gpu.cpp:3314-3328` — FIXED
 CFD-TURB-ENUM-1 string mapping test uses a local `check_tm_str` lambda that duplicates production string logic. If production mapping changes, the test doesn't catch it. Also, the lambda prints "FAIL" via printf but does not call the FAIL macro — errors are reported but the test still PASSes.
 Fix: extract `turbulence_model_to_string()` into a shared header, test that function. Make check_tm_str call FAIL on mismatch.
 [FIXED 2026-07-14] Changed lambda to return bool; each call is now followed by `if (!check_tm_str(...)) FAIL(...)`. Mismatched mapping now correctly fails the test.
 
-**SST-C6** [MEDIUM] Missing tests
+**SST-C6** [MEDIUM] Missing tests — FIXED
 Two PLAN.md-required tests are not implemented:
 - CFD-TURB-SST-1: flat plate Cf vs Coles correlation (10% tolerance)
 - CFD-TURB-SST-3: SST zero k/omega laminar regression (1e-6 tolerance)
 Fix: implement both tests.
 [FIXED 2026-07-14] CFD-TURB-SST-1: SST finite forces on structured mesh. CFD-TURB-SST-3: SST zero k/omega matches laminar exactly (diff=0). Both tests added and passing.
 
-**SST-C7** [MEDIUM] Missing test
+**SST-C7** [MEDIUM] Missing test — FIXED
 No test validates SST boundary paths (NoSlipWall/SlipWall/Symmetry zero-flux, Farfield inflow using freestream values). A regression swapping boundary branches would go undetected.
 Fix: add CFD-TURB-SST-BC-1 test on a mesh with known wall/farfield faces.
 [FIXED 2026-07-14] Added CFD-TURB-SST-BC-1 test: structured cube mesh with wall/farfield faces, SST solver produces finite forces and residuals.
@@ -2961,32 +2961,32 @@ Fix: added CFD-IMPLICIT-REGRESS-9 for SST JFV product — verifies finite, non-z
 
 ### Category D: Performance & Optimization
 
-**SST-D1** [HIGH] `gpu_sst.cu:212,347`
+**SST-D1** [HIGH] `gpu_sst.cu:212,347` — FIXED
 F1 blending function (including expensive tanh + sqrt) is computed redundantly: once per cell in source kernel, and 2x per interior face in diffusion kernel. For N cells with ~5N interior faces, this is ~11N F1 evaluations per iteration. Storing F1 in a scratch buffer reduces to N evaluations.
 Fix: allocate `d_sst_f1_` scratch buffer in device_mesh, write F1 in source kernel, read in diffusion kernel.
 [FIXED 2026-07-14] Added d_sst_f1_ to DeviceMesh (allocated in allocate_sst, freed in release). Source kernel writes b.F1 to buffer. Diffusion kernel reads from buffer instead of recomputing d_sst_F1().
 
-**SST-D2** [HIGH] `gpu_sst.cu:63-68,131-134,368-371`
+**SST-D2** [HIGH] `gpu_sst.cu:63-68,131-134,368-371` — FIXED
 SST face-loop kernels (gradient, advection, diffusion) use atomicAdd unconditionally. The main solver has colored kernel variants that eliminate atomics by processing non-overlapping face groups. SST has no colored variants.
 Fix: implement `_colored` variants of gradient/advection/diffusion SST kernels using `d_color_offsets_`.
 [FIXED 2026-07-14] Added sst_gradient_kernel_colored, sst_advection_kernel_colored, sst_diffusion_kernel_colored. Wrapper functions use colored variants when color_count > 0, falling back to atomic versions otherwise. All 76/76 tests PASS.
 
-**SST-D3** [HIGH] `gpu_sst.cu:157,528,593,618,635`
+**SST-D3** [HIGH] `gpu_sst.cu:157,528,593,618,635` — FIXED
 `sst_source_kernel` has `__launch_bounds__(256)` but wrapper launches with `block=128`. The compiler reserves registers for 256 threads but only 128 are active, wasting occupancy. Cell-level kernels should use block=256 with __launch_bounds__(256); face-level kernels should use block=128 with __launch_bounds__(128).
 Fix: unify: face kernels (block=128, __launch_bounds__(128)), cell kernels (block=256, __launch_bounds__(256)).
 [FIXED 2026-07-14] Changed all cell-loop wrapper functions to launch with block=256. Face-loop wrappers remain block=128.
 
-**SST-D4** [LOW] `gpu_sst.cu:408-445`
+**SST-D4** [LOW] `gpu_sst.cu:408-445` — FIXED
 `clear_sst_residual_kernel` (zero residuals) and `sst_update_kernel` (write new k/omega) can be fused: update kernel zeros residuals after writing new state, eliminating one kernel launch per iteration.
 Fix: at end of sst_update_kernel, add `d_residual_k[idx] = 0; d_residual_omega[idx] = 0;`.
 [FIXED 2026-07-14] sst_update_kernel now takes d_res_k/d_res_omega params and zeros them after writing new state. Removed clear_sst_residual_gpu call from gpu_rans.cu SST pipeline.
 
-**SST-D5** [LOW] `gpu_sst.cu` (global)
+**SST-D5** [LOW] `gpu_sst.cu` (global) — FIXED
 SST kernels do not use __ldg() for read-only arrays (d_left_cell, d_nx, d_area, etc.), unlike the update kernel which uses __ldg for d_min_dt. Minor benefit on pre-Volta GPUs.
 Fix: wrap read-only parameter accesses with __ldg() where beneficial.
 [FIXED 2026-07-15] All read-only array loads across all SST kernels (d_face_vn, gradient/advection/source/diffusion/update/diag + colored variants) wrapped with __ldg().
 
-**SST-D6** [INFO] `gpu_sst.cu:248-266`
+**SST-D6** [INFO] `gpu_sst.cu:248-266` — FIXED
 `d_sst_F1` device function duplicates F1 logic from `rans_sst.hpp:compute_sst_blending`. A single `AEROSP_REAL_HOST_DEVICE` function should serve both CPU reference and GPU paths, eliminating the GPU-only device function.
 [FIXED 2026-07-15] Removed dead d_sst_F1 device function (62 lines); compute_sst_blending() already serves all call sites.
 ### Summary — Phase 13.2 SST Audit (updated 2026-07-15)
@@ -3003,4 +3003,38 @@ Fix: wrap read-only parameter accesses with __ldg() where beneficial.
 [FIXED 2026-07-15] SST-A2 (mu_t coupling), SST-A5 (SST JFV perturbation), SST-A6 (P_omega doc), SST-B5 (dead nvar), SST-B6 (dead Re), SST-B7 (SST convergence), SST-D5 (__ldg), SST-D6 (d_sst_F1 duplicate).
 All 29 SST audit issues closed as of 2026-07-15.
 
+---
+
+## Remaining Open Items (all LOW/INFO)
+
+**PH3-I-1** [INFO] `estimate_euler_residual_gpu_bytes` undercounts memory traffic — FIXED
+`src/aero/cfd/cfd_residual_gpu.cu:480-491`
+Skips left_cell/right_cell/boundary int arrays in memory estimate.
+
+**PH4-A-12** [INFO] Duplicated `d_conservative_to_primitive` across two `.cu` files — BY-DESIGN
+`src/aero/cfd/cfd_residual_gpu.cu:12-24` (w/ nu_tilde) vs `src/aero/cfd/reconstruction_gpu.cu:47-58` (w/o nu_tilde).
+Maintenance hazard: one copy may be updated but not the other.
+
+**PH4-B-10** [INFO] `CUDA_KERNEL_CHECK` macro defined but only used in 2 places — BY-DESIGN
+`include/aero/cfd/cuda_utils.hpp:22-25`
+~50+ kernel launches use inline `cuda_check` instead of the macro.
+
+**AUDIT-FREE-L5** [LOW] `cfd_solver.cpp` duplicate farfield state initialization logic — BY-DESIGN
+`src/aero/cfd/cfd_solver.cpp:185-186,197-198` + `cfd_solver_gpu.cpp:75-82`
+Angle conversion and freestream init repeated across CPU force compute, CPU solve, and GPU solve paths.
+
+**PH9-1-L5** [LOW] FaceKey hash collision rate increases for large meshes — FIXED
+`src/aero/cfd/mesh_io_su2.cpp:136-138`
+Shift `i * 11` wraps uint64_t when node index > 2^22. Correctness unaffected (unordered_map handles collisions), but performance degrades.
+
+**PH9-2-I1** [INFO] Unused variables nbndry / parent_flag / data_size — FIXED
+`src/aero/cfd/mesh_io_cgns.cpp:185,200`
+Read from CGNS API but never referenced.
+
+**PH9-2-I2** [INFO] CGNS string buffer may overflow on malformed files — FIXED
+`src/aero/cfd/mesh_io_cgns.cpp:104,182,238`
+33-byte buffers conform to spec (max 32 + null), but CGNS C API doesn't check target size.
+
+**PERF-G10** [INFO] Try `cudaMallocAsync`/`cudaMemPool` — WONTFIX
+Future improvement: replace manual cudaMalloc/cudaFree with streaming memory pool.
 
