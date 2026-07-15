@@ -65,6 +65,13 @@ __global__ void init_l2_old_kernel(
     d_l2_sum[1] = real_sqrt(d_l2_sum[0] / static_cast<Real>(nvar_ncells));
 }
 
+__global__ void sst_l2_accumulate_kernel(
+    Real* d_l2_sum,
+    const Real* d_sst_sums) {
+    if (threadIdx.x != 0 || blockIdx.x != 0) return;
+    d_l2_sum[0] += d_sst_sums[0] + d_sst_sums[1];
+}
+
 } // namespace
 
 static void solve_gpu_free(int* d_failed, Real* d_min_dt, Real* d_l2_sum, Real* d_forces,
@@ -104,7 +111,8 @@ static CfdSolveSummary solve_gpu_impl(
         Real mu_inf = config.mu_ref * t_ratio * real_sqrt(t_ratio) * (config.T_ref + config.sutherland_T) / (T_inf + config.sutherland_T);
         w_inf.nu_tilde = condition.nu_tilde_ratio * mu_inf / w_inf.rho;
     }
-    int nvar_ncells = DeviceMesh::NVAR * static_cast<int>(d_mesh.cell_count());
+    int nvar_ncells_flow = DeviceMesh::NVAR * static_cast<int>(d_mesh.cell_count());
+    int nvar_ncells = nvar_ncells_flow;
     int n_cells = static_cast<int>(d_mesh.cell_count());
     int nvar = DeviceMesh::NVAR;
     int nvar_cells = n_cells * nvar;
@@ -176,6 +184,10 @@ static CfdSolveSummary solve_gpu_impl(
         if (!compute_sst_init_gpu(d_mesh, inf_k, inf_omega, error, stream_main)) {
             goto fail;
         }
+    }
+
+    if (config.turbulence_model == TurbulenceModel::SST && d_mesh.has_sst()) {
+        nvar_ncells = nvar_ncells_flow + 2 * n_cells;
     }
 
     if (config.viscous && !d_mesh.allocate_viscous()) {
@@ -268,6 +280,12 @@ if (config.viscous) {
             if (!dscal_gpu(-1, d_neg_r, nvar_cells, stream_main)) { if (error) *error = "negate R failed"; goto fail; }
 
             if (!dnrm2_gpu(d_r_saved, nvar_cells, d_l2_sum, stream_main)) { if (error) *error = "L2 norm failed"; goto fail; }
+            if (config.turbulence_model == TurbulenceModel::SST && d_mesh.has_sst()) {
+                if (!dnrm2_gpu(d_mesh.residual_k_device(), n_cells, d_l2_sum + 2, stream_main)) { if (error) *error = "SST k L2 norm failed"; goto fail; }
+                if (!dnrm2_gpu(d_mesh.residual_omega_device(), n_cells, d_l2_sum + 3, stream_main)) { if (error) *error = "SST omega L2 norm failed"; goto fail; }
+                sst_l2_accumulate_kernel<<<1, 1, 0, stream_main>>>(d_l2_sum, d_l2_sum + 2);
+                if (!cuda_check(cudaGetLastError(), "sst_l2_accumulate kernel", error)) goto fail;
+            }
             init_l2_old_kernel<<<1, 1, 0, stream_main>>>(d_l2_sum, nvar_ncells);
             if (!cuda_check(cudaGetLastError(), "init_l2_old kernel launch", error)) goto fail;
 
@@ -357,6 +375,12 @@ if (config.viscous) {
                         if (!dnrm2_gpu(d_mesh.residual_device(), nvar_cells, d_l2_sum, stream_main)) {
                             if (error) *error = "new L2 norm failed"; goto fail;
                         }
+                        if (config.turbulence_model == TurbulenceModel::SST && d_mesh.has_sst()) {
+                            if (!dnrm2_gpu(d_mesh.residual_k_device(), n_cells, d_l2_sum + 2, stream_main)) { if (error) *error = "SST k L2 norm failed"; goto fail; }
+                            if (!dnrm2_gpu(d_mesh.residual_omega_device(), n_cells, d_l2_sum + 3, stream_main)) { if (error) *error = "SST omega L2 norm failed"; goto fail; }
+                            sst_l2_accumulate_kernel<<<1, 1, 0, stream_main>>>(d_l2_sum, d_l2_sum + 2);
+                            if (!cuda_check(cudaGetLastError(), "sst_l2_accumulate kernel", error)) goto fail;
+                        }
                         newton_l2_check_kernel<<<1, 1, 0, stream_main>>>(
                             d_l2_sum, nvar_ncells, config.newton_sufficient_decrease, d_newton_accepted);
                         if (!cuda_check(cudaGetLastError(), "newton L2 check kernel launch", error)) goto fail;
@@ -404,6 +428,13 @@ newton_accepted:
             if (!dnrm2_gpu(d_mesh.residual_device(), nvar_cells, d_l2_sum, stream_main)) {
                 if (error) *error = "residual L2 norm failed"; goto fail;
             }
+        }
+
+        if (config.turbulence_model == TurbulenceModel::SST && d_mesh.has_sst()) {
+            if (!dnrm2_gpu(d_mesh.residual_k_device(), n_cells, d_l2_sum + 2, stream_main)) { if (error) *error = "SST k L2 norm failed"; goto fail; }
+            if (!dnrm2_gpu(d_mesh.residual_omega_device(), n_cells, d_l2_sum + 3, stream_main)) { if (error) *error = "SST omega L2 norm failed"; goto fail; }
+            sst_l2_accumulate_kernel<<<1, 1, 0, stream_main>>>(d_l2_sum, d_l2_sum + 2);
+            if (!cuda_check(cudaGetLastError(), "sst_l2_accumulate kernel", error)) goto fail;
         }
 
         if (diagnostics_enabled) {
@@ -589,7 +620,7 @@ CfdSolveSummary solve_gpu(
 
     if (!cuda_check(cudaMalloc(&d_failed, sizeof(int)), "cudaMalloc d_failed", error)) { solve_gpu_free(d_failed, d_min_dt, d_l2_sum, d_forces, d_residual_history, d_state_bounds_history, d_failure_cell, d_failure_state); CfdSolveSummary s; s.failed = true; return s; }
     if (!cuda_check(cudaMalloc(&d_min_dt, sizeof(Real)), "cudaMalloc d_min_dt", error)) { solve_gpu_free(d_failed, d_min_dt, d_l2_sum, d_forces, d_residual_history, d_state_bounds_history, d_failure_cell, d_failure_state); CfdSolveSummary s; s.failed = true; return s; }
-    if (!cuda_check(cudaMalloc(&d_l2_sum, 2 * sizeof(Real)), "cudaMalloc d_l2_sum", error)) { solve_gpu_free(d_failed, d_min_dt, d_l2_sum, d_forces, d_residual_history, d_state_bounds_history, d_failure_cell, d_failure_state); CfdSolveSummary s; s.failed = true; return s; }
+    if (!cuda_check(cudaMalloc(&d_l2_sum, 4 * sizeof(Real)), "cudaMalloc d_l2_sum", error)) { solve_gpu_free(d_failed, d_min_dt, d_l2_sum, d_forces, d_residual_history, d_state_bounds_history, d_failure_cell, d_failure_state); CfdSolveSummary s; s.failed = true; return s; }
     if (!cuda_check(cudaMalloc(&d_forces, 7 * sizeof(Real)), "cudaMalloc d_forces", error)) { solve_gpu_free(d_failed, d_min_dt, d_l2_sum, d_forces, d_residual_history, d_state_bounds_history, d_failure_cell, d_failure_state); CfdSolveSummary s; s.failed = true; return s; }
     if (!cuda_check(cudaMalloc(&d_residual_history, config.max_iter * sizeof(Real)), "cudaMalloc d_residual_history", error)) { solve_gpu_free(d_failed, d_min_dt, d_l2_sum, d_forces, d_residual_history, d_state_bounds_history, d_failure_cell, d_failure_state); CfdSolveSummary s; s.failed = true; return s; }
 
