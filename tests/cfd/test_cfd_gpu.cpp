@@ -3380,7 +3380,7 @@ static int test_sst_kernel_sanity() {
             FAIL("sst_advection: %s", error.c_str());
         if (!compute_sst_diffusion_gpu(d_mesh, gamma, mu_ref, T_ref, sutherland_T, d_failed, &error))
             FAIL("sst_diffusion: %s", error.c_str());
-        if (!compute_sst_source_gpu(d_mesh, gamma, Re, mu_ref, T_ref, sutherland_T, d_failed, &error))
+        if (!compute_sst_source_gpu(d_mesh, gamma, mu_ref, T_ref, sutherland_T, d_failed, &error))
             FAIL("sst_source: %s", error.c_str());
 
         std::vector<Real> h_k(mesh.cells.size()), h_omega(mesh.cells.size());
@@ -3546,7 +3546,7 @@ static int test_sst_cpu_gpu_source() {
         cudaFree(d_diag_f1); cudaFree(d_diag_f2); cudaFree(d_diag_cdkw);
         cudaFree(d_diag_smag); cudaFree(d_diag_src_k); cudaFree(d_diag_src_w);
 
-        if (!compute_sst_source_gpu(d_mesh, gamma, Re, mu_ref, T_ref, sutherland_T, d_failed, &error))
+        if (!compute_sst_source_gpu(d_mesh, gamma, mu_ref, T_ref, sutherland_T, d_failed, &error))
             FAIL("sst_source: %s", error.c_str());
 
         std::vector<Real> gpu_res_k(mesh.cells.size()), gpu_res_w(mesh.cells.size());

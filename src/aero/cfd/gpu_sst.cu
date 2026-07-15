@@ -26,7 +26,7 @@ __device__ Real d_face_vn(const Real* d_q, int cell, int nvar,
 
 __global__ void __launch_bounds__(128) sst_gradient_kernel(
     const Real* d_q_k, const Real* d_q_omega,
-    int n_cells, int n_faces, int nvar,
+    int n_cells, int n_faces,
     const int* d_left_cell, const int* d_right_cell, const int* d_boundary,
     const Real* d_nx, const Real* d_ny, const Real* d_nz, const Real* d_area,
     const Real* d_volume,
@@ -319,7 +319,7 @@ __global__ void __launch_bounds__(256) sst_source_kernel(
     const Real* d_volume,
     Real* d_sst_f1,
     int n_cells, int nvar, int ngrad,
-    Real gamma, Real Re, Real mu_ref, Real T_ref, Real sutherland_T,
+    Real gamma, Real mu_ref, Real T_ref, Real sutherland_T,
     int* d_failed)
 {
     int idx = blockIdx.x * blockDim.x + threadIdx.x;
@@ -851,7 +851,7 @@ bool compute_sst_gradients_gpu(DeviceMesh& mesh, int* d_failed,
         int grid_grad = (nf + block_face - 1) / block_face;
         sst_gradient_kernel<<<grid_grad, block_face, 0, stream>>>(
             mesh.q_k_device(), mesh.q_omega_device(),
-            nc, nf, DeviceMesh::NVAR,
+            nc, nf,
             fd.left_cell, fd.right_cell, fd.boundary,
             fd.nx, fd.ny, fd.nz, fd.area,
             cd.volume,
@@ -920,7 +920,7 @@ bool compute_sst_advection_gpu(DeviceMesh& mesh,
     return true;
 }
 
-bool compute_sst_source_gpu(DeviceMesh& mesh, Real gamma, Real Re,
+bool compute_sst_source_gpu(DeviceMesh& mesh, Real gamma,
     Real mu_ref, Real T_ref, Real sutherland_T,
     int* d_failed, std::string* error, cudaStream_t stream)
 {
@@ -948,7 +948,7 @@ bool compute_sst_source_gpu(DeviceMesh& mesh, Real gamma, Real Re,
         cd.wall_distance, cd.volume,
         mesh.sst_f1_device(),
         nc, DeviceMesh::NVAR, DeviceMesh::NGRAD,
-        gamma, Re, mu_ref, T_ref, sutherland_T,
+        gamma, mu_ref, T_ref, sutherland_T,
         d_failed);
     if (!cuda_check(cudaGetLastError(), "sst_source_kernel launch", error)) return false;
 

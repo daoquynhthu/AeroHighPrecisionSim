@@ -282,7 +282,7 @@ bool compute_turbulence_source_gpu(DeviceMesh& mesh, const CfdConfig& config,
         if (!compute_sst_diffusion_gpu(mesh, config.gamma,
                 config.mu_ref, config.T_ref, config.sutherland_T,
                 d_failed, error, stream)) return false;
-        if (!compute_sst_source_gpu(mesh, config.gamma, config.Re,
+        if (!compute_sst_source_gpu(mesh, config.gamma,
                 config.mu_ref, config.T_ref, config.sutherland_T,
                 d_failed, error, stream)) return false;
         if (d_min_dt) {

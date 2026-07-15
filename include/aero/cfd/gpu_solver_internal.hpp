@@ -63,7 +63,7 @@ bool compute_sst_advection_gpu(DeviceMesh& mesh,
 bool compute_sst_diffusion_gpu(DeviceMesh& mesh, Real gamma,
     Real mu_ref, Real T_ref, Real sutherland_T,
     int* d_failed, std::string* error = nullptr, cudaStream_t stream = nullptr);
-bool compute_sst_source_gpu(DeviceMesh& mesh, Real gamma, Real Re,
+bool compute_sst_source_gpu(DeviceMesh& mesh, Real gamma,
     Real mu_ref, Real T_ref, Real sutherland_T,
     int* d_failed, std::string* error = nullptr, cudaStream_t stream = nullptr);
 bool compute_sst_update_gpu(DeviceMesh& mesh, const Real* d_min_dt,
