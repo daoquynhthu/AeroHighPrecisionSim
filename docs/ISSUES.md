@@ -324,35 +324,35 @@ Fix: `CfdSolveSummary s; s.failed = true; return s;`
 
 #### MEDIUM
 
-**PH3-M-1: Missing NaN guard in gpu_timestep.cu kernel checks** [MEDIUM]
+**PH3-M-1: Missing NaN guard in gpu_timestep.cu kernel checks** [MEDIUM] — FIXED
 `src/aero_cfd/gpu_timestep.cu:25,33`
 
 `if (rho <= 0.0f) return;` and `if (p <= 0.0f) return;` do not catch NaN — `NaN <= 0.0f` evaluates to `false`. NaN rho/p flows through to produce a finite but wrong dt. Same pattern in `gpu_wall.cu:38,46,56`.
 
 Fix: Replace `<= 0.0f` with `!(x > 0.0f)` or add `|| !__finitef(x)`.
 
-**PH3-M-2: Missing NaN guard in wall force gradient extrapolation fallback** [MEDIUM]
+**PH3-M-2: Missing NaN guard in wall force gradient extrapolation fallback** [MEDIUM] — FIXED
 `src/aero_cfd/gpu_wall.cu:48-56`
 
 If gradients contain NaN, extrapolated `p` becomes NaN. The check `p <= 0.0f` does not catch NaN, so NaN pressure propagates into force coefficients.
 
 Fix: `if (!__finitef(p) || p <= 0.0f)`
 
-**PH3-M-3: Missing cell-index bounds check in euler_residual_kernel** [MEDIUM]
+**PH3-M-3: Missing cell-index bounds check in euler_residual_kernel** [MEDIUM] — FIXED
 `src/aero_cfd/cfd_residual_gpu.cu:152,168,199`
 
 `d_left_cell[idx]` and `d_right_cell[idx]` used as array indices without validation. A corrupted mesh causes out-of-bounds device memory access (hard GPU context loss). Same issue in `gpu_wall.cu:37`.
 
 Fix: Add `if (left < 0 || left >= n_cells) { atomicExch(d_failed, 1); return; }` (requires passing `n_cells` to kernel).
 
-**PH3-M-4: reinterpret_cast<void*&> strict-aliasing violation in FREE_AND_ASSERT** [MEDIUM]
+**PH3-M-4: reinterpret_cast<void*&> strict-aliasing violation in FREE_AND_ASSERT** [MEDIUM] — FIXED (restructured, macro removed)
 `src/aero_cfd/device_mesh.cu:119`
 
 Casting `float*`/`int*` lvalues to `void*&` violates C++ strict aliasing rules (UB). Formal UB though accepted by all CUDA compilers in practice.
 
 Fix: Replace with template `cuda_free_and_null<T>(T*& ptr)`.
 
-**PH3-M-5: Hardcoded 15 for gradient stride (fragile against struct changes)** [MEDIUM]
+**PH3-M-5: Hardcoded 15 for gradient stride (fragile against struct changes)** [MEDIUM] — FIXED (DeviceMesh::NGRAD=18)
 `src/aero_cfd/gpu_wall.cu:52`, `src/aero_cfd/device_mesh.cu:257`
 
 `PrimitiveGradient` has 15 float members, but the code uses magic number `15` instead of `sizeof(PrimitiveGradient)/sizeof(float)`. If struct is extended, these sites silently misalign.
@@ -503,7 +503,7 @@ Fix applied (2026-07-08): Added `int* d_failed` parameter to `gg_gradient_kernel
 
 Fix applied (2026-07-08): Reordered so `cudaGetLastError` check occurs before `cudaFree(d_minmax)`, with `cudaFree` moved to after error handling. Added `cudaDeviceSynchronize` after `gg_gradient_kernel` in `compute_gradients_gpu`.
 
-**PH4-A-6: CPU `compute_euler_residual_cpu` has no 2nd-order path** [MEDIUM]
+**PH4-A-6: CPU `compute_euler_residual_cpu` has no 2nd-order path** [MEDIUM] — FIXED (compute_euler_residual_cpu_order2 exists)
 `src/aero_cfd/cfd_residual.cpp:6-48`, `src/aero_cfd/cfd_solver.cpp:206-306`
 
 The CPU residual function is purely 1st-order — it reads cell-center values and feeds them directly to `hllc_flux`. No gradient reconstruction, no limiter application. `reconstruct_primitive` and `compute_barth_jespersen_limiters` exist in `reconstruction.cpp` but are never called from `compute_euler_residual_cpu`. This means:
@@ -576,7 +576,7 @@ PH2-E-2 now FIXED via Phase 4-A face coloring. See PH2-E-2 entry above.
 
 ## CPU-GPU Capability Asymmetry (2026-07-08)
 
-**PH4-A-14: CPU solver has no second-order reconstruction path** [MEDIUM]
+**PH4-A-14: CPU solver has no second-order reconstruction path** [MEDIUM] — FIXED
 `src/aero_cfd/cfd_solver.cpp:206-306`, `src/aero_cfd/cfd_residual.cpp:6-48`
 
 Both `CfdSolver::solve()` and `compute_euler_residual_cpu()` are purely first-order — no gradient computation, no limiter application, no face reconstruction. The functions `compute_green_gauss_gradients`, `compute_barth_jespersen_limiters`, and `reconstruct_primitive` exist in `reconstruction.cpp` but are never called from the solver or residual assembly. This means:
