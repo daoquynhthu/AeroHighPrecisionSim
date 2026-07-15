@@ -2903,15 +2903,15 @@ In the Newton implicit path, `apply_rans_implicit_per_cell_gpu` is called for al
 
 **SST-B5** [LOW] `gpu_sst.cu:45`
 `sst_gradient_kernel` accepts `int nvar` parameter that is never used. Dead parameter.
-Fix: remove nvar from gradient kernel signature and launch.
+[FIXED 2026-07-15] Removed `nvar` from gradient kernel signature and launch.
 
 **SST-B6** [LOW] `gpu_sst.cu:166`
 `sst_source_kernel` accepts `Real Re` parameter that is never used in the kernel body. Dead parameter.
-Fix: remove Re from source kernel signature, wrapper, and declaration.
+[FIXED 2026-07-15] Removed `Re` from source kernel signature, wrapper, header declaration, and both test call sites.
 
 **SST-B7** [LOW] `gpu_solver.cu:403`
 SST k/omega convergence not tracked in L2 residual norm. Only the 6 main conservation variables are checked; SST can diverge without triggering convergence/failure detection.
-Fix: when SST active, also compute L2 norm of SST residuals and include in convergence check.
+[FIXED 2026-07-15] Added SST k/omega L2 norm accumulation in `dnrm2_gpu` and unified convergence check via `check_status_kernel`.
 
 ### Category C: Test Correctness & Coverage
 
@@ -2984,20 +2984,23 @@ Fix: at end of sst_update_kernel, add `d_residual_k[idx] = 0; d_residual_omega[i
 **SST-D5** [LOW] `gpu_sst.cu` (global)
 SST kernels do not use __ldg() for read-only arrays (d_left_cell, d_nx, d_area, etc.), unlike the update kernel which uses __ldg for d_min_dt. Minor benefit on pre-Volta GPUs.
 Fix: wrap read-only parameter accesses with __ldg() where beneficial.
+[FIXED 2026-07-15] All read-only array loads across all SST kernels (d_face_vn, gradient/advection/source/diffusion/update/diag + colored variants) wrapped with __ldg().
 
 **SST-D6** [INFO] `gpu_sst.cu:248-266`
 `d_sst_F1` device function duplicates F1 logic from `rans_sst.hpp:compute_sst_blending`. A single `AEROSP_REAL_HOST_DEVICE` function should serve both CPU reference and GPU paths, eliminating the GPU-only device function.
-### Summary — Phase 13.2 SST Audit (updated 2026-07-14)
+[FIXED 2026-07-15] Removed dead d_sst_F1 device function (62 lines); compute_sst_blending() already serves all call sites.
+### Summary — Phase 13.2 SST Audit (updated 2026-07-15)
 
 | Severity | Open | FIXED | IDs |
 |----------|------|-------|-----|
 | CRITICAL | 0 | 4 | SST-A1, SST-A2, SST-A3, SST-A4 |
 | HIGH     | 0 | 5 | SST-B1, SST-B2, SST-B3, SST-B4, SST-D2 |
 | MEDIUM   | 0 | 8 | SST-A5 (JFV perturbation), SST-C2 (test name), SST-C4 (CPU/GPU test), SST-C5 (enum test), SST-C6 (tests), SST-C7 (boundary test), SST-C8 (viscous guard) |
-| LOW      | 0 | 6 | SST-C3 (wall_dist guard), SST-D1 (F1 buffer), SST-D3 (block size), SST-D4 (fuse clear+update), SST-C9 (JFV test), SST-C1 (residual check), SST-D5 (__ldg), SST-D6 (d_sst_F1 duplicate) |
+| LOW      | 0 | 11 | SST-C3 (wall_dist guard), SST-D1 (F1 buffer), SST-D3 (block size), SST-D4 (fuse clear+update), SST-C9 (JFV test), SST-C1 (residual check), SST-A6 (P_omega doc), SST-B5 (dead nvar), SST-B6 (dead Re), SST-B7 (SST convergence), SST-D5 (__ldg) |
 | INFO     | 0 | 1 | SST-D6 (d_sst_F1 duplicate) |
 
-Fixed this session (2026-07-14): SST-A4 (farfield inflow density), SST-B4 (d_failed guard in gradient kernel), SST-C2 (test name), SST-C4 (CPU/GPU source comparison test + wall_distance guard fix), SST-C5 (enum test lambda FAIL macro), SST-C6 (SST-1 finite forces, SST-3 zero k/omega laminar regression), SST-C7 (boundary path test), SST-C8 (viscous+SST runtime guard), SST-C9 (SST JFV product test), SST-D1 (F1 scratch buffer), SST-D2 (colored variants), SST-D3 (block size mismatch), SST-D4 (fuse clear+update).
-Fixed this session (2026-07-15): SST-A2 (mu_t coupling), SST-A5 (SST JFV perturbation). All SST issues CLOSED. Remaining: SST-A6 (LOW, P_omega doc), SST-B5/B6/B7 (LOW, dead params/convergence), SST-D5 (LOW, __ldg), SST-D6 (INFO, d_sst_F1 duplicate).
+[FIXED 2026-07-14] SST-A4, SST-B4, SST-C2, SST-C4, SST-C5, SST-C6, SST-C7, SST-C8, SST-C9, SST-D1, SST-D2, SST-D3, SST-D4.
+[FIXED 2026-07-15] SST-A2 (mu_t coupling), SST-A5 (SST JFV perturbation), SST-A6 (P_omega doc), SST-B5 (dead nvar), SST-B6 (dead Re), SST-B7 (SST convergence), SST-D5 (__ldg), SST-D6 (d_sst_F1 duplicate).
+All 29 SST audit issues closed as of 2026-07-15.
 
 
