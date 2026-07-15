@@ -100,7 +100,8 @@ struct PrimitiveState;
 bool compute_jfv_product(DeviceMesh& mesh, const Real* d_v, Real* d_result,
     const Real* d_residual, Real epsilon, const CfdConfig& config,
     const PrimitiveState& w_inf, Real* d_scratch, int* d_failed,
-    std::string* error = nullptr, cudaStream_t stream = nullptr);
+    std::string* error = nullptr, cudaStream_t stream = nullptr,
+    const Real* d_v_sst = nullptr, Real* d_result_sst = nullptr);
 
 // Multi-GPU halo exchange
 bool exchange_halo_gpu(DeviceMesh& mesh, const GpuPartition& gpu_part,

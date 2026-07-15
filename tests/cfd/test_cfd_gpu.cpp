@@ -3983,12 +3983,44 @@ static int test_sst_jfv_product() {
         if (!launch_euler_residual_kernel(d_mesh, w_inf, gamma, d_failed, nullptr, nullptr, 1))
             FAIL("Euler residual kernel failed");
 
+        {
+            CfdConfig sst_cfg;
+            sst_cfg.gamma = gamma;
+            sst_cfg.Re = Re;
+            sst_cfg.mu_ref = mu_ref;
+            sst_cfg.T_ref = T_ref;
+            sst_cfg.sutherland_T = sutherland_T;
+            sst_cfg.wall_temperature = wall_T;
+            sst_cfg.prandtl = prandtl;
+            sst_cfg.turbulence_model = TurbulenceModel::SST;
+            if (!compute_turbulence_source_gpu(d_mesh, sst_cfg, d_failed, nullptr, nullptr, init_k, init_omega, w_inf.rho))
+                FAIL("SST source failed");
+        }
+
         if (!dcopy_gpu(d_mesh.residual_device(), d_residual_saved, nvar_cells))
             FAIL("dcopy residual failed");
+
+        Real* d_v_sst = nullptr;
+        Real* d_result_sst = nullptr;
+        Real* d_residual_k_saved = nullptr;
+        Real* d_residual_omega_saved = nullptr;
+        if (!cuda_check(cudaMalloc(&d_v_sst, 2 * n * sizeof(Real)), "malloc d_v_sst")) FAIL("malloc d_v_sst");
+        if (!cuda_check(cudaMalloc(&d_result_sst, 2 * n * sizeof(Real)), "malloc d_result_sst")) FAIL("malloc d_result_sst");
+        if (!cuda_check(cudaMalloc(&d_residual_k_saved, n * sizeof(Real)), "malloc d_residual_k_saved")) FAIL("malloc d_residual_k_saved");
+        if (!cuda_check(cudaMalloc(&d_residual_omega_saved, n * sizeof(Real)), "malloc d_residual_omega_saved")) FAIL("malloc d_residual_omega_saved");
+
+        if (!dcopy_gpu(d_mesh.residual_k_device(), d_residual_k_saved, n))
+            FAIL("dcopy residual_k failed");
+        if (!dcopy_gpu(d_mesh.residual_omega_device(), d_residual_omega_saved, n))
+            FAIL("dcopy residual_omega failed");
 
         std::vector<Real> h_v(nvar_cells, 1.0f);
         if (!cuda_check(cudaMemcpy(d_v, h_v.data(), nvar_cells * sizeof(Real), cudaMemcpyHostToDevice), "copy v"))
             FAIL("copy v failed");
+
+        std::vector<Real> h_v_sst(2 * n, 1.0f);
+        if (!cuda_check(cudaMemcpy(d_v_sst, h_v_sst.data(), 2 * n * sizeof(Real), cudaMemcpyHostToDevice), "copy v_sst"))
+            FAIL("copy v_sst failed");
 
         CfdConfig cfg;
         cfg.gamma = gamma;
@@ -4001,7 +4033,8 @@ static int test_sst_jfv_product() {
         cfg.turbulence_model = TurbulenceModel::SST;
 
         Real epsilon = 1e-7f;
-        if (!compute_jfv_product(d_mesh, d_v, d_result, d_residual_saved, epsilon, cfg, w_inf, d_scratch, d_failed, nullptr))
+        if (!compute_jfv_product(d_mesh, d_v, d_result, d_residual_saved, epsilon, cfg, w_inf, d_scratch, d_failed, nullptr, nullptr,
+                d_v_sst, d_result_sst))
             FAIL("compute_jfv_product failed");
 
         int jfv_failed = 0;
@@ -4023,11 +4056,58 @@ static int test_sst_jfv_product() {
         if (!all_finite) FAIL("JFV result has non-finite entries");
         if (max_abs < 1e-10f) FAIL("JFV result is all zero (max_abs=%g)", max_abs);
 
+        std::vector<Real> h_result_sst(2 * n);
+        if (!cuda_check(cudaMemcpy(h_result_sst.data(), d_result_sst, 2 * n * sizeof(Real), cudaMemcpyDeviceToHost), "copy result_sst"))
+            FAIL("copy result_sst failed");
+
+        {
+            bool sst_finite = true;
+            bool k_nonzero = false, omega_nonzero = false;
+            Real max_k = 0, max_omega = 0;
+            for (int i = 0; i < n; ++i) {
+                Real vk = h_result_sst[i];
+                Real vo = h_result_sst[n + i];
+                if (!std::isfinite(vk) || !std::isfinite(vo)) { sst_finite = false; break; }
+                if (std::fabs(vk) > max_k) max_k = std::fabs(vk);
+                if (std::fabs(vo) > max_omega) max_omega = std::fabs(vo);
+                if (std::fabs(vk) > 1e-10f) k_nonzero = true;
+                if (std::fabs(vo) > 1e-10f) omega_nonzero = true;
+            }
+            if (!sst_finite) FAIL("SST JFV result has non-finite entries");
+            if (max_k < 1e-10f) FAIL("SST JFV k-result is all zero (max_k=%g)", max_k);
+            if (max_omega < 1e-10f) FAIL("SST JFV omega-result is all zero (max_omega=%g)", max_omega);
+            std::printf("  [INFO] SST JFV max_k=%.2e max_omega=%.2e\n", max_k, max_omega);
+        }
+
+        // Verify SST state and residual are restored after JFV
+        {
+            std::vector<Real> h_k_after(n), h_res_k_after(n);
+            if (!cuda_check(cudaMemcpy(h_k_after.data(), d_mesh.q_k_device(), n * sizeof(Real), cudaMemcpyDeviceToHost), "read k after"))
+                FAIL("read k after failed");
+            if (!cuda_check(cudaMemcpy(h_res_k_after.data(), d_mesh.residual_k_device(), n * sizeof(Real), cudaMemcpyDeviceToHost), "read res_k after"))
+                FAIL("read res_k after failed");
+            std::vector<Real> h_res_k_saved(n);
+            if (!cuda_check(cudaMemcpy(h_res_k_saved.data(), d_residual_k_saved, n * sizeof(Real), cudaMemcpyDeviceToHost), "read res_k saved"))
+                FAIL("read res_k saved failed");
+
+            bool k_ok = true, res_k_ok = true;
+            for (int i = 0; i < n; ++i) {
+                if (std::fabs(h_k_after[i] - init_k) > 1e-12f) k_ok = false;
+                if (std::fabs(h_res_k_after[i] - h_res_k_saved[i]) > 1e-12f) res_k_ok = false;
+            }
+            if (!k_ok) FAIL("SST state k not restored after JFV");
+            if (!res_k_ok) FAIL("SST residual k not restored after JFV");
+        }
+
         cuda_free_safe(d_v);
         cuda_free_safe(d_result);
         cuda_free_safe(d_scratch);
         cuda_free_safe(d_residual_saved);
         cuda_free_safe(d_failed);
+        cuda_free_safe(d_v_sst);
+        cuda_free_safe(d_result_sst);
+        cuda_free_safe(d_residual_k_saved);
+        cuda_free_safe(d_residual_omega_saved);
         PASS;
     }
     return 0;

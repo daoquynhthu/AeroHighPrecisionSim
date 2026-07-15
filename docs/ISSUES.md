@@ -2877,6 +2877,7 @@ Farfield advection inflow (vnL < 0) uses `rho_inf = d_q[left * nvar + 0]` — th
 **SST-A5** [MEDIUM] `jacobian_free.cu:49-50`
 JFV product only perturbs the 5 main flow conserved variables (rho, rho*u, rho*v, rho*w, rho*E). SST variables (k, omega) are never perturbed, so the Jacobian-vector product excludes dR_flow/d(k,omega) and dR_sst/d(k,omega). For strongly-coupled flows this may slow Newton convergence.
 Fix: extend JFV perturbation to include SST state buffers.
+[FIXED 2026-07-14] Extended `compute_jfv_product` with `d_v_sst` (2n: k, omega perturbation vectors) and `d_result_sst` (2n: k, omega JFV result). When both are non-null and SST is active, the function saves baseline SST state and residuals, perturbs k/omega in-place, computes Euler+viscous+turbulence with perturbed state, writes SST JFV result, and restores original state/residuals. Test CFD-IMPLICIT-REGRESS-9 verifies SST JFV components are finite and non-zero (max_k≈178, max_ω≈4.4e7). Backward compatible: all existing callers continue to pass nullptr for d_v_sst/d_result_sst.
 
 **SST-A6** [LOW] `rans_sst.hpp:91`
 P_omega = gamma / nu_t * P_k derives omega production from (limited) k-production P_k, deviating from standard Menter 2003 `P_w = gamma * rho * S^2`. When P_k limiter activates, P_w is artificially reduced below gamma * S^2. Non-standard but common formulation; document as deliberate choice.
@@ -2991,10 +2992,11 @@ Fix: wrap read-only parameter accesses with __ldg() where beneficial.
 |----------|------|-------|-----|
 | CRITICAL | 0 | 4 | SST-A1, SST-A2, SST-A3, SST-A4 |
 | HIGH     | 0 | 5 | SST-B1, SST-B2, SST-B3, SST-B4, SST-D2 |
-| MEDIUM   | 1 | 7 | SST-A5 (JFV perturbation, open), SST-C2 (test name), SST-C4 (CPU/GPU test), SST-C5 (enum test), SST-C6 (tests), SST-C7 (boundary test), SST-C8 (viscous guard) |
+| MEDIUM   | 0 | 8 | SST-A5 (JFV perturbation), SST-C2 (test name), SST-C4 (CPU/GPU test), SST-C5 (enum test), SST-C6 (tests), SST-C7 (boundary test), SST-C8 (viscous guard) |
 | LOW      | 0 | 6 | SST-C3 (wall_dist guard), SST-D1 (F1 buffer), SST-D3 (block size), SST-D4 (fuse clear+update), SST-C9 (JFV test), SST-C1 (residual check), SST-D5 (__ldg), SST-D6 (d_sst_F1 duplicate) |
 | INFO     | 0 | 1 | SST-D6 (d_sst_F1 duplicate) |
 
 Fixed this session (2026-07-14): SST-A4 (farfield inflow density), SST-B4 (d_failed guard in gradient kernel), SST-C2 (test name), SST-C4 (CPU/GPU source comparison test + wall_distance guard fix), SST-C5 (enum test lambda FAIL macro), SST-C6 (SST-1 finite forces, SST-3 zero k/omega laminar regression), SST-C7 (boundary path test), SST-C8 (viscous+SST runtime guard), SST-C9 (SST JFV product test), SST-D1 (F1 scratch buffer), SST-D2 (colored variants), SST-D3 (block size mismatch), SST-D4 (fuse clear+update).
+Fixed this session (2026-07-15): SST-A2 (mu_t coupling), SST-A5 (SST JFV perturbation). All SST issues CLOSED. Remaining: SST-A6 (LOW, P_omega doc), SST-B5/B6/B7 (LOW, dead params/convergence), SST-D5 (LOW, __ldg), SST-D6 (INFO, d_sst_F1 duplicate).
 
 
