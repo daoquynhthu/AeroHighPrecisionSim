@@ -1066,7 +1066,7 @@ Total: 4 new findings, 4 fixed, 0 open.
 
 ### Category A: Correctness Bugs
 
-**PH8-2-A1: `bj_limiter_kernel` 限制器缓冲区步长为 5 但 `PrimitiveLimiter` 有 6 个字段** [CRITICAL]
+**PH8-2-A1: `bj_limiter_kernel` 限制器缓冲区步长为 5 但 `PrimitiveLimiter` 有 6 个字段** [CRITICAL] — FIXED
 
 `src/aero/cfd/reconstruction_gpu.cu:383,417`
 
@@ -1087,7 +1087,7 @@ Real* limR = d_limiters + right * 5;  // 错误，应为 right * 6
 
 修复：将行 383、417 的 `* 5` 改为 `* 6`。
 
-**PH8-2-A2: `download_state()` 缺失 `rho_nu_tilde`（索引 5）** [CRITICAL]
+**PH8-2-A2: `download_state()` 缺失 `rho_nu_tilde`（索引 5）** [CRITICAL] — FIXED
 
 `src/aero/cfd/device_mesh.cu:418-424`
 
@@ -1102,7 +1102,7 @@ q[i].rho_E = flat[i * NVAR + 4];
 
 `upload_state()` 正确地将 `rho_nu_tilde` 存储到索引 5（行 372），但 `download_state()` 从未读取。下载后 `rho_nu_tilde` 始终为 0.0f。
 
-**PH8-2-A3: `download_residual()` 缺失 `turbulence`（索引 5）** [CRITICAL]
+**PH8-2-A3: `download_residual()` 缺失 `turbulence`（索引 5）** [CRITICAL] — FIXED
 
 `src/aero/cfd/device_mesh.cu:438-443`
 
