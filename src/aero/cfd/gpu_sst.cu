@@ -15,12 +15,12 @@ namespace {
 __device__ Real d_face_vn(const Real* d_q, int cell, int nvar,
     Real nx, Real ny, Real nz)
 {
-    Real rho = d_q[cell * nvar + 0];
+    Real rho = __ldg(d_q + cell * nvar + 0);
     if (rho <= 0.0f || !real_isfinite(rho)) return 0.0f;
     Real inv_rho = 1.0f / rho;
-    Real u = d_q[cell * nvar + 1] * inv_rho;
-    Real v = d_q[cell * nvar + 2] * inv_rho;
-    Real w = d_q[cell * nvar + 3] * inv_rho;
+    Real u = __ldg(d_q + cell * nvar + 1) * inv_rho;
+    Real v = __ldg(d_q + cell * nvar + 2) * inv_rho;
+    Real w = __ldg(d_q + cell * nvar + 3) * inv_rho;
     return u * nx + v * ny + w * nz;
 }
 
@@ -36,30 +36,30 @@ __global__ void __launch_bounds__(128) sst_gradient_kernel(
     int idx = blockIdx.x * blockDim.x + threadIdx.x;
     if (idx >= n_faces) return;
 
-    int left = d_left_cell[idx];
+    int left = __ldg(d_left_cell + idx);
     if (left < 0 || left >= n_cells) return;
-    int bnd = d_boundary[idx];
+    int bnd = __ldg(d_boundary + idx);
 
-    Real kL = d_q_k[left];
-    Real wL = d_q_omega[left];
+    Real kL = __ldg(d_q_k + left);
+    Real wL = __ldg(d_q_omega + left);
     if (kL < 0.0f || !real_isfinite(kL) || wL <= 0.0f || !real_isfinite(wL)) {
         if (d_failed) atomicExch(d_failed, 1); return;
     }
 
     Real kF, wF;
     if (bnd == static_cast<int>(BoundaryKind::Interior)) {
-        int right = d_right_cell[idx];
+        int right = __ldg(d_right_cell + idx);
         if (right < 0 || right >= n_cells) return;
-        Real kR = d_q_k[right];
-        Real wR = d_q_omega[right];
+        Real kR = __ldg(d_q_k + right);
+        Real wR = __ldg(d_q_omega + right);
         if (kR < 0.0f || !real_isfinite(kR) || wR <= 0.0f || !real_isfinite(wR)) {
             if (d_failed) atomicExch(d_failed, 1); return;
         }
         kF = 0.5f * (kL + kR);
         wF = 0.5f * (wL + wR);
 
-        Real nx = d_nx[idx], ny = d_ny[idx], nz = d_nz[idx];
-        Real area = d_area[idx];
+        Real nx = __ldg(d_nx + idx), ny = __ldg(d_ny + idx), nz = __ldg(d_nz + idx);
+        Real area = __ldg(d_area + idx);
         Real weight = area;
 
         real_atomic_add(&d_grad_k[left * 3 + 0], kF * nx * weight);
@@ -79,8 +79,8 @@ __global__ void __launch_bounds__(128) sst_gradient_kernel(
         kF = kL;
         wF = wL;
 
-        Real nx = d_nx[idx], ny = d_ny[idx], nz = d_nz[idx];
-        Real area = d_area[idx];
+        Real nx = __ldg(d_nx + idx), ny = __ldg(d_ny + idx), nz = __ldg(d_nz + idx);
+        Real area = __ldg(d_area + idx);
         Real weight = area;
 
         real_atomic_add(&d_grad_k[left * 3 + 0], kF * nx * weight);
@@ -105,25 +105,25 @@ __global__ void __launch_bounds__(128) sst_gradient_kernel_colored(
     int idx = blockIdx.x * blockDim.x + threadIdx.x + face_start;
     if (idx >= face_end) return;
 
-    int left = d_left_cell[idx];
+    int left = __ldg(d_left_cell + idx);
     if (left < 0 || left >= n_cells) return;
-    int bnd = d_boundary[idx];
+    int bnd = __ldg(d_boundary + idx);
 
-    Real kL = d_q_k[left];
-    Real wL = d_q_omega[left];
+    Real kL = __ldg(d_q_k + left);
+    Real wL = __ldg(d_q_omega + left);
     if (kL < 0.0f || !real_isfinite(kL) || wL <= 0.0f || !real_isfinite(wL)) {
         if (d_failed) atomicExch(d_failed, 1); return;
     }
 
-    Real nx = d_nx[idx], ny = d_ny[idx], nz = d_nz[idx];
-    Real area = d_area[idx];
+    Real nx = __ldg(d_nx + idx), ny = __ldg(d_ny + idx), nz = __ldg(d_nz + idx);
+    Real area = __ldg(d_area + idx);
     Real weight = area;
 
     if (bnd == static_cast<int>(BoundaryKind::Interior)) {
-        int right = d_right_cell[idx];
+        int right = __ldg(d_right_cell + idx);
         if (right < 0 || right >= n_cells) return;
-        Real kR = d_q_k[right];
-        Real wR = d_q_omega[right];
+        Real kR = __ldg(d_q_k + right);
+        Real wR = __ldg(d_q_omega + right);
         if (kR < 0.0f || !real_isfinite(kR) || wR <= 0.0f || !real_isfinite(wR)) {
             if (d_failed) atomicExch(d_failed, 1); return;
         }
@@ -159,7 +159,7 @@ __global__ void __launch_bounds__(256) sst_divide_volume_kernel(
 {
     int idx = blockIdx.x * blockDim.x + threadIdx.x;
     if (idx >= n_cells) return;
-    Real inv_vol = 1.0f / (d_volume[idx] + 1e-30f);
+    Real inv_vol = 1.0f / (__ldg(d_volume + idx) + 1e-30f);
     d_grad_k[idx * 3 + 0] *= inv_vol;
     d_grad_k[idx * 3 + 1] *= inv_vol;
     d_grad_k[idx * 3 + 2] *= inv_vol;
@@ -181,25 +181,25 @@ __global__ void __launch_bounds__(128) sst_advection_kernel(
     int idx = blockIdx.x * blockDim.x + threadIdx.x;
     if (idx >= n_faces) return;
 
-    int left = d_left_cell[idx];
+    int left = __ldg(d_left_cell + idx);
     if (left < 0 || left >= n_cells) { if (d_failed) atomicExch(d_failed, 1); return; }
-    int bnd = d_boundary[idx];
-    Real nx = d_nx[idx], ny = d_ny[idx], nz = d_nz[idx];
-    Real area = d_area[idx];
+    int bnd = __ldg(d_boundary + idx);
+    Real nx = __ldg(d_nx + idx), ny = __ldg(d_ny + idx), nz = __ldg(d_nz + idx);
+    Real area = __ldg(d_area + idx);
 
-    Real rhoL = d_q[left * nvar + 0];
-    Real kL = d_q_k[left];
-    Real wL = d_q_omega[left];
+    Real rhoL = __ldg(d_q + left * nvar + 0);
+    Real kL = __ldg(d_q_k + left);
+    Real wL = __ldg(d_q_omega + left);
     Real vnL = d_face_vn(d_q, left, nvar, nx, ny, nz);
 
     Real rhoF, kF, wF, vnF;
 
     if (bnd == static_cast<int>(BoundaryKind::Interior)) {
-        int right = d_right_cell[idx];
+        int right = __ldg(d_right_cell + idx);
         if (right < 0 || right >= n_cells) { if (d_failed) atomicExch(d_failed, 1); return; }
-        Real rhoR = d_q[right * nvar + 0];
-        Real kR = d_q_k[right];
-        Real wR = d_q_omega[right];
+        Real rhoR = __ldg(d_q + right * nvar + 0);
+        Real kR = __ldg(d_q_k + right);
+        Real wR = __ldg(d_q_omega + right);
         Real vnR = d_face_vn(d_q, right, nvar, nx, ny, nz);
 
         vnF = 0.5f * (vnL + vnR);
@@ -252,25 +252,25 @@ __global__ void __launch_bounds__(128) sst_advection_kernel_colored(
     int idx = blockIdx.x * blockDim.x + threadIdx.x + face_start;
     if (idx >= face_end) return;
 
-    int left = d_left_cell[idx];
+    int left = __ldg(d_left_cell + idx);
     if (left < 0 || left >= n_cells) { if (d_failed) atomicExch(d_failed, 1); return; }
-    int bnd = d_boundary[idx];
-    Real nx = d_nx[idx], ny = d_ny[idx], nz = d_nz[idx];
-    Real area = d_area[idx];
+    int bnd = __ldg(d_boundary + idx);
+    Real nx = __ldg(d_nx + idx), ny = __ldg(d_ny + idx), nz = __ldg(d_nz + idx);
+    Real area = __ldg(d_area + idx);
 
-    Real rhoL = d_q[left * 6 + 0];
-    Real kL = d_q_k[left];
-    Real wL = d_q_omega[left];
+    Real rhoL = __ldg(d_q + left * 6 + 0);
+    Real kL = __ldg(d_q_k + left);
+    Real wL = __ldg(d_q_omega + left);
     Real vnL = d_face_vn(d_q, left, 6, nx, ny, nz);
 
     Real rhoF, kF, wF, vnF;
 
     if (bnd == static_cast<int>(BoundaryKind::Interior)) {
-        int right = d_right_cell[idx];
+        int right = __ldg(d_right_cell + idx);
         if (right < 0 || right >= n_cells) { if (d_failed) atomicExch(d_failed, 1); return; }
-        Real rhoR = d_q[right * 6 + 0];
-        Real kR = d_q_k[right];
-        Real wR = d_q_omega[right];
+        Real rhoR = __ldg(d_q + right * 6 + 0);
+        Real kR = __ldg(d_q_k + right);
+        Real wR = __ldg(d_q_omega + right);
         Real vnR = d_face_vn(d_q, right, 6, nx, ny, nz);
 
         vnF = 0.5f * (vnL + vnR);
@@ -325,17 +325,17 @@ __global__ void __launch_bounds__(256) sst_source_kernel(
     int idx = blockIdx.x * blockDim.x + threadIdx.x;
     if (idx >= n_cells) return;
 
-    Real rho = d_q[idx * nvar + 0];
+    Real rho = __ldg(d_q + idx * nvar + 0);
     if (rho <= 0.0f || !real_isfinite(rho)) {
         if (d_failed) atomicCAS(d_failed, 0, 1);
         return;
     }
     Real inv_rho = 1.0f / rho;
-    Real u = d_q[idx * nvar + 1] * inv_rho;
-    Real v = d_q[idx * nvar + 2] * inv_rho;
-    Real w = d_q[idx * nvar + 3] * inv_rho;
+    Real u = __ldg(d_q + idx * nvar + 1) * inv_rho;
+    Real v = __ldg(d_q + idx * nvar + 2) * inv_rho;
+    Real w = __ldg(d_q + idx * nvar + 3) * inv_rho;
     Real kinetic = 0.5f * (u*u + v*v + w*w);
-    Real p = (gamma - 1.0f) * (d_q[idx * nvar + 4] - rho * kinetic);
+    Real p = (gamma - 1.0f) * (__ldg(d_q + idx * nvar + 4) - rho * kinetic);
     if (!real_isfinite(p) || p <= 0.0f) {
         if (d_failed) atomicCAS(d_failed, 0, 1);
         return;
@@ -348,22 +348,22 @@ __global__ void __launch_bounds__(256) sst_source_kernel(
     }
     if (mu <= 0.0f) mu = mu_ref;
 
-    Real k = d_q_k[idx];
-    Real omega = d_q_omega[idx];
+    Real k = __ldg(d_q_k + idx);
+    Real omega = __ldg(d_q_omega + idx);
     if (!real_isfinite(k) || k < 0.0f) k = 0.0f;
     if (!real_isfinite(omega) || omega < 0.0f) omega = 1e-10f;
 
-    Real wall_distance = d_wall_distance[idx];
+    Real wall_distance = __ldg(d_wall_distance + idx);
     if (wall_distance <= 0.0f || !real_isfinite(wall_distance)) {
         wall_distance = 1e30f;
     }
 
-    Real gk_x = d_grad_k[idx * 3 + 0];
-    Real gk_y = d_grad_k[idx * 3 + 1];
-    Real gk_z = d_grad_k[idx * 3 + 2];
-    Real gw_x = d_grad_omega[idx * 3 + 0];
-    Real gw_y = d_grad_omega[idx * 3 + 1];
-    Real gw_z = d_grad_omega[idx * 3 + 2];
+    Real gk_x = __ldg(d_grad_k + idx * 3 + 0);
+    Real gk_y = __ldg(d_grad_k + idx * 3 + 1);
+    Real gk_z = __ldg(d_grad_k + idx * 3 + 2);
+    Real gw_x = __ldg(d_grad_omega + idx * 3 + 0);
+    Real gw_y = __ldg(d_grad_omega + idx * 3 + 1);
+    Real gw_z = __ldg(d_grad_omega + idx * 3 + 2);
 
     SstBlending b = compute_sst_blending(k, omega, wall_distance, rho, mu,
         gk_x, gk_y, gk_z, gw_x, gw_y, gw_z);
@@ -376,9 +376,9 @@ __global__ void __launch_bounds__(256) sst_source_kernel(
     {
         constexpr Real eps = 1e-30f;
         const Real* g = d_vel_grad + idx * ngrad;
-        Real du_dx = g[3]; Real du_dy = g[4]; Real du_dz = g[5];
-        Real dv_dx = g[6]; Real dv_dy = g[7]; Real dv_dz = g[8];
-        Real dw_dx = g[9]; Real dw_dy = g[10]; Real dw_dz = g[11];
+        Real du_dx = __ldg(g + 3); Real du_dy = __ldg(g + 4); Real du_dz = __ldg(g + 5);
+        Real dv_dx = __ldg(g + 6); Real dv_dy = __ldg(g + 7); Real dv_dz = __ldg(g + 8);
+        Real dw_dx = __ldg(g + 9); Real dw_dy = __ldg(g + 10); Real dw_dz = __ldg(g + 11);
         Real S11 = du_dx;
         Real S22 = dv_dy;
         Real S33 = dw_dz;
@@ -439,19 +439,19 @@ __global__ void __launch_bounds__(128) sst_diffusion_kernel(
     int idx = blockIdx.x * blockDim.x + threadIdx.x;
     if (idx >= n_faces) return;
 
-    int left = d_left_cell[idx];
+    int left = __ldg(d_left_cell + idx);
     if (left < 0 || left >= n_cells) { if (d_failed) atomicExch(d_failed, 1); return; }
-    int bnd = d_boundary[idx];
+    int bnd = __ldg(d_boundary + idx);
 
     auto cell_mu = [&](int c, Real& mu_out, Real& mu_t_out) {
-        Real rho = d_q[c * nvar + 0];
+        Real rho = __ldg(d_q + c * nvar + 0);
         if (rho <= 0.0f || !real_isfinite(rho)) { mu_out = 0.0f; mu_t_out = 0.0f; return false; }
         Real inv_rho = 1.0f / rho;
-        Real u = d_q[c * nvar + 1] * inv_rho;
-        Real v = d_q[c * nvar + 2] * inv_rho;
-        Real w = d_q[c * nvar + 3] * inv_rho;
+        Real u = __ldg(d_q + c * nvar + 1) * inv_rho;
+        Real v = __ldg(d_q + c * nvar + 2) * inv_rho;
+        Real w = __ldg(d_q + c * nvar + 3) * inv_rho;
         Real kinetic = 0.5f * (u*u + v*v + w*w);
-        Real p = (gamma - 1.0f) * (d_q[c * nvar + 4] - rho * kinetic);
+        Real p = (gamma - 1.0f) * (__ldg(d_q + c * nvar + 4) - rho * kinetic);
         if (!real_isfinite(p) || p <= 0.0f) { mu_out = 0.0f; mu_t_out = 0.0f; return false; }
         Real T = p * inv_rho;
         Real mu = mu_ref;
@@ -460,8 +460,8 @@ __global__ void __launch_bounds__(128) sst_diffusion_kernel(
             mu = mu_ref * t_ratio * real_sqrt(t_ratio) * (T_ref + sutherland_T) / (T + sutherland_T);
         }
         if (mu <= 0.0f) mu = mu_ref;
-        Real k = d_q_k[c];
-        Real omega = d_q_omega[c];
+        Real k = __ldg(d_q_k + c);
+        Real omega = __ldg(d_q_omega + c);
         if (k < 0.0f) k = 0.0f;
         if (omega <= 0.0f) omega = 1e-10f;
         Real mu_t = rho * k / omega;
@@ -472,40 +472,40 @@ __global__ void __launch_bounds__(128) sst_diffusion_kernel(
 
     Real mu_L, mu_t_L;
     if (!cell_mu(left, mu_L, mu_t_L)) return;
-    Real kL = d_q_k[left];
-    Real wL = d_q_omega[left];
-    Real gkL_x = d_grad_k[left * 3 + 0];
-    Real gkL_y = d_grad_k[left * 3 + 1];
-    Real gkL_z = d_grad_k[left * 3 + 2];
-    Real gwL_x = d_grad_omega[left * 3 + 0];
-    Real gwL_y = d_grad_omega[left * 3 + 1];
-    Real gwL_z = d_grad_omega[left * 3 + 2];
-    Real dL = d_wall_distance[left];
+    Real kL = __ldg(d_q_k + left);
+    Real wL = __ldg(d_q_omega + left);
+    Real gkL_x = __ldg(d_grad_k + left * 3 + 0);
+    Real gkL_y = __ldg(d_grad_k + left * 3 + 1);
+    Real gkL_z = __ldg(d_grad_k + left * 3 + 2);
+    Real gwL_x = __ldg(d_grad_omega + left * 3 + 0);
+    Real gwL_y = __ldg(d_grad_omega + left * 3 + 1);
+    Real gwL_z = __ldg(d_grad_omega + left * 3 + 2);
+    Real dL = __ldg(d_wall_distance + left);
     if (dL < 0.0f || !real_isfinite(dL)) { if (d_failed) atomicExch(d_failed, 1); return; }
 
     Real mu_F, mu_t_F, gk_dot_n, gw_dot_n;
-    Real nx = d_nx[idx], ny = d_ny[idx], nz = d_nz[idx];
-    Real area = d_area[idx];
+    Real nx = __ldg(d_nx + idx), ny = __ldg(d_ny + idx), nz = __ldg(d_nz + idx);
+    Real area = __ldg(d_area + idx);
 
     if (bnd == static_cast<int>(BoundaryKind::Interior)) {
-        int right = d_right_cell[idx];
+        int right = __ldg(d_right_cell + idx);
         if (right < 0 || right >= n_cells) { if (d_failed) atomicExch(d_failed, 1); return; }
 
         Real mu_R, mu_t_R;
         if (!cell_mu(right, mu_R, mu_t_R)) return;
 
-        Real kR = d_q_k[right];
-        Real wR = d_q_omega[right];
-        Real gkR_x = d_grad_k[right * 3 + 0];
-        Real gkR_y = d_grad_k[right * 3 + 1];
-        Real gkR_z = d_grad_k[right * 3 + 2];
-        Real gwR_x = d_grad_omega[right * 3 + 0];
-        Real gwR_y = d_grad_omega[right * 3 + 1];
-        Real gwR_z = d_grad_omega[right * 3 + 2];
-        Real dR = d_wall_distance[right];
+        Real kR = __ldg(d_q_k + right);
+        Real wR = __ldg(d_q_omega + right);
+        Real gkR_x = __ldg(d_grad_k + right * 3 + 0);
+        Real gkR_y = __ldg(d_grad_k + right * 3 + 1);
+        Real gkR_z = __ldg(d_grad_k + right * 3 + 2);
+        Real gwR_x = __ldg(d_grad_omega + right * 3 + 0);
+        Real gwR_y = __ldg(d_grad_omega + right * 3 + 1);
+        Real gwR_z = __ldg(d_grad_omega + right * 3 + 2);
+        Real dR = __ldg(d_wall_distance + right);
 
-        Real F1_L = (d_sst_f1 && left >= 0 && left < n_cells) ? d_sst_f1[left] : 0.0f;
-        Real F1_R = (d_sst_f1 && right >= 0 && right < n_cells) ? d_sst_f1[right] : 0.0f;
+        Real F1_L = (d_sst_f1 && left >= 0 && left < n_cells) ? __ldg(d_sst_f1 + left) : 0.0f;
+        Real F1_R = (d_sst_f1 && right >= 0 && right < n_cells) ? __ldg(d_sst_f1 + right) : 0.0f;
         Real F1_F = 0.5f * (F1_L + F1_R);
 
         Real sigma_k_F = F1_F * sst_coeff::sigma_k1 + (1.0f - F1_F) * sst_coeff::sigma_k2;
@@ -532,7 +532,7 @@ __global__ void __launch_bounds__(128) sst_diffusion_kernel(
                bnd == static_cast<int>(BoundaryKind::Symmetry)) {
         return;
     } else {
-        Real F1_L = (d_sst_f1 && left >= 0 && left < n_cells) ? d_sst_f1[left] : 0.0f;
+        Real F1_L = (d_sst_f1 && left >= 0 && left < n_cells) ? __ldg(d_sst_f1 + left) : 0.0f;
         Real sigma_k_L = F1_L * sst_coeff::sigma_k1 + (1.0f - F1_L) * sst_coeff::sigma_k2;
         Real sigma_w_L = F1_L * sst_coeff::sigma_w1 + (1.0f - F1_L) * sst_coeff::sigma_w2;
 
@@ -569,19 +569,19 @@ __global__ void __launch_bounds__(128) sst_diffusion_kernel_colored(
     int idx = blockIdx.x * blockDim.x + threadIdx.x + face_start;
     if (idx >= face_end) return;
 
-    int left = d_left_cell[idx];
+    int left = __ldg(d_left_cell + idx);
     if (left < 0 || left >= n_cells) { if (d_failed) atomicExch(d_failed, 1); return; }
-    int bnd = d_boundary[idx];
+    int bnd = __ldg(d_boundary + idx);
 
     auto cell_mu = [&](int c, Real& mu_out, Real& mu_t_out) {
-        Real rho = d_q[c * nvar + 0];
+        Real rho = __ldg(d_q + c * nvar + 0);
         if (rho <= 0.0f || !real_isfinite(rho)) { mu_out = 0.0f; mu_t_out = 0.0f; return false; }
         Real inv_rho = 1.0f / rho;
-        Real u = d_q[c * nvar + 1] * inv_rho;
-        Real v = d_q[c * nvar + 2] * inv_rho;
-        Real w = d_q[c * nvar + 3] * inv_rho;
+        Real u = __ldg(d_q + c * nvar + 1) * inv_rho;
+        Real v = __ldg(d_q + c * nvar + 2) * inv_rho;
+        Real w = __ldg(d_q + c * nvar + 3) * inv_rho;
         Real kinetic = 0.5f * (u*u + v*v + w*w);
-        Real p = (gamma - 1.0f) * (d_q[c * nvar + 4] - rho * kinetic);
+        Real p = (gamma - 1.0f) * (__ldg(d_q + c * nvar + 4) - rho * kinetic);
         if (!real_isfinite(p) || p <= 0.0f) { mu_out = 0.0f; mu_t_out = 0.0f; return false; }
         Real T = p * inv_rho;
         Real mu = mu_ref;
@@ -590,8 +590,8 @@ __global__ void __launch_bounds__(128) sst_diffusion_kernel_colored(
             mu = mu_ref * t_ratio * real_sqrt(t_ratio) * (T_ref + sutherland_T) / (T + sutherland_T);
         }
         if (mu <= 0.0f) mu = mu_ref;
-        Real k = d_q_k[c];
-        Real omega = d_q_omega[c];
+        Real k = __ldg(d_q_k + c);
+        Real omega = __ldg(d_q_omega + c);
         if (k < 0.0f) k = 0.0f;
         if (omega <= 0.0f) omega = 1e-10f;
         Real mu_t = rho * k / omega;
@@ -602,39 +602,39 @@ __global__ void __launch_bounds__(128) sst_diffusion_kernel_colored(
 
     Real mu_L, mu_t_L;
     if (!cell_mu(left, mu_L, mu_t_L)) return;
-    Real kL = d_q_k[left];
-    Real wL = d_q_omega[left];
-    Real gkL_x = d_grad_k[left * 3 + 0];
-    Real gkL_y = d_grad_k[left * 3 + 1];
-    Real gkL_z = d_grad_k[left * 3 + 2];
-    Real gwL_x = d_grad_omega[left * 3 + 0];
-    Real gwL_y = d_grad_omega[left * 3 + 1];
-    Real gwL_z = d_grad_omega[left * 3 + 2];
-    Real dL = d_wall_distance[left];
+    Real kL = __ldg(d_q_k + left);
+    Real wL = __ldg(d_q_omega + left);
+    Real gkL_x = __ldg(d_grad_k + left * 3 + 0);
+    Real gkL_y = __ldg(d_grad_k + left * 3 + 1);
+    Real gkL_z = __ldg(d_grad_k + left * 3 + 2);
+    Real gwL_x = __ldg(d_grad_omega + left * 3 + 0);
+    Real gwL_y = __ldg(d_grad_omega + left * 3 + 1);
+    Real gwL_z = __ldg(d_grad_omega + left * 3 + 2);
+    Real dL = __ldg(d_wall_distance + left);
     if (dL < 0.0f || !real_isfinite(dL)) { if (d_failed) atomicExch(d_failed, 1); return; }
 
     Real mu_F, mu_t_F, gk_dot_n, gw_dot_n;
-    Real nx = d_nx[idx], ny = d_ny[idx], nz = d_nz[idx];
-    Real area = d_area[idx];
+    Real nx = __ldg(d_nx + idx), ny = __ldg(d_ny + idx), nz = __ldg(d_nz + idx);
+    Real area = __ldg(d_area + idx);
 
     if (bnd == static_cast<int>(BoundaryKind::Interior)) {
-        int right = d_right_cell[idx];
+        int right = __ldg(d_right_cell + idx);
         if (right < 0 || right >= n_cells) { if (d_failed) atomicExch(d_failed, 1); return; }
 
         Real mu_R, mu_t_R;
         if (!cell_mu(right, mu_R, mu_t_R)) return;
 
-        Real kR = d_q_k[right];
-        Real wR = d_q_omega[right];
-        Real gkR_x = d_grad_k[right * 3 + 0];
-        Real gkR_y = d_grad_k[right * 3 + 1];
-        Real gkR_z = d_grad_k[right * 3 + 2];
-        Real gwR_x = d_grad_omega[right * 3 + 0];
-        Real gwR_y = d_grad_omega[right * 3 + 1];
-        Real gwR_z = d_grad_omega[right * 3 + 2];
+        Real kR = __ldg(d_q_k + right);
+        Real wR = __ldg(d_q_omega + right);
+        Real gkR_x = __ldg(d_grad_k + right * 3 + 0);
+        Real gkR_y = __ldg(d_grad_k + right * 3 + 1);
+        Real gkR_z = __ldg(d_grad_k + right * 3 + 2);
+        Real gwR_x = __ldg(d_grad_omega + right * 3 + 0);
+        Real gwR_y = __ldg(d_grad_omega + right * 3 + 1);
+        Real gwR_z = __ldg(d_grad_omega + right * 3 + 2);
 
-        Real F1_L = (d_sst_f1 && left >= 0 && left < n_cells) ? d_sst_f1[left] : 0.0f;
-        Real F1_R = (d_sst_f1 && right >= 0 && right < n_cells) ? d_sst_f1[right] : 0.0f;
+        Real F1_L = (d_sst_f1 && left >= 0 && left < n_cells) ? __ldg(d_sst_f1 + left) : 0.0f;
+        Real F1_R = (d_sst_f1 && right >= 0 && right < n_cells) ? __ldg(d_sst_f1 + right) : 0.0f;
         Real F1_F = 0.5f * (F1_L + F1_R);
 
         Real sigma_k_F = F1_F * sst_coeff::sigma_k1 + (1.0f - F1_F) * sst_coeff::sigma_k2;
@@ -661,7 +661,7 @@ __global__ void __launch_bounds__(128) sst_diffusion_kernel_colored(
                bnd == static_cast<int>(BoundaryKind::Symmetry)) {
         return;
     } else {
-        Real F1_L = (d_sst_f1 && left >= 0 && left < n_cells) ? d_sst_f1[left] : 0.0f;
+        Real F1_L = (d_sst_f1 && left >= 0 && left < n_cells) ? __ldg(d_sst_f1 + left) : 0.0f;
         Real sigma_k_L = F1_L * sst_coeff::sigma_k1 + (1.0f - F1_L) * sst_coeff::sigma_k2;
         Real sigma_w_L = F1_L * sst_coeff::sigma_w1 + (1.0f - F1_L) * sst_coeff::sigma_w2;
 
@@ -710,18 +710,18 @@ __global__ void __launch_bounds__(256) sst_update_kernel(
     int idx = blockIdx.x * blockDim.x + threadIdx.x;
     if (idx >= n_cells) return;
 
-    Real k = d_q_k[idx];
-    Real w = d_q_omega[idx];
+    Real k = __ldg(d_q_k + idx);
+    Real w = __ldg(d_q_omega + idx);
     if (k < 0.0f || !real_isfinite(k)) k = 0.0f;
     if (w < 0.0f || !real_isfinite(w)) w = 1e-10f;
 
     Real dt = __ldg(d_min_dt);
-    Real vol = d_volume[idx];
+    Real vol = __ldg(d_volume + idx);
     if (vol <= 0.0f) { vol = 1e-30f; }
 
     Real dtv = dt / vol;
-    Real k_new = k + dtv * d_residual_k[idx];
-    Real w_new = w + dtv * d_residual_omega[idx];
+    Real k_new = k + dtv * __ldg(d_residual_k + idx);
+    Real w_new = w + dtv * __ldg(d_residual_omega + idx);
 
     if (k_new < 0.0f || !real_isfinite(k_new)) k_new = k * 0.5f + 1e-16f;
     if (w_new < 0.0f || !real_isfinite(w_new)) w_new = w * 0.5f + 1e-10f;
@@ -747,14 +747,14 @@ __global__ void sst_diag_kernel(
     int idx = blockIdx.x * blockDim.x + threadIdx.x;
     if (idx >= n_cells) return;
 
-    Real rho = d_q[idx * nvar + 0];
+    Real rho = __ldg(d_q + idx * nvar + 0);
     if (rho <= 0.0f || !real_isfinite(rho)) return;
     Real inv_rho = 1.0f / rho;
-    Real u = d_q[idx * nvar + 1] * inv_rho;
-    Real v = d_q[idx * nvar + 2] * inv_rho;
-    Real w = d_q[idx * nvar + 3] * inv_rho;
+    Real u = __ldg(d_q + idx * nvar + 1) * inv_rho;
+    Real v = __ldg(d_q + idx * nvar + 2) * inv_rho;
+    Real w = __ldg(d_q + idx * nvar + 3) * inv_rho;
     Real kinetic = 0.5f * (u*u + v*v + w*w);
-    Real p = (gamma - 1.0f) * (d_q[idx * nvar + 4] - rho * kinetic);
+    Real p = (gamma - 1.0f) * (__ldg(d_q + idx * nvar + 4) - rho * kinetic);
     if (!real_isfinite(p) || p <= 0.0f) return;
     Real T = p * inv_rho;
     Real mu = mu_ref;
@@ -764,20 +764,20 @@ __global__ void sst_diag_kernel(
     }
     if (mu <= 0.0f) mu = mu_ref;
 
-    Real k = d_q_k[idx];
-    Real omega = d_q_omega[idx];
+    Real k = __ldg(d_q_k + idx);
+    Real omega = __ldg(d_q_omega + idx);
     if (!real_isfinite(k) || k < 0.0f) k = 0.0f;
     if (!real_isfinite(omega) || omega < 0.0f) omega = 1e-10f;
 
-    Real wall_distance = d_wall_distance[idx];
+    Real wall_distance = __ldg(d_wall_distance + idx);
     if (wall_distance <= 0.0f || !real_isfinite(wall_distance)) wall_distance = 1e30f;
 
-    Real gk_x = d_grad_k[idx * 3 + 0];
-    Real gk_y = d_grad_k[idx * 3 + 1];
-    Real gk_z = d_grad_k[idx * 3 + 2];
-    Real gw_x = d_grad_omega[idx * 3 + 0];
-    Real gw_y = d_grad_omega[idx * 3 + 1];
-    Real gw_z = d_grad_omega[idx * 3 + 2];
+    Real gk_x = __ldg(d_grad_k + idx * 3 + 0);
+    Real gk_y = __ldg(d_grad_k + idx * 3 + 1);
+    Real gk_z = __ldg(d_grad_k + idx * 3 + 2);
+    Real gw_x = __ldg(d_grad_omega + idx * 3 + 0);
+    Real gw_y = __ldg(d_grad_omega + idx * 3 + 1);
+    Real gw_z = __ldg(d_grad_omega + idx * 3 + 2);
 
     SstBlending b = compute_sst_blending(k, omega, wall_distance, rho, mu,
         gk_x, gk_y, gk_z, gw_x, gw_y, gw_z);
@@ -788,9 +788,9 @@ __global__ void sst_diag_kernel(
     {
         constexpr Real eps = 1e-30f;
         const Real* g = d_vel_grad + idx * ngrad;
-        Real du_dx = g[3]; Real du_dy = g[4]; Real du_dz = g[5];
-        Real dv_dx = g[6]; Real dv_dy = g[7]; Real dv_dz = g[8];
-        Real dw_dx = g[9]; Real dw_dy = g[10]; Real dw_dz = g[11];
+        Real du_dx = __ldg(g + 3); Real du_dy = __ldg(g + 4); Real du_dz = __ldg(g + 5);
+        Real dv_dx = __ldg(g + 6); Real dv_dy = __ldg(g + 7); Real dv_dz = __ldg(g + 8);
+        Real dw_dx = __ldg(g + 9); Real dw_dy = __ldg(g + 10); Real dw_dz = __ldg(g + 11);
         Real S11 = du_dx;
         Real S22 = dv_dy;
         Real S33 = dw_dz;

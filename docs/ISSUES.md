@@ -2881,6 +2881,7 @@ Fix: extend JFV perturbation to include SST state buffers.
 
 **SST-A6** [LOW] `rans_sst.hpp:91`
 P_omega = gamma / nu_t * P_k derives omega production from (limited) k-production P_k, deviating from standard Menter 2003 `P_w = gamma * rho * S^2`. When P_k limiter activates, P_w is artificially reduced below gamma * S^2. Non-standard but common formulation; document as deliberate choice.
+[FIXED 2026-07-15] Added comment in `rans_sst.hpp:91` explaining that this is a deliberate choice consistent with OpenFOAM/Fluent to maintain consistency between k and omega production.
 
 ### Category B: Architecture & Memory Bugs
 

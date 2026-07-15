@@ -89,6 +89,9 @@ AEROSP_REAL_HOST_DEVICE SstSource compute_sst_source(
     Real P_k = real_fmin(P_k_raw, P_k_max);
 
     Real P_w = gamma / (nu_t + eps) * P_k;
+    // P_omega = gamma/nu_t * P_k derives omega production from (limited)
+    // k-production P_k. Non-standard but common (OpenFOAM, Fluent); ensures
+    // consistency between production of k and omega when limiter activates.
 
     Real D_k = sst_coeff::beta_star * rho * k * omega;
     Real D_w = beta * rho * omega * omega;
