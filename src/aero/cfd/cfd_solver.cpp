@@ -6,6 +6,7 @@
 #include "aero/cfd/amr_sensor.hpp"
 #include "aero/cfd/amr_interpolate.hpp"
 #include "aero/cfd/amr_hanging.hpp"
+#include "aero/cfd/rans_sst.hpp"
 
 #include <algorithm>
 #include <cmath>
@@ -15,6 +16,275 @@
 namespace aerosp {
 namespace aero {
 namespace cfd {
+
+// ========== CPU SST pipeline functions ==========
+
+bool compute_sst_gradients_cpu(
+    const CfdMesh& mesh,
+    const std::vector<Real>& k,
+    const std::vector<Real>& omega,
+    std::vector<Real>& grad_k,
+    std::vector<Real>& grad_omega)
+{
+    std::size_t nc = mesh.cells.size();
+    grad_k.assign(nc * 3, Real(0));
+    grad_omega.assign(nc * 3, Real(0));
+
+    for (const auto& face : mesh.faces) {
+        int L = face.left_cell;
+        int R = face.right_cell;
+        if (L < 0 || static_cast<std::size_t>(L) >= nc) return false;
+        Real k_face = k[L];
+        Real w_face = omega[L];
+        if (R >= 0 && static_cast<std::size_t>(R) < nc) {
+            k_face = Real(0.5) * (k[L] + k[R]);
+            w_face = Real(0.5) * (omega[L] + omega[R]);
+        }
+        Real ax = face.nx * face.area;
+        Real ay = face.ny * face.area;
+        Real az = face.nz * face.area;
+        grad_k[L * 3 + 0] += k_face * ax;
+        grad_k[L * 3 + 1] += k_face * ay;
+        grad_k[L * 3 + 2] += k_face * az;
+        grad_omega[L * 3 + 0] += w_face * ax;
+        grad_omega[L * 3 + 1] += w_face * ay;
+        grad_omega[L * 3 + 2] += w_face * az;
+        if (R >= 0 && static_cast<std::size_t>(R) < nc) {
+            grad_k[R * 3 + 0] -= k_face * ax;
+            grad_k[R * 3 + 1] -= k_face * ay;
+            grad_k[R * 3 + 2] -= k_face * az;
+            grad_omega[R * 3 + 0] -= w_face * ax;
+            grad_omega[R * 3 + 1] -= w_face * ay;
+            grad_omega[R * 3 + 2] -= w_face * az;
+        }
+    }
+
+    for (std::size_t i = 0; i < nc; ++i) {
+        Real inv_vol = Real(1) / (mesh.cells[i].volume + Real(1e-30));
+        grad_k[i * 3 + 0] *= inv_vol;
+        grad_k[i * 3 + 1] *= inv_vol;
+        grad_k[i * 3 + 2] *= inv_vol;
+        grad_omega[i * 3 + 0] *= inv_vol;
+        grad_omega[i * 3 + 1] *= inv_vol;
+        grad_omega[i * 3 + 2] *= inv_vol;
+    }
+    return true;
+}
+
+bool compute_sst_advection_cpu(
+    const CfdMesh& mesh,
+    const std::vector<ConservativeState>& q,
+    const std::vector<Real>& k,
+    const std::vector<Real>& omega,
+    Real inf_k, Real inf_omega,
+    Real gamma,
+    std::vector<Real>& res_k,
+    std::vector<Real>& res_omega)
+{
+    std::size_t nc = mesh.cells.size();
+    for (const auto& face : mesh.faces) {
+        int L = face.left_cell;
+        if (L < 0 || static_cast<std::size_t>(L) >= nc) return false;
+
+        PrimitiveState wL;
+        if (!conservative_to_primitive(q[L], gamma, wL)) return false;
+        Real vn = wL.u * face.nx + wL.v * face.ny + wL.w * face.nz;
+
+        Real k_donor = k[L], w_donor = omega[L];
+
+        if (face.boundary == BoundaryKind::Interior) {
+            int R = face.right_cell;
+            if (R < 0 || static_cast<std::size_t>(R) >= nc) return false;
+            PrimitiveState wR;
+            if (!conservative_to_primitive(q[R], gamma, wR)) return false;
+            Real vnR = wR.u * face.nx + wR.v * face.ny + wR.w * face.nz;
+            vn = Real(0.5) * (vn + vnR);
+            // Upwind: donor = upwind cell based on vn sign
+            k_donor = (vn >= Real(0)) ? k[L] : k[R];
+            w_donor = (vn >= Real(0)) ? omega[L] : omega[R];
+        } else if (face.boundary == BoundaryKind::Farfield) {
+            // Farfield: freestream on inflow, cell value on outflow
+            if (vn < Real(0)) {
+                k_donor = inf_k;
+                w_donor = inf_omega;
+            }
+        } else if (face.boundary == BoundaryKind::SlipWall ||
+                   face.boundary == BoundaryKind::NoSlipWall ||
+                   face.boundary == BoundaryKind::Symmetry) {
+            // Wall: zero flux (k and omega = 0 at wall)
+            continue;
+        } else {
+            return false;
+        }
+
+        Real area = face.area;
+        Real flux_k = vn * wL.rho * k_donor * area;
+        Real flux_w = vn * wL.rho * w_donor * area;
+
+        res_k[L] -= flux_k;
+        res_omega[L] -= flux_w;
+        if (face.boundary == BoundaryKind::Interior) {
+            int R = face.right_cell;
+            res_k[R] += flux_k;
+            res_omega[R] += flux_w;
+        }
+    }
+    return true;
+}
+
+bool compute_sst_diffusion_cpu(
+    const CfdMesh& mesh,
+    const std::vector<ConservativeState>& q,
+    const std::vector<Real>& k,
+    const std::vector<Real>& omega,
+    const std::vector<Real>& grad_k,
+    const std::vector<Real>& grad_omega,
+    const std::vector<Real>& f1,
+    Real gamma, Real Re,
+    Real mu_ref, Real T_ref, Real sutherland_T,
+    std::vector<Real>& res_k,
+    std::vector<Real>& res_omega)
+{
+    std::size_t nc = mesh.cells.size();
+    Real inv_Re = Real(1) / (Re > Real(0) ? Re : Real(1e6));
+
+    for (const auto& face : mesh.faces) {
+        int L = face.left_cell;
+        if (L < 0 || static_cast<std::size_t>(L) >= nc) return false;
+        int R = face.right_cell;
+
+        PrimitiveState wL;
+        if (!conservative_to_primitive(q[L], gamma, wL)) return false;
+        Real T_L = wL.p / std::max(wL.rho, Real(1e-30));
+        Real mu_L = sutherland_viscosity(T_L, T_ref, sutherland_T) * mu_ref;
+        if (mu_L <= Real(0)) mu_L = Real(1);
+
+        Real face_k, face_w, face_rho, face_mu, face_f1;
+        Real dk_dn, dw_dn;
+
+        if (R >= 0 && static_cast<std::size_t>(R) < nc &&
+            face.boundary == BoundaryKind::Interior) {
+            PrimitiveState wR;
+            if (!conservative_to_primitive(q[R], gamma, wR)) return false;
+            Real T_R = wR.p / std::max(wR.rho, Real(1e-30));
+            Real mu_R = sutherland_viscosity(T_R, T_ref, sutherland_T) * mu_ref;
+            if (mu_R <= Real(0)) mu_R = Real(1);
+
+            face_k = Real(0.5) * (k[L] + k[R]);
+            face_w = Real(0.5) * (omega[L] + omega[R]);
+            face_rho = Real(0.5) * (wL.rho + wR.rho);
+            face_mu = Real(0.5) * (mu_L + mu_R);
+            Real f1_face = Real(0.5) * (f1[L] + f1[R]);
+
+            // Orthogonal correction for gradients
+            Real dr_x = mesh.cells[R].cx - mesh.cells[L].cx;
+            Real dr_y = mesh.cells[R].cy - mesh.cells[L].cy;
+            Real dr_z = mesh.cells[R].cz - mesh.cells[L].cz;
+            Real d2 = dr_x*dr_x + dr_y*dr_y + dr_z*dr_z;
+
+            Real gk_dot_dr = Real(0.5) * (grad_k[L*3+0] + grad_k[R*3+0]) * dr_x
+                           + Real(0.5) * (grad_k[L*3+1] + grad_k[R*3+1]) * dr_y
+                           + Real(0.5) * (grad_k[L*3+2] + grad_k[R*3+2]) * dr_z;
+            Real gw_dot_dr = Real(0.5) * (grad_omega[L*3+0] + grad_omega[R*3+0]) * dr_x
+                           + Real(0.5) * (grad_omega[L*3+1] + grad_omega[R*3+1]) * dr_y
+                           + Real(0.5) * (grad_omega[L*3+2] + grad_omega[R*3+2]) * dr_z;
+            Real dk_corr = d2 > Real(1e-30) ? ((k[R] - k[L]) - gk_dot_dr) / d2 : Real(0);
+            Real dw_corr = d2 > Real(1e-30) ? ((omega[R] - omega[L]) - gw_dot_dr) / d2 : Real(0);
+
+            dk_dn = (Real(0.5)*(grad_k[L*3+0] + grad_k[R*3+0]) + dk_corr * dr_x) * face.nx
+                  + (Real(0.5)*(grad_k[L*3+1] + grad_k[R*3+1]) + dk_corr * dr_y) * face.ny
+                  + (Real(0.5)*(grad_k[L*3+2] + grad_k[R*3+2]) + dk_corr * dr_z) * face.nz;
+            dw_dn = (Real(0.5)*(grad_omega[L*3+0] + grad_omega[R*3+0]) + dw_corr * dr_x) * face.nx
+                  + (Real(0.5)*(grad_omega[L*3+1] + grad_omega[R*3+1]) + dw_corr * dr_y) * face.ny
+                  + (Real(0.5)*(grad_omega[L*3+2] + grad_omega[R*3+2]) + dw_corr * dr_z) * face.nz;
+
+            // Blended sigma
+            Real sigma_k = f1_face * sst_coeff::sigma_k1 + (Real(1) - f1_face) * sst_coeff::sigma_k2;
+            Real sigma_w = f1_face * sst_coeff::sigma_w1 + (Real(1) - f1_face) * sst_coeff::sigma_w2;
+
+            Real mu_t = face_rho * face_k / (face_w + Real(1e-30));
+            Real mu_eff_k = (face_mu * inv_Re) + sigma_k * mu_t;
+            Real mu_eff_w = (face_mu * inv_Re) + sigma_w * mu_t;
+
+            Real area = face.area;
+            Real flux_k = mu_eff_k * dk_dn * area;
+            Real flux_w = mu_eff_w * dw_dn * area;
+
+            res_k[L] += flux_k;
+            res_omega[L] += flux_w;
+            res_k[R] -= flux_k;
+            res_omega[R] -= flux_w;
+        } else if (face.boundary == BoundaryKind::NoSlipWall) {
+            // Wall: k=0, omega=6*nu/(beta1*y^2). Diffusion handled naturally.
+            continue;
+        }
+    }
+    return true;
+}
+
+bool compute_sst_source_cpu(
+    const CfdMesh& mesh,
+    const std::vector<ConservativeState>& q,
+    const std::vector<Real>& k,
+    const std::vector<Real>& omega,
+    const std::vector<PrimitiveGradient>& flow_grads,
+    const std::vector<Real>& grad_k,
+    const std::vector<Real>& grad_omega,
+    Real gamma, Real Re,
+    Real mu_ref, Real T_ref, Real sutherland_T,
+    std::vector<Real>& res_k,
+    std::vector<Real>& res_omega,
+    std::vector<Real>& f1)
+{
+    std::size_t nc = mesh.cells.size();
+    f1.resize(nc);
+
+    for (std::size_t i = 0; i < nc; ++i) {
+        PrimitiveState wc;
+        if (!conservative_to_primitive(q[i], gamma, wc)) return false;
+        Real T = wc.p / std::max(wc.rho, Real(1e-30));
+        Real mu = sutherland_viscosity(T, T_ref, sutherland_T) * mu_ref;
+        if (mu <= Real(0)) mu = Real(1);
+
+        Real d = mesh.cells[i].wall_distance;
+        if (d <= Real(0) || !std::isfinite(d)) d = Real(1e30);
+
+        Real k_val = std::max(Real(0), k[i]);
+        Real omega_val = std::max(Real(1e-10), omega[i]);
+
+        Real gk_x = grad_k[i * 3 + 0];
+        Real gk_y = grad_k[i * 3 + 1];
+        Real gk_z = grad_k[i * 3 + 2];
+        Real gw_x = grad_omega[i * 3 + 0];
+        Real gw_y = grad_omega[i * 3 + 1];
+        Real gw_z = grad_omega[i * 3 + 2];
+
+        SstBlending b = compute_sst_blending(k_val, omega_val, d,
+            wc.rho, mu, gk_x, gk_y, gk_z, gw_x, gw_y, gw_z);
+        f1[i] = b.F1;
+
+        Real mu_t = wc.rho * k_val / (omega_val + Real(1e-30));
+
+        // Strain magnitude from velocity gradients
+        const auto& pg = flow_grads[i];
+        Real S11 = pg.du_dx, S22 = pg.dv_dy, S33 = pg.dw_dz;
+        Real S12 = Real(0.5) * (pg.du_dy + pg.dv_dx);
+        Real S13 = Real(0.5) * (pg.du_dz + pg.dw_dx);
+        Real S23 = Real(0.5) * (pg.dv_dz + pg.dw_dy);
+        Real S_mag = std::sqrt(Real(2) * (S11*S11 + S22*S22 + S33*S33
+                    + Real(2) * (S12*S12 + S13*S13 + S23*S23)) + Real(1e-30));
+
+        SstSource s = compute_sst_source(k_val, omega_val, wc.rho, mu_t, b, S_mag);
+
+        Real source_k = s.source_k;
+        Real source_w = s.source_w;
+
+        Real vol = mesh.cells[i].volume;
+        res_k[i] += source_k * vol;
+        res_omega[i] += source_w * vol;
+    }
+    return true;
+}
 
 void compact_mesh_nodes(CfdMesh& mesh) {
     int n_cells = static_cast<int>(mesh.cells.size());
@@ -339,6 +609,25 @@ CfdSolveSummary CfdSolver::solve_from_state(
     PrimitiveState w_inf = make_freestream(condition.mach, condition.alpha_deg, condition.beta_deg, config.gamma);
     w_inf.nu_tilde = condition.nu_tilde;
     std::vector<ConservativeState> q = initial_state;
+
+    Real inf_k = 0, inf_omega = 0;
+    if (config.turbulence_model == TurbulenceModel::SST) {
+        Real U_inf = std::sqrt(w_inf.u*w_inf.u + w_inf.v*w_inf.v + w_inf.w*w_inf.w);
+        Real tu = 0.001f;
+        inf_k = 1.5f * (tu*tu) * U_inf*U_inf;
+        Real t_ratio = w_inf.p / w_inf.rho / config.T_ref;
+        Real mu_inf = config.mu_ref * t_ratio * std::sqrt(t_ratio)
+                    * (config.T_ref + config.sutherland_T) / (w_inf.p / w_inf.rho + config.sutherland_T);
+        Real nu_inf = mu_inf / w_inf.rho;
+        inf_omega = inf_k / (0.09f * 0.1f * nu_inf + 1e-30f);
+        sst_k_.assign(mesh_.cells.size(), inf_k);
+        sst_omega_.assign(mesh_.cells.size(), inf_omega);
+        sst_residual_k_.assign(mesh_.cells.size(), Real(0));
+        sst_residual_omega_.assign(mesh_.cells.size(), Real(0));
+        sst_grad_k_.assign(mesh_.cells.size() * 3, Real(0));
+        sst_grad_omega_.assign(mesh_.cells.size() * 3, Real(0));
+        sst_f1_.assign(mesh_.cells.size(), Real(0));
+    }
     std::vector<ConservativeState> q_next;
     q_next.resize(mesh_.cells.size());
     std::vector<EulerFlux> residual;
@@ -476,10 +765,17 @@ CfdSolveSummary CfdSolver::solve_from_state(
 
         if (config.viscous) {
             const auto& visc_grads = apply_limiting ? limited : grads;
+            const std::vector<Real>* sst_k_ptr = nullptr;
+            const std::vector<Real>* sst_omega_ptr = nullptr;
+            if (config.turbulence_model == TurbulenceModel::SST) {
+                sst_k_ptr = &sst_k_;
+                sst_omega_ptr = &sst_omega_;
+            }
             if (!compute_viscous_flux_cpu(mesh_, q, visc_grads, config.gamma,
                     config.prandtl, config.mu_ref, config.T_ref,
                     config.sutherland_T, config.Re, config.wall_temperature,
-                    static_cast<int>(config.turbulence_model), residual, &w)) {
+                    static_cast<int>(config.turbulence_model), residual, &w,
+                    sst_k_ptr, sst_omega_ptr)) {
                 summary.failed = true;
                 if (diagnostics_enabled) {
                     summary.diagnostics.failure.reason = "viscous flux failed";
@@ -490,7 +786,60 @@ CfdSolveSummary CfdSolver::solve_from_state(
             }
         }
 
-        if (config.turbulence_model != TurbulenceModel::LAMINAR) {
+        if (config.turbulence_model == TurbulenceModel::SST) {
+            // SST pipeline: gradients → advection → diffusion → source
+            sst_residual_k_.assign(mesh_.cells.size(), Real(0));
+            sst_residual_omega_.assign(mesh_.cells.size(), Real(0));
+
+            if (!compute_sst_gradients_cpu(mesh_, sst_k_, sst_omega_, sst_grad_k_, sst_grad_omega_)) {
+                summary.failed = true;
+                if (diagnostics_enabled) {
+                    summary.diagnostics.failure.reason = "SST gradient computation failed";
+                    summary.diagnostics.failure.valid = true;
+                    summary.diagnostics.failure.iteration = iter;
+                }
+                return summary;
+            }
+            if (!compute_sst_advection_cpu(mesh_, q, sst_k_, sst_omega_,
+                    inf_k, inf_omega, config.gamma,
+                    sst_residual_k_, sst_residual_omega_)) {
+                summary.failed = true;
+                if (diagnostics_enabled) {
+                    summary.diagnostics.failure.reason = "SST advection failed";
+                    summary.diagnostics.failure.valid = true;
+                    summary.diagnostics.failure.iteration = iter;
+                }
+                return summary;
+            }
+            if (config.viscous) {
+                if (!compute_sst_diffusion_cpu(mesh_, q, sst_k_, sst_omega_,
+                        sst_grad_k_, sst_grad_omega_, sst_f1_,
+                        config.gamma, config.Re, config.mu_ref, config.T_ref,
+                        config.sutherland_T,
+                        sst_residual_k_, sst_residual_omega_)) {
+                    summary.failed = true;
+                    if (diagnostics_enabled) {
+                        summary.diagnostics.failure.reason = "SST diffusion failed";
+                        summary.diagnostics.failure.valid = true;
+                        summary.diagnostics.failure.iteration = iter;
+                    }
+                    return summary;
+                }
+            }
+            if (!compute_sst_source_cpu(mesh_, q, sst_k_, sst_omega_,
+                    limited, sst_grad_k_, sst_grad_omega_,
+                    config.gamma, config.Re, config.mu_ref, config.T_ref,
+                    config.sutherland_T,
+                    sst_residual_k_, sst_residual_omega_, sst_f1_)) {
+                summary.failed = true;
+                if (diagnostics_enabled) {
+                    summary.diagnostics.failure.reason = "SST source failed";
+                    summary.diagnostics.failure.valid = true;
+                    summary.diagnostics.failure.iteration = iter;
+                }
+                return summary;
+            }
+        } else if (config.turbulence_model != TurbulenceModel::LAMINAR) {
             sources = compute_rans_sources(mesh_, q, limited, config.gamma, config.Re, &w);
             if (sources.size() != mesh_.cells.size()) {
                 summary.failed = true;
@@ -520,12 +869,15 @@ CfdSolveSummary CfdSolver::solve_from_state(
         }
 
         // Semi-implicit destruction treatment (match GPU apply_rans_implicit_gpu).
+        // Only applies to SA/SA-DDES (SST uses separate forward-Euler path on GPU).
         // Skipped in MMS mode: the semi-implicit correction is a convergence acceleration
         // technique, not part of the spatial discretization being verified. Applying it
         // after MMS subtraction would break source consistency since the correction
         // transforms residual as R' = q*(f-1)/dtv + R*f, making it impossible for
         // S_mms to cancel R when q=q_exact.
-        if (config.turbulence_model != TurbulenceModel::LAMINAR && config.mms_source.empty()) {
+        if (config.turbulence_model != TurbulenceModel::LAMINAR &&
+            config.turbulence_model != TurbulenceModel::SST &&
+            config.mms_source.empty()) {
             for (std::size_t i = 0; i < q.size(); ++i) {
                 Real wall_distance = mesh_.cells[i].wall_distance;
                 if (wall_distance <= 0.0f || !std::isfinite(wall_distance)) wall_distance = 1e30f;
@@ -553,9 +905,28 @@ CfdSolveSummary CfdSolver::solve_from_state(
                 + residual[i].energy * residual[i].energy
                 + residual[i].turbulence * residual[i].turbulence;
         }
-        Real residual_l2 = std::sqrt(l2 / (static_cast<Real>(CFD_NVAR) * static_cast<Real>(q.size())));
+        Real nvar_eff = static_cast<Real>(CFD_NVAR);
+        if (config.turbulence_model == TurbulenceModel::SST) {
+            nvar_eff += 2;
+            for (std::size_t i = 0; i < q.size(); ++i) {
+                l2 += sst_residual_k_[i] * sst_residual_k_[i]
+                    + sst_residual_omega_[i] * sst_residual_omega_[i];
+            }
+        }
+        Real residual_l2 = std::sqrt(l2 / (nvar_eff * static_cast<Real>(q.size())));
         summary.residual_history.push_back(residual_l2);
         q.swap(q_next);
+
+        // SST explicit update for k and omega
+        if (config.turbulence_model == TurbulenceModel::SST) {
+            for (std::size_t i = 0; i < mesh_.cells.size(); ++i) {
+                Real dt_over_V = min_dt / (mesh_.cells[i].volume + Real(1e-30));
+                sst_k_[i] += dt_over_V * sst_residual_k_[i];
+                sst_omega_[i] += dt_over_V * sst_residual_omega_[i];
+                if (sst_k_[i] < Real(0)) sst_k_[i] = Real(0);
+                if (sst_omega_[i] <= Real(0)) sst_omega_[i] = Real(1e-10);
+            }
+        }
 
         if (config.amr.enabled && iter > 0 && config.amr.interval > 0 && (iter % config.amr.interval) == 0) {
             CfdMesh mesh_old = mesh_;
@@ -592,17 +963,21 @@ CfdSolveSummary CfdSolver::solve_from_state(
                 // 5. TKE ratio sensor (k / 0.5*U² — requires SST k data; no-op for
                 //    non-SST models via nullptr sst_k)
                 if (config.amr.tke_ratio_threshold > Real(0)) {
+                    const std::vector<Real>* sst_k_ptr =
+                        (config.turbulence_model == TurbulenceModel::SST) ? &sst_k_ : nullptr;
                     sensor_outputs.push_back(
                         compute_tke_ratio_sensor(mesh_, q, config.amr, config.gamma,
-                            config.turbulence_model, nullptr,
+                            config.turbulence_model, sst_k_ptr,
                             config.amr.tke_ratio_threshold));
                 }
 
                 // 6. Shear-layer sensor (resolved_k / (resolved_k + modeled_k) ratio)
                 if (config.amr.shear_layer_threshold > Real(0)) {
+                    const std::vector<Real>* sst_k_ptr =
+                        (config.turbulence_model == TurbulenceModel::SST) ? &sst_k_ : nullptr;
                     sensor_outputs.push_back(
                         compute_shear_layer_sensor(mesh_, q, config.amr, config.gamma,
-                            config.turbulence_model, nullptr,
+                            config.turbulence_model, sst_k_ptr,
                             config.amr.shear_layer_threshold));
                 }
             }
@@ -644,13 +1019,55 @@ CfdSolveSummary CfdSolver::solve_from_state(
                 std::string err;
                 const std::vector<RefinementRecord>* prev = amr_records.empty() ? nullptr : &amr_records;
                 if (refine_cells(mesh_, requests, &new_records, &err, prev, &coarsen_info, config.amr.max_level)) {
+                    // Save SST k/omega state before AMR changes arrays
+                    std::vector<Real> sst_k_old, sst_omega_old;
+                    if (config.turbulence_model == TurbulenceModel::SST) {
+                        sst_k_old = sst_k_;
+                        sst_omega_old = sst_omega_;
+                    }
+
                     if (need_gradients && !grads.empty() && !w.empty()) {
                         const auto& gsrc = apply_limiting ? limited : grads;
                         prolongate_solution_order2(q_old, w, gsrc, mesh_old, mesh_, new_records, config.gamma, q);
                     } else {
                         prolongate_solution(q_old, mesh_old, mesh_, new_records, q);
                     }
-                    // Clamp turbulence variables on newly created cells
+
+                    // Prolong SST k/omega for refined children (injection from parent)
+                    // and copy unchanged cells from old arrays using centroid matching.
+                    if (config.turbulence_model == TurbulenceModel::SST && !sst_k_old.empty()) {
+                        std::vector<Real> new_k(mesh_.cells.size(), Real(0));
+                        std::vector<Real> new_w(mesh_.cells.size(), Real(0));
+                        for (const auto& rec : new_records) {
+                            int parent = rec.parent_cell_id;
+                            if (parent < 0 || static_cast<std::size_t>(parent) >= sst_k_old.size()) continue;
+                            for (int c = 0; c < rec.n_children; ++c) {
+                                int child = rec.child_cell_ids[c];
+                                if (child >= 0 && child < static_cast<int>(new_k.size())) {
+                                    new_k[child] = sst_k_old[parent];
+                                    new_w[child] = sst_omega_old[parent];
+                                }
+                            }
+                        }
+                        for (std::size_t i = 0; i < mesh_.cells.size(); ++i) {
+                            if (new_k[i] != Real(0)) continue;
+                            for (std::size_t j = 0; j < mesh_old.cells.size(); ++j) {
+                                if (mesh_.cells[i].cx == mesh_old.cells[j].cx &&
+                                    mesh_.cells[i].cy == mesh_old.cells[j].cy &&
+                                    mesh_.cells[i].cz == mesh_old.cells[j].cz) {
+                                    new_k[i] = sst_k_old[j];
+                                    new_w[i] = sst_omega_old[j];
+                                    break;
+                                }
+                            }
+                        }
+                        sst_k_.swap(new_k);
+                        sst_omega_.swap(new_w);
+                        for (auto& v : sst_k_) if (v < Real(0)) v = Real(0);
+                        for (auto& v : sst_omega_) if (v <= Real(0)) v = Real(1e-10);
+                    }
+
+                    // Clamp SA turbulence variables on newly created cells
                     for (const auto& rec : new_records) {
                         for (int c = 0; c < rec.n_children; ++c) {
                             int child_id = rec.child_cell_ids[c];
@@ -666,6 +1083,7 @@ CfdSolveSummary CfdSolver::solve_from_state(
                     for (const auto& ci : coarsen_info) {
                         Real vol_sum = 0.0f;
                         ConservativeState avg;
+                        Real k_avg = 0, w_avg = 0;
                         for (int c = 0; c < ci.n_children; ++c) {
                             int child_id = ci.old_child_ids[c];
                             if (child_id < 0 || child_id >= static_cast<int>(q_old.size())) continue;
@@ -677,11 +1095,22 @@ CfdSolveSummary CfdSolver::solve_from_state(
                             avg.rho_w += q_old[child_id].rho_w * vol;
                             avg.rho_E += q_old[child_id].rho_E * vol;
                             avg.rho_nu_tilde += q_old[child_id].rho_nu_tilde * vol;
+                            if (config.turbulence_model == TurbulenceModel::SST &&
+                                !sst_k_old.empty() && static_cast<std::size_t>(child_id) < sst_k_old.size()) {
+                                k_avg += sst_k_old[child_id] * vol;
+                                w_avg += sst_omega_old[child_id] * vol;
+                            }
                         }
                         if (vol_sum > 0.0f) {
                             Real inv = 1.0f / vol_sum;
                             avg.rho *= inv; avg.rho_u *= inv; avg.rho_v *= inv;
                             avg.rho_w *= inv; avg.rho_E *= inv; avg.rho_nu_tilde *= inv;
+                            if (config.turbulence_model == TurbulenceModel::SST &&
+                                !sst_k_old.empty() && ci.new_parent_id >= 0 &&
+                                ci.new_parent_id < static_cast<int>(sst_k_.size())) {
+                                sst_k_[ci.new_parent_id] = k_avg / vol_sum;
+                                sst_omega_[ci.new_parent_id] = w_avg / vol_sum;
+                            }
                         }
                         q[ci.new_parent_id] = avg;
                         // Clamp turbulence on coarsened parent
@@ -715,6 +1144,18 @@ CfdSolveSummary CfdSolver::solve_from_state(
                     w.assign(n_new, PrimitiveState{});
                     if (!limited.empty()) limited.assign(n_new, PrimitiveGradient{});
                     if (!sources.empty()) sources.assign(n_new, RansSource{});
+                    if (config.turbulence_model == TurbulenceModel::SST) {
+                        sst_residual_k_.assign(n_new, Real(0));
+                        sst_residual_omega_.assign(n_new, Real(0));
+                        sst_grad_k_.assign(n_new * 3, Real(0));
+                        sst_grad_omega_.assign(n_new * 3, Real(0));
+                        sst_f1_.assign(n_new, Real(0));
+                        // sst_k_ and sst_omega_ were already resized in prolongation
+                        if (static_cast<int>(sst_k_.size()) != n_new)
+                            sst_k_.resize(n_new, Real(0));
+                        if (static_cast<int>(sst_omega_.size()) != n_new)
+                            sst_omega_.resize(n_new, Real(1e-10));
+                    }
                     wall_face_indices_.clear();
                     for (int fi = 0; fi < static_cast<int>(mesh_.faces.size()); ++fi) {
                         auto bc = mesh_.faces[fi].boundary;
@@ -761,6 +1202,10 @@ CfdSolveSummary CfdSolver::solve_from_state(
     summary.forces.iterations = static_cast<int>(summary.residual_history.size());
     summary.forces.residual = summary.residual_history.empty() ? 0.0f : summary.residual_history.back();
     summary.final_state = q;
+    if (config.turbulence_model == TurbulenceModel::SST) {
+        summary.sst_final_k = sst_k_;
+        summary.sst_final_omega = sst_omega_;
+    }
     const char* tm_str = "laminar";
     if (config.turbulence_model == TurbulenceModel::SA) tm_str = "rans-sa";
     else if (config.turbulence_model == TurbulenceModel::SA_DDES) tm_str = "rans-sa-ddes";

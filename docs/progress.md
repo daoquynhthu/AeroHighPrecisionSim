@@ -1185,3 +1185,19 @@
 - Cleanup: removed forced 1st-order injection (debug workaround), removed Q_OLD_BAD/BAD post-AMR diagnostic prints, removed fallback printf counters from `amr_interpolate.cpp`.
 - Re-enabled 2nd-order prolongation (`prolongate_solution_order2`) in solver AMR branch.
 - Verification: TestCfdMesh 47/47 all PASS. TURB-2 now shows `before=3024 after=6601 res=4.04e-02 ratio=2.18` (stable solver + AMR through all iterations).
+
+2026-07-19
+- Phase 14.2: CPU SST oracle integration.
+  - Added `CfdSolveSummary::sst_final_k`, `sst_final_omega` fields.
+  - Added 5 CPU SST pipeline functions: `compute_sst_gradients_cpu`, `compute_sst_advection_cpu`,
+    `compute_sst_diffusion_cpu`, `compute_sst_source_cpu`, and explicit update in `CfdSolver::solve_from_state`.
+  - Added SST member vectors (`sst_k_`, `sst_omega_`, `sst_residual_k_/omega_`, `sst_grad_k_/omega_`, `sst_f1_`) to `CfdSolver`.
+  - SST initialization from freestream (1.5*tu²*U² for k, mu_t/mu=0.1 for ω) matches GPU formula.
+  - SST AMR prolongation (injection from parent) and restriction (volume-weighted average over children).
+  - SST k/ω residuals contribute to L2 norm (nvar_eff += 2).
+  - Mu_t coupling: `compute_viscous_flux_cpu` accepts optional SST k/ω arrays; mu_t added to mu_eff for momentum/energy viscous stress.
+  - TKE ratio and shear-layer sensors pass SST k data to sensor functions (was nullptr).
+  - Semi-implicit SA correction skipped for SST (matches GPU: SST uses separate forward-Euler path).
+  - Added TURB-3 test (CFD-AMR-TURB-3): flat plate SST CPU solver with AMR — finite forces, mesh refines, no NaN.
+  - Regression: all 5 CPU test suites PASS — TestCfdMesh 48/48, TestCfdEuler 15/15, TestCfdRans 16/16,
+    TestCfdReconstruction 21/21, TestCfdViscous 11/11.

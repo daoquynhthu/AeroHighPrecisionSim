@@ -1700,7 +1700,7 @@ Tests:
 | 0k | `CFD-EULER-13` | LAMINAR AMR regression: solver converges, mesh refines, no negative Jacobians | finite | [x] |
 | 1 | `CFD-AMR-TURB-1` | Flat plate SST: y+ ≤ 1 after AMR adaptation starting from coarse mesh | N/A | [ ] |
 | 2 | `CFD-AMR-TURB-2` | Circular cylinder Re=3900 (DDES): AMR refines wake region (cell count increase ≥ 2×) | 2× | [ ] |
-| 3 | `CFD-AMR-TURB-3` | AMR + SST: forces match globally refined mesh within 2% | 2% | [ ] |
+| 3 | `CFD-AMR-TURB-3` | AMR + SST: forces match globally refined mesh within 2% | 2% | [x] |
 
 Gate:
 

@@ -109,7 +109,9 @@ bool compute_viscous_flux_cpu(
     Real wall_T,
     int turbulence,
     std::vector<EulerFlux>& residual,
-    const std::vector<PrimitiveState>* primitive_override = nullptr);
+    const std::vector<PrimitiveState>* primitive_override = nullptr,
+    const std::vector<Real>* sst_k = nullptr,
+    const std::vector<Real>* sst_omega = nullptr);
 
 } // namespace cfd
 } // namespace aero

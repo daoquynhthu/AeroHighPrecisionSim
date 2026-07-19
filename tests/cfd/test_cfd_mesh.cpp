@@ -1469,6 +1469,72 @@ static int test_turbulence_amr() {
         if (qr.negative_jacobian_count != 0) FAIL("negative Jacobians=%d", qr.negative_jacobian_count);
         PASS;
     }
+
+    TEST("CFD-AMR-TURB-3 Flat plate SST: CPU solver with AMR produces finite forces");
+    {
+        auto mesh = generate_flat_plate_mesh(0.5f, 0.05f, 0.1f, 1e-3f, 1.12f, 10, 3, 12);
+        auto report = compute_mesh_metrics(mesh);
+        if (!report.valid) FAIL("mesh metrics: %s", report.message.c_str());
+
+        CfdSolver solver;
+        if (!solver.load_mesh(mesh)) FAIL("load_mesh failed");
+
+        CfdConfig cfg;
+        cfg.max_iter = 10;
+        cfg.cfl = 0.1f;
+        cfg.convergence_tol = 1e-12f;
+        cfg.viscous = true;
+        cfg.Re = 1e5f;
+        cfg.turbulence_model = TurbulenceModel::SST;
+        cfg.amr.enabled = true;
+        cfg.amr.interval = 5;
+        cfg.amr.max_level = 2;
+        cfg.amr.yplus_target = 1.0f;
+
+        FreestreamCondition freestream;
+        freestream.mach = 0.5f;
+
+        auto summary = solver.solve(freestream, cfg);
+        if (summary.failed) {
+            std::printf("  (fail: iter=%d cell=%d reason=%s)",
+                summary.diagnostics.failure.iteration,
+                summary.diagnostics.failure.cell,
+                summary.diagnostics.failure.reason.c_str());
+            FAIL("SST CPU solver with AMR failed");
+        }
+
+        if (!std::isfinite(summary.forces.CX) || !std::isfinite(summary.forces.CY) ||
+            !std::isfinite(summary.forces.CZ) || !std::isfinite(summary.forces.CD) ||
+            !std::isfinite(summary.forces.CL))
+            FAIL("non-finite forces from SST CPU AMR");
+
+        std::printf("  (cells=%d->%d res=%.2e CX=%.4f CD=%.4f CL=%.4f)",
+            static_cast<int>(mesh.cells.size()),
+            static_cast<int>(summary.final_state.size()),
+            summary.residual_history.empty() ? -1.0 : summary.residual_history.back(),
+            summary.forces.CX, summary.forces.CD, summary.forces.CL);
+
+        CfdMesh mesh_after = solver.mesh();
+        auto qr = compute_mesh_metrics(mesh_after);
+        if (qr.min_volume <= 0.0f) FAIL("min volume=%g", qr.min_volume);
+        if (qr.negative_jacobian_count != 0) FAIL("negative Jacobians=%d", qr.negative_jacobian_count);
+
+        // SST without AMR: same config but amr disabled
+        CfdSolver solver2;
+        if (!solver2.load_mesh(mesh)) FAIL("load_mesh failed for ref");
+
+        CfdConfig cfg2 = cfg;
+        cfg2.amr.enabled = false;
+
+        auto summary2 = solver2.solve(freestream, cfg2);
+        if (summary2.failed) FAIL("SST CPU solver without AMR failed");
+
+        if (!std::isfinite(summary2.forces.CX) || !std::isfinite(summary2.forces.CD))
+            FAIL("non-finite forces from SST CPU no-AMR");
+
+        std::printf(" (ref CD=%.4f CL=%.4f)", summary2.forces.CD, summary2.forces.CL);
+        PASS;
+    }
     return 0;
 }
 

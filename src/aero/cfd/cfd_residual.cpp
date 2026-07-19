@@ -253,7 +253,9 @@ bool compute_viscous_flux_cpu(
     Real wall_T,
     int turbulence,
     std::vector<EulerFlux>& residual,
-    const std::vector<PrimitiveState>* primitive_override) {
+    const std::vector<PrimitiveState>* primitive_override,
+    const std::vector<Real>* sst_k,
+    const std::vector<Real>* sst_omega) {
     if (q.size() != mesh.cells.size()) return false;
     if (gradients.size() != mesh.cells.size()) return false;
 
@@ -372,11 +374,30 @@ bool compute_viscous_flux_cpu(
             face_T = wall_T;
         }
 
-        if (face_T <= 0.0f) continue;
+    if (face_T <= 0.0f) continue;
         Real mu_face = sutherland_viscosity(face_T, T_ref, sutherland_T) * mu_ref;
         if (mu_face <= 0.0f) continue;
 
-        Real mu_eff = mu_face;
+    Real mu_eff = mu_face;
+
+    // SST mu_t coupling: add turbulent eddy viscosity to mu_eff
+    int L_id = face.left_cell;
+    int R_id = face.right_cell;
+    if (turbulence == 3 && sst_k && sst_omega &&
+        static_cast<std::size_t>(L_id) < sst_k->size() &&
+        static_cast<std::size_t>(L_id) < sst_omega->size()) {
+        Real k_face = (*sst_k)[L_id];
+        Real w_face = (*sst_omega)[L_id];
+        if (R_id >= 0 && static_cast<std::size_t>(R_id) < sst_k->size() &&
+            static_cast<std::size_t>(R_id) < sst_omega->size()) {
+            k_face = Real(0.5) * (k_face + (*sst_k)[R_id]);
+            w_face = Real(0.5) * (w_face + (*sst_omega)[R_id]);
+        }
+        if (w_face > Real(1e-30) && k_face >= Real(0)) {
+            Real mu_t = wL.rho * k_face / w_face;
+            mu_eff += mu_t;
+        }
+    }
 
         Real nx = face.nx, ny = face.ny, nz = face.nz;
         Real area = face.area;
