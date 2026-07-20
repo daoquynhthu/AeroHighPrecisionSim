@@ -1538,6 +1538,144 @@ static int test_turbulence_amr() {
     return 0;
 }
 
+static int test_anisotropic_amr() {
+    TEST("CFD-AMR-ANISO-1 HEX8 1->2 directional: volume sum conserved");
+    {
+        CfdMesh mesh = generate_structured_hex_mesh(2);
+        Real vol_before = 0.0f;
+        for (const auto& c : mesh.cells) vol_before += c.volume;
+        if (mesh.cells.size() != 1u) FAIL("expected 1 hex, got %zu", mesh.cells.size());
+
+        std::vector<RefinementRequest> requests = {{0, RefinementFlag::Refine, AnisotropicDir::DIR_X}};
+        std::vector<RefinementRecord> records;
+        std::string err;
+        bool ok = refine_cells(mesh, requests, &records, &err);
+        if (!ok) FAIL("refine_cells failed: %s", err.c_str());
+        if (mesh.cells.size() != 2u) FAIL("expected 2 cells (1->2), got %zu", mesh.cells.size());
+
+        Real vol_sum = 0.0f;
+        int hex_count = 0;
+        for (const auto& c : mesh.cells) {
+            if (c.volume <= 0.0f) FAIL("cell zero/negative volume=%g", c.volume);
+            if (c.type == ElementType::HEX8) ++hex_count;
+            vol_sum += c.volume;
+        }
+        if (hex_count != 2) FAIL("expected 2 HEX8 cells, got %d", hex_count);
+        Real rel = std::fabs(vol_sum - vol_before) / vol_before;
+        if (rel > 1e-6f) FAIL("volume mismatch: before=%g after=%g rel=%g", vol_before, vol_sum, rel);
+
+        auto rep = compute_mesh_metrics(mesh);
+        if (rep.min_volume <= 0.0f) FAIL("min volume after refine=%g", rep.min_volume);
+        PASS;
+    }
+
+    TEST("CFD-AMR-ANISO-2 TET4 1->4 directional: volume sum conserved");
+    {
+        CfdMesh mesh;
+        mesh.nodes.resize(4);
+        mesh.nodes[0] = {0.0f, 0.0f, 0.0f};
+        mesh.nodes[1] = {1.0f, 0.0f, 0.0f};
+        mesh.nodes[2] = {0.0f, 1.0f, 0.0f};
+        mesh.nodes[3] = {0.0f, 0.0f, 1.0f};
+        CfdCell cell;
+        cell.type = ElementType::TET4;
+        cell.node[0] = 0; cell.node[1] = 1; cell.node[2] = 2; cell.node[3] = 3;
+        mesh.cells.push_back(cell);
+        rebuild_mesh_faces(mesh);
+        auto report = compute_mesh_metrics(mesh);
+        if (!report.valid) FAIL("initial mesh invalid: %s", report.message.c_str());
+        Real vol_before = mesh.cells[0].volume;
+        if (vol_before <= 0.0f) FAIL("initial volume=%g", vol_before);
+
+        std::vector<RefinementRequest> requests = {{0, RefinementFlag::Refine, AnisotropicDir::DIR_X}};
+        std::vector<RefinementRecord> records;
+        std::string err;
+        bool ok = refine_cells(mesh, requests, &records, &err);
+        if (!ok) FAIL("refine_cells failed: %s", err.c_str());
+        if (mesh.cells.size() != 4u) FAIL("expected 4 cells (1->4), got %zu", mesh.cells.size());
+
+        Real vol_sum = 0.0f;
+        int tet_count = 0;
+        for (const auto& c : mesh.cells) {
+            if (c.volume <= 0.0f) FAIL("cell zero/negative volume=%g", c.volume);
+            if (c.type == ElementType::TET4) ++tet_count;
+            vol_sum += c.volume;
+        }
+        if (tet_count != 4) FAIL("expected 4 TET4 cells, got %d", tet_count);
+        Real rel = std::fabs(vol_sum - vol_before) / vol_before;
+        if (rel > 1e-6f) FAIL("volume mismatch: before=%g after=%g rel=%g", vol_before, vol_sum, rel);
+
+        auto rep = compute_mesh_metrics(mesh);
+        if (rep.min_volume <= 0.0f) FAIL("min volume after refine=%g", rep.min_volume);
+        PASS;
+    }
+
+    TEST("CFD-AMR-ANISO-3 PENTA6 1->2 height bisect: volume sum conserved");
+    {
+        CfdMesh mesh;
+        mesh.nodes.resize(6);
+        mesh.nodes[0] = {0.0f, 0.0f, 0.0f};
+        mesh.nodes[1] = {1.0f, 0.0f, 0.0f};
+        mesh.nodes[2] = {0.0f, 1.0f, 0.0f};
+        mesh.nodes[3] = {0.0f, 0.0f, 1.0f};
+        mesh.nodes[4] = {1.0f, 0.0f, 1.0f};
+        mesh.nodes[5] = {0.0f, 1.0f, 1.0f};
+        CfdCell prism;
+        prism.type = ElementType::PENTA6;
+        prism.node[0] = 0; prism.node[1] = 1; prism.node[2] = 2;
+        prism.node[3] = 3; prism.node[4] = 4; prism.node[5] = 5;
+        mesh.cells.push_back(prism);
+        rebuild_mesh_faces(mesh);
+        auto report = compute_mesh_metrics(mesh);
+        if (!report.valid) FAIL("initial mesh invalid: %s", report.message.c_str());
+        Real vol_before = mesh.cells[0].volume;
+        if (vol_before <= 0.0f) FAIL("initial volume=%g", vol_before);
+
+        std::vector<RefinementRequest> requests = {{0, RefinementFlag::Refine, AnisotropicDir::DIR_Z}};
+        std::vector<RefinementRecord> records;
+        std::string err;
+        bool ok = refine_cells(mesh, requests, &records, &err);
+        if (!ok) FAIL("refine_cells failed: %s", err.c_str());
+        if (mesh.cells.size() != 2u) FAIL("expected 2 cells (1->2), got %zu", mesh.cells.size());
+
+        Real vol_sum = 0.0f;
+        int penta_count = 0;
+        for (const auto& c : mesh.cells) {
+            if (c.volume <= 0.0f) FAIL("cell zero/negative volume=%g", c.volume);
+            if (c.type == ElementType::PENTA6) ++penta_count;
+            vol_sum += c.volume;
+        }
+        if (penta_count != 2) FAIL("expected 2 PENTA6 cells, got %d", penta_count);
+        Real rel = std::fabs(vol_sum - vol_before) / vol_before;
+        if (rel > 1e-6f) FAIL("volume mismatch: before=%g after=%g rel=%g", vol_before, vol_sum, rel);
+        PASS;
+    }
+
+    TEST("CFD-AMR-ANISO-6 anisotropic_layers=0 regression: isotropic 1->8");
+    {
+        CfdMesh mesh = generate_structured_hex_mesh(2);
+        Real vol_before = 0.0f;
+        for (const auto& c : mesh.cells) vol_before += c.volume;
+
+        std::vector<RefinementRequest> requests = {{0, RefinementFlag::Refine, AnisotropicDir::NONE}};
+        std::vector<RefinementRecord> records;
+        std::string err;
+        bool ok = refine_cells(mesh, requests, &records, &err);
+        if (!ok) FAIL("refine_cells failed: %s", err.c_str());
+        if (mesh.cells.size() != 8u) FAIL("expected 8 cells (isotropic 1->8), got %zu", mesh.cells.size());
+
+        Real vol_sum = 0.0f;
+        for (const auto& c : mesh.cells) {
+            if (c.volume <= 0.0f) FAIL("cell volume=%g", c.volume);
+            vol_sum += c.volume;
+        }
+        Real rel = std::fabs(vol_sum - vol_before) / vol_before;
+        if (rel > 1e-6f) FAIL("volume mismatch: before=%g after=%g rel=%g", vol_before, vol_sum, rel);
+        PASS;
+    }
+    return 0;
+}
+
 int main() {
     int result = 0;
     result |= test_cube_mesh();
@@ -1557,6 +1695,7 @@ int main() {
     result |= test_amr_order2_hanging();
     result |= test_compact_mesh_nodes();
     result |= test_turbulence_amr();
+    result |= test_anisotropic_amr();
     std::printf("\n%d / %d tests PASSED.\n", pass_count, test_count);
     return result == 0 && pass_count == test_count ? 0 : 1;
 }

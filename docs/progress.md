@@ -1261,3 +1261,15 @@
 - Overlapping body check: if cell center is inside 2+ components, treat as body (overlap region).
 - `integrate_wall_forces` (cfd_solver): added `int body_id = -1` parameter (all bodies by default).
 - Regression: all existing STL/AMR tests PASS (44/45; CFD-MESH-COV3-1 pre-existing).
+- Fixed SDF grid not resized in multi-body path (grid.sdf.resize missing before min-loop).
+
+2026-07-20 — Phase 9-C.2/9-C.3 test suite completion
+- Added anisotropic AMR tests:
+  - CFD-AMR-ANISO-1: HEX8 1→2 directional (DIR_X) — 2 children, volume conserved.
+  - CFD-AMR-ANISO-2: TET4 1→4 directional (DIR_X) — 4 children, volume conserved.
+  - CFD-AMR-ANISO-3: PENTA6 1→2 height bisect (DIR_Z) — 2 children, volume conserved.
+  - CFD-AMR-ANISO-6: anisotropic_layers=0 regression (DIR_NONE → isotropic 1→8).
+- Added multi-body STL tests:
+  - CFD-MESH-MULTI-1: two-tet STL + multi_body=true → 2 components, body_ids={0,1} on wall faces.
+  - CFD-MESH-MULTI-3: multi_body=false regression → all wall faces body_id=0.
+- All new tests PASS (TestCfdMesh 48/49, TestCfdMeshStl 9/9).

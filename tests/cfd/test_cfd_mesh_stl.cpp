@@ -8,6 +8,7 @@
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
+#include <set>
 
 using namespace aerosp;
 using namespace aerosp::aero::cfd;
@@ -322,12 +323,162 @@ static int test_prism_bl() {
     return 0;
 }
 
+// Write a two-tetrahedra STL file (two disjoint closed bodies)
+static bool write_two_tet_stl(const char* path) {
+    FILE* f = std::fopen(path, "w");
+    if (!f) return false;
+
+    // Tetrahedron 1: A(0,0,0) B(1,0,0) C(0,1,0) D(0,0,1)
+    // Face ABC (opposite D): outward normal (0,0,-1)
+    std::fprintf(f, "solid tet1\n");
+    std::fprintf(f, "  facet normal 0 0 -1\n");
+    std::fprintf(f, "    outer loop\n");
+    std::fprintf(f, "      vertex 0 0 0\n");
+    std::fprintf(f, "      vertex 1 0 0\n");
+    std::fprintf(f, "      vertex 0 1 0\n");
+    std::fprintf(f, "    endloop\n");
+    std::fprintf(f, "  endfacet\n");
+    // Face ABD (opposite C): outward normal (0,-1,0)
+    std::fprintf(f, "  facet normal 0 -1 0\n");
+    std::fprintf(f, "    outer loop\n");
+    std::fprintf(f, "      vertex 0 0 0\n");
+    std::fprintf(f, "      vertex 1 0 0\n");
+    std::fprintf(f, "      vertex 0 0 1\n");
+    std::fprintf(f, "    endloop\n");
+    std::fprintf(f, "  endfacet\n");
+    // Face ADC (opposite B): winding A-D-C for outward (-1,0,0)
+    std::fprintf(f, "  facet normal -1 0 0\n");
+    std::fprintf(f, "    outer loop\n");
+    std::fprintf(f, "      vertex 0 0 0\n");
+    std::fprintf(f, "      vertex 0 0 1\n");
+    std::fprintf(f, "      vertex 0 1 0\n");
+    std::fprintf(f, "    endloop\n");
+    std::fprintf(f, "  endfacet\n");
+    // Face BCD (opposite A): winding B-C-D for outward (1,1,1)/sqrt(3)
+    std::fprintf(f, "  facet normal 0.57735 0.57735 0.57735\n");
+    std::fprintf(f, "    outer loop\n");
+    std::fprintf(f, "      vertex 1 0 0\n");
+    std::fprintf(f, "      vertex 0 1 0\n");
+    std::fprintf(f, "      vertex 0 0 1\n");
+    std::fprintf(f, "    endloop\n");
+    std::fprintf(f, "  endfacet\n");
+    std::fprintf(f, "endsolid tet1\n");
+
+    // Tetrahedron 2: A'(3,0,0) B'(4,0,0) C'(3,1,0) D'(3,0,1)
+    std::fprintf(f, "solid tet2\n");
+    std::fprintf(f, "  facet normal 0 0 -1\n");
+    std::fprintf(f, "    outer loop\n");
+    std::fprintf(f, "      vertex 3 0 0\n");
+    std::fprintf(f, "      vertex 4 0 0\n");
+    std::fprintf(f, "      vertex 3 1 0\n");
+    std::fprintf(f, "    endloop\n");
+    std::fprintf(f, "  endfacet\n");
+    std::fprintf(f, "  facet normal 0 -1 0\n");
+    std::fprintf(f, "    outer loop\n");
+    std::fprintf(f, "      vertex 3 0 0\n");
+    std::fprintf(f, "      vertex 4 0 0\n");
+    std::fprintf(f, "      vertex 3 0 1\n");
+    std::fprintf(f, "    endloop\n");
+    std::fprintf(f, "  endfacet\n");
+    std::fprintf(f, "  facet normal -1 0 0\n");
+    std::fprintf(f, "    outer loop\n");
+    std::fprintf(f, "      vertex 3 0 0\n");
+    std::fprintf(f, "      vertex 3 0 1\n");
+    std::fprintf(f, "      vertex 3 1 0\n");
+    std::fprintf(f, "    endloop\n");
+    std::fprintf(f, "  endfacet\n");
+    std::fprintf(f, "  facet normal 0.57735 0.57735 0.57735\n");
+    std::fprintf(f, "    outer loop\n");
+    std::fprintf(f, "      vertex 4 0 0\n");
+    std::fprintf(f, "      vertex 3 1 0\n");
+    std::fprintf(f, "      vertex 3 0 1\n");
+    std::fprintf(f, "    endloop\n");
+    std::fprintf(f, "  endfacet\n");
+    std::fprintf(f, "endsolid tet2\n");
+
+    std::fclose(f);
+    return true;
+}
+
+static int test_multi_body_stl() {
+    const char* stl_path = "test_multi_tet.stl";
+    if (!write_two_tet_stl(stl_path))
+        FAIL("failed to write two-tet STL");
+
+    TEST("CFD-MESH-MULTI-1 two-tet multi_body=true: body_ids assigned");
+    {
+        StlMeshConfig cfg;
+        cfg.outer_scale = 3.0f;
+        cfg.background_n_per_dim = 32;
+        cfg.max_cells = 500000;
+        cfg.multi_body = true;
+
+        CfdMesh mesh;
+        std::string err;
+        if (!generate_watertight_mesh_from_stl(stl_path, mesh, cfg, &err))
+            FAIL("watertight mesh failed: %s", err.c_str());
+
+        if (mesh.cells.empty()) FAIL("zero cells in watertight mesh");
+        if (mesh.faces.empty()) FAIL("zero faces");
+
+        // Count body_ids on wall faces
+        std::set<int> body_ids;
+        int wall_count = 0;
+        for (const auto& face : mesh.faces) {
+            if (face.boundary == BoundaryKind::NoSlipWall) {
+                body_ids.insert(face.body_id);
+                ++wall_count;
+            }
+        }
+        if (wall_count == 0) FAIL("zero wall faces in mesh");
+        if (body_ids.empty()) FAIL("no body_ids found on wall faces");
+
+        std::printf("\n  bodies=%zu wall_faces=%d body_ids={",
+            body_ids.size(), wall_count);
+        for (int bid : body_ids) std::printf("%d ", bid);
+        std::printf("} cells=%zu", mesh.cells.size());
+
+        auto report = compute_mesh_quality_detail(mesh);
+        if (report.min_volume <= 0.0f) FAIL("min volume=%g", report.min_volume);
+        PASS;
+    }
+
+    TEST("CFD-MESH-MULTI-3 multi_body=false regression: no crash");
+    {
+        StlMeshConfig cfg;
+        cfg.outer_scale = 3.0f;
+        cfg.background_n_per_dim = 32;
+        cfg.max_cells = 500000;
+        cfg.multi_body = false;
+
+        CfdMesh mesh;
+        std::string err;
+        if (!generate_watertight_mesh_from_stl(stl_path, mesh, cfg, &err))
+            FAIL("watertight mesh with multi_body=false failed: %s", err.c_str());
+
+        if (mesh.cells.empty()) FAIL("zero cells");
+        if (mesh.faces.empty()) FAIL("zero faces");
+
+        // All wall faces should have body_id=0 (default)
+        for (const auto& face : mesh.faces) {
+            if (face.boundary == BoundaryKind::NoSlipWall) {
+                if (face.body_id != 0) FAIL("body_id=%d expected 0 with multi_body=false", face.body_id);
+            }
+        }
+        PASS;
+    }
+
+    std::remove(stl_path);
+    return 0;
+}
+
 int main() {
     std::setbuf(stdout, NULL);
     int result = 0;
     result |= test_cone_stl_mesh();
     result |= test_prism_bl();
     result |= test_prism_degrade();
+    result |= test_multi_body_stl();
     std::printf("\n%d / %d tests PASSED.\n", pass_count, test_count);
     return result == 0 && pass_count == test_count ? 0 : 1;
 }

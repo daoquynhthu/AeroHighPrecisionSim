@@ -1616,6 +1616,8 @@ bool generate_watertight_mesh_from_stl(
     grid.dz = dz;
     // Multi-body SDF: minimum signed distance across all components
     if (multi) {
+        int npts_multi = (grid.nx + 1) * (grid.ny + 1) * (grid.nz + 1);
+        grid.sdf.resize(npts_multi);
         for (size_t idx = 0; idx < grid.sdf.size(); ++idx) {
             int i = static_cast<int>(idx % (grid.nx + 1));
             int j = static_cast<int>((idx / (grid.nx + 1)) % (grid.ny + 1));
