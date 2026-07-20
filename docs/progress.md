@@ -1229,3 +1229,10 @@
 - Production aero_table stl_volume_mesh path uses generate_watertight_mesh_from_stl (hex-cull, SDF body remove) — closed-surface rel=0, passes load_mesh 1e-4.
 - TABLE-STL-1 uses closed solid cone STL (ray-cast SDF); forces differ from unit-cube embedding under strict checks.
 - Verification: TestCfdEuler 15/15, TestCfdMeshStl 4/4, TestAeroTableGen 9/9 — all PASS with original tols.
+
+2026-07-20 — Phase 9-B production path hardening
+- BVH signed_distance: multi-ray majority vote (13 directions) for solid classification; single-axis override retained.
+- SDF grid uses multi-ray (no per-node single-axis cycling).
+- Hex-cull: body if any corner SDF<0 or center SDF<0; require n_body>0; compact_mesh_nodes after cull.
+- TABLE-STL-3: HGV production STL (n=20) watertight mesh + CFD forces finite, alpha=0 lateral <=1e-2, load_mesh 1e-4 (rel~0).
+- Verification: TestAeroTableGen 10/10 PASS, TestCfdMeshStl 4/4 PASS (cut-cell quality unchanged).

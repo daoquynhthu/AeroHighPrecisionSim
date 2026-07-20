@@ -132,29 +132,47 @@ public:
         return ray_intersect_node(0, origin, dir, t_max, dummy);
     }
 
-    // Signed distance: closest distance with sign from ray-casting parity
+    // Signed distance: |dist| from closest surface; sign via multi-ray majority
+    // vote so production STLs with seams / glancing rays still classify solids.
     Real signed_distance(Vec3 p, int* ray_dir = nullptr) const {
         Real d = closest_distance(p);
+        if (d <= Real(1e-12))
+            return Real(0);
 
-        Vec3 dir;
+        // Optional single-axis override (legacy callers / diagnostics).
         if (ray_dir) {
+            Vec3 dir;
             int a = *ray_dir % 3;
             if (a == 0) dir = {1, 0, 0};
             else if (a == 1) dir = {0, 1, 0};
             else dir = {0, 0, 1};
-        } else {
-            dir = {1, 0, 0};
+            int hits = 0;
+            count_ray_hits_node(0, p, dir, Real(1e10), hits);
+            if (hits % 2 == 1)
+                d = -d;
+            return d;
         }
 
-        int hits = 0;
-        Real t_max = 1e10f;
-        Real t_hit;
-        // Shoot ray and count intersections
-        // We do a simple traversal
-        count_ray_hits_node(0, p, dir, t_max, hits);
-
-        // If odd number of intersections, point is inside
-        if (hits % 2 == 1)
+        static const Vec3 k_dirs[] = {
+            {1, 0, 0}, {-1, 0, 0},
+            {0, 1, 0}, {0, -1, 0},
+            {0, 0, 1}, {0, 0, -1},
+            {1, 1, 1}, {1, 1, -1}, {1, -1, 1}, {-1, 1, 1},
+            {1, -1, -1}, {-1, 1, -1}, {-1, -1, 1}
+        };
+        const int n_dirs = static_cast<int>(sizeof(k_dirs) / sizeof(k_dirs[0]));
+        int inside_votes = 0;
+        for (int i = 0; i < n_dirs; ++i) {
+            Vec3 dir = k_dirs[i];
+            Real len = norm(dir);
+            if (len < Real(1e-20)) continue;
+            dir = dir / len;
+            int hits = 0;
+            count_ray_hits_node(0, p, dir, Real(1e10), hits);
+            if ((hits % 2) == 1)
+                ++inside_votes;
+        }
+        if (inside_votes * 2 > n_dirs)
             d = -d;
         return d;
     }
@@ -610,8 +628,8 @@ void compute_sdf_grid(SDFGrid& grid, const BVH& bvh) {
         for (int j = 0; j <= grid.ny; ++j) {
             for (int i = 0; i <= grid.nx; ++i) {
                 Vec3 p = grid.grid_point(i, j, k);
-                int ray_axis = (i + j + k) % 3;
-                Real d = bvh.signed_distance(p, &ray_axis);
+                // Multi-ray majority (ray_dir=null) for production STL solids.
+                Real d = bvh.signed_distance(p, nullptr);
                 grid.at(i, j, k) = d;
             }
         }
@@ -1254,18 +1272,24 @@ bool generate_watertight_mesh_from_stl(
     for (int k = 0; k < n; ++k) {
         for (int j = 0; j < n; ++j) {
             for (int i = 0; i < n; ++i) {
-                // Body if majority of corners (or center) are inside (SDF < 0).
+                // Body if any corner inside, or cell-center SDF < 0.
                 int n_in = 0;
-                Real s = 0;
+                Real s_corners = 0;
                 for (int dk = 0; dk <= 1; ++dk)
                     for (int dj = 0; dj <= 1; ++dj)
                         for (int di = 0; di <= 1; ++di) {
                             Real sc = grid.at(i + di, j + dj, k + dk);
-                            s += sc;
+                            s_corners += sc;
                             if (sc < 0) ++n_in;
                         }
-                s *= Real(0.125);
-                if (n_in >= 1 || s < 0) {
+                s_corners *= Real(0.125);
+                Vec3 cen{
+                    origin.x + (i + Real(0.5)) * dx,
+                    origin.y + (j + Real(0.5)) * dy,
+                    origin.z + (k + Real(0.5)) * dz
+                };
+                Real s_cen = bvh.signed_distance(cen);
+                if (n_in >= 1 || s_corners < 0 || s_cen < 0) {
                     ++n_body;
                     continue;
                 }
@@ -1291,10 +1315,17 @@ bool generate_watertight_mesh_from_stl(
         if (error) *error = "Hex-cull produced zero fluid cells";
         return false;
     }
+    if (n_body <= 0) {
+        if (error) *error = "Hex-cull found no body cells (SDF never negative inside STL)";
+        return false;
+    }
     if (static_cast<int>(mesh.cells.size()) > cfg.max_cells) {
         if (error) *error = "Hex-cull exceeded max_cells";
         return false;
     }
+
+    // Drop nodes not referenced by fluid cells (body interior lattice).
+    compact_mesh_nodes(mesh);
 
     rebuild_mesh_faces(mesh);
     compute_mesh_metrics(mesh, false);

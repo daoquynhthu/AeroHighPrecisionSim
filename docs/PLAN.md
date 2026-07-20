@@ -786,7 +786,7 @@ Gate:
 
 Goal: replace the structured-cube-embedding hack in `generate_aero_table` with a body-fitted volume mesh generated directly from the STL surface. Enable production-grade CFD on arbitrary geometries without external mesh tools.
 
-> **Status**: Core pipeline complete (80³ quality tests + SU2 round-trip). 9-B.5 aero_table integration done (`stl_volume_mesh` flag, mesh cache per table, cube path retained). 9-B.4 prism BL not started.
+> **Status**: Core pipeline complete (80³ quality tests + SU2 round-trip). 9-B.5 production path: `stl_volume_mesh` → `generate_watertight_mesh_from_stl` (hex-cull, multi-ray SDF, compact nodes, load_mesh 1e-4). Cut-cell retained for geometry quality. Cube embedding HEX8+AABB. 9-B.4 prism BL not started.
 
 ### 9-B.1 STL surface parsing & signed-distance field
 

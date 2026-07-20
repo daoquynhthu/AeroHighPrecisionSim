@@ -134,8 +134,9 @@ namespace panel {
     //
     // When cfg.use_fvm=true, replaces results with GPU CFD solver for
     // in-range conditions (Mach [1.2,30], |alpha|<=30, |beta|<=10).
-    // Mesh: stl_volume_mesh=true uses generate_conformal_mesh_from_stl;
-    // stl_volume_mesh=false keeps the legacy cube-embedding body.
+    // Mesh: stl_volume_mesh=true uses generate_watertight_mesh_from_stl
+    // (hex-cull, load_mesh 1e-4 closed-surface); stl_volume_mesh=false keeps
+    // the legacy cube-embedding body.
     bool generate_aero_table(
         const std::string& stl_path,
         const std::string& csv_path,

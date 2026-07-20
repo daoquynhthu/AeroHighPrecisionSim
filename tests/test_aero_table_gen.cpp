@@ -554,6 +554,47 @@ static int test_stl_volume_mesh_false_regression() {
     return 0;
 }
 
+// ─── Test: production HGV STL watertight mesh + CFD forces ───────────────
+static int test_stl_volume_mesh_hgv_production() {
+    TEST("TABLE-STL-3 HGV production STL hex-cull mesh load_mesh + finite CFD");
+
+    AeroTableConfig cfg;
+    cfg.ref_area   = 1.131f;
+    cfg.ref_length = 12.0f;
+    cfg.ref_span   = 3.0f;
+    cfg.com_x      = 6.0f;
+    cfg.use_fvm    = true;
+    cfg.stl_volume_mesh = true;
+    cfg.mesh_outer_scale = 3.0f;
+    cfg.stl_background_n_per_dim = 20;
+    cfg.stl_max_cells = 2000000;
+
+    TempFile csv("test_table_hgv_stl_volume.csv");
+    if (!generate_aero_table("data/missile/hgv_model_optimized.stl",
+            csv.path, {3.0}, {0.0}, {0.0}, cfg))
+        FAIL("HGV stl_volume_mesh table generation failed");
+
+    std::vector<CsvRow> rows;
+    std::string err;
+    if (!read_csv(csv.path, rows, true, &err))
+        FAIL("read_csv: %s", err.c_str());
+    if (rows.size() != 1)
+        FAIL("expected 1 row, got %zu", rows.size());
+    if (!is_cfd_fidelity(rows[0].fidelity))
+        FAIL("fidelity='%s'", rows[0].fidelity.c_str());
+    if (!std::isfinite(rows[0].CX) || !std::isfinite(rows[0].CD))
+        FAIL("non-finite forces CX=%g CD=%g", rows[0].CX, rows[0].CD);
+    // Closed body at alpha=0 should keep lateral coefficients small.
+    if (std::abs(rows[0].CY) > 1e-2 || std::abs(rows[0].Cl) > 1e-2 ||
+        std::abs(rows[0].Cn) > 1e-2)
+        FAIL("alpha=0 lateral forces CY=%g Cl=%g Cn=%g", rows[0].CY, rows[0].Cl, rows[0].Cn);
+
+    std::cout << "PASS: HGV STL CX=" << rows[0].CX << " CD=" << rows[0].CD
+              << " fidelity=" << rows[0].fidelity << "\n";
+    PASS;
+    return 0;
+}
+
 int main() {
     int failures = 0;
     failures += test_cfd_gpu_table_in_range();
@@ -565,6 +606,7 @@ int main() {
     failures += test_cfd_gpu_empty_input();
     failures += test_stl_volume_mesh_differs_from_cube();
     failures += test_stl_volume_mesh_false_regression();
+    failures += test_stl_volume_mesh_hgv_production();
 
     std::cout << "\n[" << pass_count << "/" << test_count << " tests passed]\n";
     if (failures) {
