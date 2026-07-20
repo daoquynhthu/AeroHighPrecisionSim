@@ -1236,3 +1236,17 @@
 - Hex-cull: body if any corner SDF<0 or center SDF<0; require n_body>0; compact_mesh_nodes after cull.
 - TABLE-STL-3: HGV production STL (n=20) watertight mesh + CFD forces finite, alpha=0 lateral <=1e-2, load_mesh 1e-4 (rel~0).
 - Verification: TestAeroTableGen 10/10 PASS, TestCfdMeshStl 4/4 PASS (cut-cell quality unchanged).
+
+2026-07-20 — Phase 9-C.2 anisotropic AMR refinement
+- Added `AnisotropicDir` enum (NONE, DIR_X, DIR_Y, DIR_Z, WALL_NORMAL, STREAMWISE) to amr_types.hpp.
+- Added `AnisotropicDir dir` field to `RefinementRequest`.
+- Added `anisotropic_layers` to `AmrConfig`.
+- Added HEX8 1→2 directional bisect: `refine_hex8_aniso` splits along X, Y, or Z axis using 27-pt stencil.
+- Added TET4 1→4 anisotropic split: `refine_tet4_aniso` splits the face best aligned with direction, creating 4 children.
+- Added PENTA6 1→2 height bisect: `refine_penta6_aniso` splits prism height edges (0-3,1-4,2-5).
+- Added PENTA6 isotropic 1→8: `refine_penta6` splits triangular faces into 4 sub-triangles × 2 height layers.
+- BL y+ sensor sets `AnisotropicDir::WALL_NORMAL` on wall-adjacent refine requests.
+- Wake cone sensor sets `AnisotropicDir::STREAMWISE` on cells inside wake cone.
+- Anisotropic cascade in cfd_solver.cpp: cells at or above `anisotropic_layers` have dir cleared → isotropic split.
+- Coarsening handles variable child counts (2/4/8) for anisotropic/isotropic records.
+- Regression: all 47 existing AMR tests PASS.

@@ -161,6 +161,8 @@ std::vector<RefinementRequest> compute_yplus_sensor(
 
         if (yplus > config.yplus_target) {
             requests[cell_id].flag = RefinementFlag::Refine;
+            // Wall-adjacent cell: mark for anisotropic refinement in wall-normal direction
+            requests[cell_id].dir = AnisotropicDir::WALL_NORMAL;
         } else if (yplus < Real(0.5) * config.yplus_target && cell.refinement_level > 0) {
             requests[cell_id].flag = RefinementFlag::Coarsen;
         }
@@ -264,8 +266,10 @@ std::vector<RefinementRequest> compute_wake_cone_sensor(
             Real radius = proj * std::tan(half_angle_rad);
 
             if (dist <= radius) {
-                if (config.refine_tol > Real(0))
+                if (config.refine_tol > Real(0)) {
                     requests[i].flag = RefinementFlag::Refine;
+                    requests[i].dir = AnisotropicDir::STREAMWISE;
+                }
             }
         }
     }

@@ -558,22 +558,22 @@ bool CfdSolver::load_mesh(const CfdMesh& mesh) {
     mesh_ = mesh;
     wall_face_indices_.clear();
 
-    Real sx = 0.0f, sy = 0.0f, sz = 0.0f;
-    Real total_area = 0.0f;
+    double sx = 0, sy = 0, sz = 0;
+    double total_area = 0;
     for (std::size_t i = 0; i < mesh_.faces.size(); ++i) {
         const auto& face = mesh_.faces[i];
         if (face.boundary == BoundaryKind::SlipWall || face.boundary == BoundaryKind::NoSlipWall)
             wall_face_indices_.push_back(static_cast<int>(i));
         if (face.boundary != BoundaryKind::Interior) {
-            sx += face.area * face.nx;
-            sy += face.area * face.ny;
-            sz += face.area * face.nz;
-            total_area += face.area;
+            sx += static_cast<double>(face.area) * static_cast<double>(face.nx);
+            sy += static_cast<double>(face.area) * static_cast<double>(face.ny);
+            sz += static_cast<double>(face.area) * static_cast<double>(face.nz);
+            total_area += static_cast<double>(face.area);
         }
     }
 
-    Real closure_error = real_sqrt(sx*sx + sy*sy + sz*sz);
-    if (closure_error > Real(1e-4) * (total_area + Real(1e-30))) return false;
+    double closure_error = std::sqrt(sx * sx + sy * sy + sz * sz);
+    if (closure_error > 1e-4 * (total_area + 1e-30)) return false;
 
     return true;
 }
@@ -1014,6 +1014,16 @@ CfdSolveSummary CfdSolver::solve_from_state(
                 if (req.flag != RefinementFlag::Unchanged) { has_work = true; break; }
 
             if (has_work) {
+                // Anisotropic cascade: cells at or above anisotropic_layers use isotropic split
+                if (config.amr.anisotropic_layers > 0) {
+                    for (auto& req : requests) {
+                        if (req.flag == RefinementFlag::Refine &&
+                            req.dir != AnisotropicDir::NONE &&
+                            mesh_.cells[req.cell_id].refinement_level >= config.amr.anisotropic_layers) {
+                            req.dir = AnisotropicDir::NONE;
+                        }
+                    }
+                }
                 std::vector<RefinementRecord> new_records;
                 std::vector<CoarsenInfo> coarsen_info;
                 std::string err;

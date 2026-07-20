@@ -933,12 +933,12 @@ Files:
 
 Tasks:
 
-- [ ] HEX8 1→2 directional bisect along specified axis
-- [ ] TET4 1→4: split edges along dominant direction, keep other edges unchanged
-- [ ] PENTA6 1→2: bisect along prism height direction
-- [ ] BL sensor: adjacent to wall → `DIR_WALL_NORMAL` (from face normal / wall distance gradient)
-- [ ] Wake sensor: downstream of body → `DIR_STREAMWISE` (from local velocity unit vector)
-- [ ] Anisotropic → isotropic cascade: after `anisotropic_layers` of directional split, switch to regular isotropic 1→8
+- [x] HEX8 1→2 directional bisect along specified axis
+- [x] TET4 1→4: split edges along dominant direction, keep other edges unchanged
+- [x] PENTA6 1→2: bisect along prism height direction
+- [x] BL sensor: adjacent to wall → `DIR_WALL_NORMAL` (from face normal / wall distance gradient)
+- [x] Wake sensor: downstream of body → `DIR_STREAMWISE` (from local velocity unit vector)
+- [x] Anisotropic → isotropic cascade: after `anisotropic_layers` of directional split, switch to regular isotropic 1→8
 
 Tests:
 

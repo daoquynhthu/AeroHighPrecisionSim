@@ -16,9 +16,19 @@ enum class RefinementFlag : int8_t {
     Refine = 1
 };
 
+enum class AnisotropicDir : int8_t {
+    NONE = 0,
+    DIR_X,
+    DIR_Y,
+    DIR_Z,
+    WALL_NORMAL,
+    STREAMWISE
+};
+
 struct RefinementRequest {
     int cell_id = -1;
     RefinementFlag flag = RefinementFlag::Unchanged;
+    AnisotropicDir dir = AnisotropicDir::NONE;
 };
 
 struct RefinementRecord {
@@ -60,6 +70,7 @@ struct AmrConfig {
     Real tke_ratio_threshold = 0.05f;   // k / (0.5*U^2) threshold for TKE ratio sensor
     Real shear_layer_threshold = 0.3f;  // resolved_k/(resolved_k+modeled_k) threshold for shear-layer sensor
     WakeConeConfig wake_cone;           // wake refinement region (empty = disabled)
+    int anisotropic_layers = 0;         // levels of anisotropic split before switching to isotropic
 };
 
 struct CfdMesh;
