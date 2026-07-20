@@ -394,6 +394,100 @@ private:
 };
 
 // ---------------------------------------------------------------------------
+// Multi-body component decomposition (Union-Find over shared vertices)
+// ---------------------------------------------------------------------------
+struct ComponentSet {
+    std::vector<std::vector<Tri>> components;
+    std::vector<BVH> bvhs;
+    std::vector<AABB> boxes;
+    int n_components = 0;
+};
+
+static int64_t quantize_coord(Real v, Real inv_tol) {
+    return static_cast<int64_t>(std::floor(v * inv_tol + 0.5));
+}
+
+ComponentSet decompose_components(const std::vector<Tri>& tris, Real vert_tol) {
+    ComponentSet result;
+    if (tris.empty()) return result;
+
+    Real inv_tol = Real(1) / (vert_tol + Real(1e-30));
+    std::unordered_map<int64_t, int> vert_to_id;
+    std::vector<int> tri_verts;
+
+    auto get_vert_id = [&](const Vec3& v) {
+        int64_t key[3] = {
+            quantize_coord(v.x, inv_tol),
+            quantize_coord(v.y, inv_tol),
+            quantize_coord(v.z, inv_tol)
+        };
+        int64_t h = key[0] * 73856093 ^ key[1] * 19349663 ^ key[2] * 83492791;
+        auto it = vert_to_id.find(h);
+        if (it != vert_to_id.end()) return it->second;
+        int id = static_cast<int>(vert_to_id.size());
+        vert_to_id[h] = id;
+        return id;
+    };
+
+    tri_verts.reserve(tris.size() * 3);
+    for (const auto& tri : tris) {
+        tri_verts.push_back(get_vert_id(tri.v0));
+        tri_verts.push_back(get_vert_id(tri.v1));
+        tri_verts.push_back(get_vert_id(tri.v2));
+    }
+
+    int n_vert = static_cast<int>(vert_to_id.size());
+    std::vector<int> parent(n_vert);
+    for (int i = 0; i < n_vert; ++i) parent[i] = i;
+
+    auto uf_find = [&](int x) {
+        while (parent[x] != x) {
+            parent[x] = parent[parent[x]];
+            x = parent[x];
+        }
+        return x;
+    };
+    auto uf_union = [&](int a, int b) {
+        int ra = uf_find(a), rb = uf_find(b);
+        if (ra != rb) parent[rb] = ra;
+    };
+
+    for (size_t i = 0; i < tris.size(); ++i) {
+        int a = tri_verts[i * 3], b = tri_verts[i * 3 + 1], c = tri_verts[i * 3 + 2];
+        uf_union(a, b);
+        uf_union(b, c);
+    }
+
+    std::unordered_map<int, int> root_to_comp;
+    for (int i = 0; i < n_vert; ++i) {
+        int r = uf_find(i);
+        if (root_to_comp.find(r) == root_to_comp.end()) {
+            int cid = static_cast<int>(root_to_comp.size());
+            root_to_comp[r] = cid;
+        }
+    }
+
+    result.n_components = static_cast<int>(root_to_comp.size());
+    result.components.resize(result.n_components);
+
+    for (size_t i = 0; i < tris.size(); ++i) {
+        int cid = root_to_comp[uf_find(tri_verts[i * 3])];
+        result.components[cid].push_back(tris[i]);
+    }
+
+    result.bvhs.resize(result.n_components);
+    result.boxes.resize(result.n_components);
+    for (int i = 0; i < result.n_components; ++i) {
+        result.bvhs[i].build(result.components[i]);
+        result.boxes[i] = tri_aabb(result.components[i][0]);
+        for (size_t j = 1; j < result.components[i].size(); ++j)
+            result.boxes[i] = aabb_union(result.boxes[i], tri_aabb(result.components[i][j]));
+    }
+
+    return result;
+}
+
+// ---------------------------------------------------------------------------
 // STL parsing (binary and ASCII)
 // ---------------------------------------------------------------------------
 struct StlHeader {
@@ -1442,8 +1536,34 @@ bool generate_watertight_mesh_from_stl(
         return false;
     }
 
-    BVH bvh;
-    bvh.build(tris);
+    // Multi-body: decompose into components; single-body: build one BVH
+    ComponentSet comp;
+    BVH single_bvh;
+    const BVH* use_bvh = nullptr;
+    bool multi = cfg.multi_body;
+
+    if (multi) {
+        Real stl_scale = Real(0);
+        for (const auto& t : tris) {
+            stl_scale = std::max(stl_scale, std::fabs(t.v0.x));
+            stl_scale = std::max(stl_scale, std::fabs(t.v0.y));
+            stl_scale = std::max(stl_scale, std::fabs(t.v0.z));
+        }
+        Real vert_tol = std::max(stl_scale * Real(1e-8), Real(1e-12));
+        comp = decompose_components(tris, vert_tol);
+        std::fprintf(stderr, "Multi-body: %d components from %zu triangles\n",
+            comp.n_components, tris.size());
+        // For SDF grid, use first component's BVH (grid SDF only used for diagnostics)
+        if (comp.n_components > 0) {
+            use_bvh = &comp.bvhs[0];
+        } else {
+            if (error) *error = "Multi-body component decomposition failed";
+            return false;
+        }
+    } else {
+        single_bvh.build(tris);
+        use_bvh = &single_bvh;
+    }
 
     AABB stl_box = tri_aabb(tris[0]);
     for (size_t i = 1; i < tris.size(); ++i)
@@ -1494,7 +1614,23 @@ bool generate_watertight_mesh_from_stl(
     grid.dx = dx;
     grid.dy = dy;
     grid.dz = dz;
-    compute_sdf_grid(grid, bvh);
+    // Multi-body SDF: minimum signed distance across all components
+    if (multi) {
+        for (size_t idx = 0; idx < grid.sdf.size(); ++idx) {
+            int i = static_cast<int>(idx % (grid.nx + 1));
+            int j = static_cast<int>((idx / (grid.nx + 1)) % (grid.ny + 1));
+            int k = static_cast<int>(idx / ((grid.nx + 1) * (grid.ny + 1)));
+            Vec3 p = grid.grid_point(i, j, k);
+            Real s_min = comp.bvhs[0].signed_distance(p);
+            for (int ci = 1; ci < comp.n_components; ++ci) {
+                Real si = comp.bvhs[ci].signed_distance(p);
+                if (si < s_min) s_min = si;
+            }
+            grid.sdf[idx] = s_min;
+        }
+    } else {
+        compute_sdf_grid(grid, *use_bvh);
+    }
     {
         Real smin = std::numeric_limits<Real>::max();
         Real smax = -std::numeric_limits<Real>::max();
@@ -1505,9 +1641,10 @@ bool generate_watertight_mesh_from_stl(
         int n_neg = 0;
         for (Real v : grid.sdf) if (v < 0) ++n_neg;
         std::fprintf(stderr,
-            "Hex-cull SDF range [%g, %g] on %zu nodes (n_neg=%d)\n",
+            "Hex-cull SDF range [%g, %g] on %zu nodes (n_neg=%d)%s\n",
             static_cast<double>(smin), static_cast<double>(smax),
-            grid.sdf.size(), n_neg);
+            grid.sdf.size(), n_neg,
+            multi ? " (multi-body)" : "");
     }
 
     int n_body = 0;
@@ -1531,7 +1668,41 @@ bool generate_watertight_mesh_from_stl(
                     origin.y + (j + Real(0.5)) * dy,
                     origin.z + (k + Real(0.5)) * dz
                 };
-                Real s_cen = bvh.signed_distance(cen);
+                Real s_cen = use_bvh->signed_distance(cen);
+                if (multi) {
+                    // Check all components: inside if ANY component says inside
+                    for (int ci = 0; ci < comp.n_components; ++ci) {
+                        Real si = comp.bvhs[ci].signed_distance(cen);
+                        if (si < s_cen) s_cen = si;
+                    }
+                    // Gap resolution: if cell center is close to 2+ component surfaces,
+                    // force fluid to prevent cavity isolation between bodies.
+                    if (cfg.gap_cell_threshold > Real(0)) {
+                        int near_count = 0;
+                        for (int ci = 0; ci < comp.n_components; ++ci) {
+                            Real sd = comp.bvhs[ci].signed_distance(cen);
+                            if (sd < cfg.gap_cell_threshold && sd > -cfg.gap_cell_threshold)
+                                ++near_count;
+                        }
+                        // Inside 2+ components: overlapping bodies, treat as body
+                        int inside_count = 0;
+                        for (int ci = 0; ci < comp.n_components; ++ci) {
+                            if (comp.bvhs[ci].signed_distance(cen) < Real(0))
+                                ++inside_count;
+                        }
+                        if (inside_count >= 2) {
+                            ++n_body;
+                            continue;
+                        }
+                        // Near 2+ component surfaces without being inside any: gap region, force fluid
+                        if (near_count >= 2 && inside_count == 0) {
+                            // Force fluid: skip the body check below
+                            s_cen = Real(1);
+                            n_in = 0;
+                            s_corners = Real(1);
+                        }
+                    }
+                }
                 if (n_in >= 1 || s_corners < 0 || s_cen < 0) {
                     ++n_body;
                     continue;
@@ -1585,6 +1756,16 @@ bool generate_watertight_mesh_from_stl(
             std::fabs(fc.y - ymin) < box_eps || std::fabs(fc.y - ymax) < box_eps ||
             std::fabs(fc.z - zmin) < box_eps || std::fabs(fc.z - zmax) < box_eps;
         face.boundary = on_box ? BoundaryKind::Farfield : BoundaryKind::NoSlipWall;
+        // For multi-body: assign body_id based on closest component surface
+        if (multi && !on_box) {
+            Real best_dist = std::numeric_limits<Real>::max();
+            int best_ci = 0;
+            for (int ci = 0; ci < comp.n_components; ++ci) {
+                Real d = comp.bvhs[ci].closest_distance(fc);
+                if (d < best_dist) { best_dist = d; best_ci = ci; }
+            }
+            face.body_id = best_ci;
+        }
     }
     compute_mesh_metrics(mesh, false);
 

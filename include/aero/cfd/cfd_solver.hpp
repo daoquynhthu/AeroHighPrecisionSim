@@ -27,7 +27,8 @@ struct CfdSolveSummary {
 void integrate_wall_forces(const CfdMesh& mesh, const std::vector<int>& wall_face_indices,
     const std::vector<ConservativeState>& q, const FreestreamCondition& condition,
     const CfdConfig& config, CfdForceResult& result,
-    const std::vector<PrimitiveGradient>* grads = nullptr);
+    const std::vector<PrimitiveGradient>* grads = nullptr,
+    int body_id = -1);
 
 // CPU SST pipeline functions (used by CfdSolver and directly by tests)
 bool compute_sst_gradients_cpu(

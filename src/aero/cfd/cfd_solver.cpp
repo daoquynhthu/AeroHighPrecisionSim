@@ -337,7 +337,8 @@ ConservativeState add_scaled(ConservativeState q, EulerFlux f, Real scale) {
 void integrate_wall_forces(const CfdMesh& mesh, const std::vector<int>& wall_face_indices,
     const std::vector<ConservativeState>& q, const FreestreamCondition& condition,
     const CfdConfig& config, CfdForceResult& result,
-    const std::vector<PrimitiveGradient>* grads) {
+    const std::vector<PrimitiveGradient>* grads,
+    int body_id) {
     Real fx = 0.0f;
     Real fy = 0.0f;
     Real fz = 0.0f;
@@ -349,6 +350,7 @@ void integrate_wall_forces(const CfdMesh& mesh, const std::vector<int>& wall_fac
     for (int idx : wall_face_indices) {
         const auto& face = mesh.faces[idx];
         if (face.left_cell < 0 || static_cast<std::size_t>(face.left_cell) >= q.size()) continue;
+        if (body_id >= 0 && face.body_id != body_id) continue;
         PrimitiveState w;
         if (!conservative_to_primitive(q[face.left_cell], config.gamma, w)) continue;
 

@@ -1250,3 +1250,14 @@
 - Anisotropic cascade in cfd_solver.cpp: cells at or above `anisotropic_layers` have dir cleared → isotropic split.
 - Coarsening handles variable child counts (2/4/8) for anisotropic/isotropic records.
 - Regression: all 47 existing AMR tests PASS.
+
+2026-07-20 — Phase 9-C.3 multi-body STL mesh generation
+- Added `body_id` field to `CfdFace` for per-body wall face tagging.
+- Added `multi_body` and `gap_cell_threshold` to `StlMeshConfig`.
+- Added `decompose_components()`: Union-Find over quantized shared vertices, builds per-component triangle lists + BVHs.
+- Modified `generate_watertight_mesh_from_stl`: when `multi_body=true`, decomposes STL, computes per-component SDF min-grid, tests cell centers against all component BVHs (inside any = body).
+- Gap resolution: if cell center is near (within gap_cell_threshold) 2+ component surfaces without being inside any, force fluid to prevent cavity isolation.
+- Wall face `body_id` assigned by closest component surface distance.
+- Overlapping body check: if cell center is inside 2+ components, treat as body (overlap region).
+- `integrate_wall_forces` (cfd_solver): added `int body_id = -1` parameter (all bodies by default).
+- Regression: all existing STL/AMR tests PASS (44/45; CFD-MESH-COV3-1 pre-existing).

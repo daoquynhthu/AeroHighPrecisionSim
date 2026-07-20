@@ -969,11 +969,11 @@ Files:
 
 Tasks:
 
-- [ ] STL component decomposition: Union-Find over vertex-sharing triangles, build per-component triangle list + BVH
-- [ ] Multi-body SDF: each cell center tested against each component's BVH (unsigned closest + ray-cast sign); fluid = outside all
-- [ ] Per-component wall coloring: wall faces from component i → `boundary_body_id = i`
-- [ ] Per-body force integration: `integrate_wall_faces` accepts optional body_id filter; dashboard reports per-body CX/CY/CZ
-- [ ] Gap resolution: `StlMeshConfig::gap_cell_threshold = 0` — if >0, cells whose center is within gap of two components are forced fluid (prevent cavity isolation)
+- [x] STL component decomposition: Union-Find over vertex-sharing triangles, build per-component triangle list + BVH
+- [x] Multi-body SDF: each cell center tested against each component's BVH (unsigned closest + ray-cast sign); fluid = outside all
+- [x] Per-component wall coloring: wall faces from component i → `body_id = i`
+- [x] Per-body force integration: `integrate_wall_forces` accepts optional body_id filter; dashboard reports per-body CX/CY/CZ
+- [x] Gap resolution: `StlMeshConfig::gap_cell_threshold = 0` — if >0, cells whose center is within gap of two components are forced fluid (prevent cavity isolation)
 
 Tests:
 

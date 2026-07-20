@@ -45,6 +45,7 @@ struct CfdFace {
     int node_count = 3;
     int node[4] = {-1, -1, -1, -1};
     BoundaryKind boundary = BoundaryKind::Interior;
+    int body_id = 0;
     Real area = 0.0f;
     Real nx = 0.0f;
     Real ny = 0.0f;
