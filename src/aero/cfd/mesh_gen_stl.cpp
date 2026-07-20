@@ -11,6 +11,7 @@
 #include <cstring>
 #include <fstream>
 #include <limits>
+#include <map>
 #include <string>
 #include <tuple>
 #include <unordered_map>
@@ -493,25 +494,26 @@ static int64_t quantize_coord(Real v, Real inv_tol) {
     return static_cast<int64_t>(std::floor(v * inv_tol + 0.5));
 }
 
+using Key3 = std::array<int64_t, 3>;
+
 ComponentSet decompose_components(const std::vector<Tri>& tris, Real vert_tol) {
     ComponentSet result;
     if (tris.empty()) return result;
 
     Real inv_tol = Real(1) / (vert_tol + Real(1e-30));
-    std::unordered_map<int64_t, int> vert_to_id;
+    std::map<Key3, int> vert_to_id;
     std::vector<int> tri_verts;
 
     auto get_vert_id = [&](const Vec3& v) {
-        int64_t key[3] = {
+        Key3 key = {{
             quantize_coord(v.x, inv_tol),
             quantize_coord(v.y, inv_tol),
             quantize_coord(v.z, inv_tol)
-        };
-        int64_t h = key[0] * 73856093 ^ key[1] * 19349663 ^ key[2] * 83492791;
-        auto it = vert_to_id.find(h);
+        }};
+        auto it = vert_to_id.find(key);
         if (it != vert_to_id.end()) return it->second;
         int id = static_cast<int>(vert_to_id.size());
-        vert_to_id[h] = id;
+        vert_to_id[key] = id;
         return id;
     };
 

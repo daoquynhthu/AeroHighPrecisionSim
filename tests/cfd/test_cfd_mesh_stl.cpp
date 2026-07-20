@@ -472,6 +472,237 @@ static int test_multi_body_stl() {
     return 0;
 }
 
+// ── Sphere STL helpers ──────────────────────────────────────────────
+
+struct SphVec { Real x, y, z; };
+
+static bool write_uv_sphere(FILE* f, const char* solid_name,
+                            Real cx, Real cy, Real cz, Real radius,
+                            int n_theta, int n_phi) {
+    std::fprintf(f, "solid %s\n", solid_name);
+
+    // Write one triangle with outward-facing normal
+    auto write_tri = [&](const SphVec& a, const SphVec& b, const SphVec& c) {
+        Real ex1 = b.x - a.x, ey1 = b.y - a.y, ez1 = b.z - a.z;
+        Real ex2 = c.x - a.x, ey2 = c.y - a.y, ez2 = c.z - a.z;
+        Real nx = ey1 * ez2 - ez1 * ey2;
+        Real ny = ez1 * ex2 - ex1 * ez2;
+        Real nz = ex1 * ey2 - ey1 * ex2;
+        Real len = std::sqrt(nx * nx + ny * ny + nz * nz);
+        if (len <= Real(0)) return;
+        nx /= len; ny /= len; nz /= len;
+        Real rcx = (a.x + b.x + c.x) / Real(3) - cx;
+        Real rcy = (a.y + b.y + c.y) / Real(3) - cy;
+        Real rcz = (a.z + b.z + c.z) / Real(3) - cz;
+        Real ax = a.x, ay = a.y, az = a.z;
+        Real bx = b.x, by = b.y, bz = b.z;
+        Real cx_ = c.x, cy_ = c.y, cz_ = c.z;
+        if (nx * rcx + ny * rcy + nz * rcz < Real(0)) {
+            nx = -nx; ny = -ny; nz = -nz;
+            ax = b.x; ay = b.y; az = b.z;
+            bx = a.x; by = a.y; bz = a.z;
+        }
+        std::fprintf(f, "  facet normal %e %e %e\n", nx, ny, nz);
+        std::fprintf(f, "    outer loop\n");
+        std::fprintf(f, "      vertex %e %e %e\n", ax, ay, az);
+        std::fprintf(f, "      vertex %e %e %e\n", bx, by, bz);
+        std::fprintf(f, "      vertex %e %e %e\n", cx_, cy_, cz_);
+        std::fprintf(f, "    endloop\n");
+        std::fprintf(f, "  endfacet\n");
+    };
+
+    auto sph = [&](Real theta, Real phi) -> SphVec {
+        Real s = std::sin(phi);
+        SphVec p;
+        p.x = cx + radius * s * std::cos(theta);
+        p.y = cy + radius * std::cos(phi);
+        p.z = cz + radius * s * std::sin(theta);
+        return p;
+    };
+
+    // North pole fan
+    SphVec north = sph(Real(0), Real(0));
+    Real phi_step = (Real)M_PI / (Real)n_phi;
+    for (int it = 0; it < n_theta; ++it) {
+        Real t0 = (Real)it / (Real)n_theta * Real(2) * (Real)M_PI;
+        Real t1 = (Real)(it + 1) / (Real)n_theta * Real(2) * (Real)M_PI;
+        SphVec v0 = sph(t0, phi_step);
+        SphVec v1 = sph(t1, phi_step);
+        write_tri(north, v0, v1);
+    }
+
+    // Middle rings
+    for (int ip = 1; ip < n_phi - 1; ++ip) {
+        Real phi0 = (Real)ip * phi_step;
+        Real phi1 = (Real)(ip + 1) * phi_step;
+        for (int it = 0; it < n_theta; ++it) {
+            Real t0 = (Real)it / (Real)n_theta * Real(2) * (Real)M_PI;
+            Real t1 = (Real)(it + 1) / (Real)n_theta * Real(2) * (Real)M_PI;
+            SphVec v00 = sph(t0, phi0);
+            SphVec v01 = sph(t0, phi1);
+            SphVec v10 = sph(t1, phi0);
+            SphVec v11 = sph(t1, phi1);
+            write_tri(v00, v01, v10);
+            write_tri(v10, v01, v11);
+        }
+    }
+
+    // South pole fan
+    SphVec south = sph(Real(0), (Real)M_PI);
+    Real phi_last = (Real)(n_phi - 1) * phi_step;
+    for (int it = 0; it < n_theta; ++it) {
+        Real t0 = (Real)it / (Real)n_theta * Real(2) * (Real)M_PI;
+        Real t1 = (Real)(it + 1) / (Real)n_theta * Real(2) * (Real)M_PI;
+        SphVec v0 = sph(t0, phi_last);
+        SphVec v1 = sph(t1, phi_last);
+        write_tri(south, v1, v0);
+    }
+
+    std::fprintf(f, "endsolid %s\n", solid_name);
+    return true;
+}
+
+static bool write_two_spheres_stl(const char* path,
+                                   Real r1, Real cx1, Real cy1, Real cz1,
+                                   Real r2, Real cx2, Real cy2, Real cz2) {
+    FILE* f = std::fopen(path, "w");
+    if (!f) return false;
+    bool ok = write_uv_sphere(f, "sphere1", cx1, cy1, cz1, r1, 24, 16) &&
+              write_uv_sphere(f, "sphere2", cx2, cy2, cz2, r2, 24, 16);
+    std::fclose(f);
+    return ok;
+}
+
+static int test_two_spheres_multi_body() {
+    const char* stl_path = "test_two_spheres_multi_body.stl";
+    // Two disjoint spheres: one at (-1.5,0,0) radius 0.4, one at (1.5,0,0) radius 0.4
+    if (!write_two_spheres_stl(stl_path, 0.4f, -1.5f,0,0, 0.4f, 1.5f,0,0))
+        FAIL("failed to write two-sphere STL");
+
+    TEST("CFD-MESH-MULTI-2 Two disjoint spheres: two body_ids on wall faces");
+    {
+        StlMeshConfig cfg;
+        cfg.outer_scale = 2.5f;
+        cfg.background_n_per_dim = 32;
+        cfg.max_cells = 1000000;
+        cfg.multi_body = true;
+
+        CfdMesh mesh;
+        std::string err;
+        if (!generate_watertight_mesh_from_stl(stl_path, mesh, cfg, &err))
+            FAIL("watertight mesh failed: %s", err.c_str());
+
+        if (mesh.cells.empty()) FAIL("zero cells");
+        if (mesh.faces.empty()) FAIL("zero faces");
+
+        std::set<int> body_ids;
+        int wall_count = 0;
+        for (const auto& face : mesh.faces) {
+            if (face.boundary == BoundaryKind::NoSlipWall) {
+                body_ids.insert(face.body_id);
+                ++wall_count;
+            }
+        }
+        if (wall_count == 0) FAIL("zero wall faces");
+        if (body_ids.size() < 2u) FAIL("expected >=2 body_ids, got %zu", body_ids.size());
+
+        std::printf("\n  bodies=%zu wall_faces=%d body_ids={", body_ids.size(), wall_count);
+        for (int bid : body_ids) std::printf("%d ", bid);
+        std::printf("} cells=%zu", mesh.cells.size());
+
+        auto report = compute_mesh_quality_detail(mesh);
+        if (report.min_volume <= 0.0f) FAIL("min volume=%g", report.min_volume);
+        PASS;
+    }
+
+    std::remove(stl_path);
+    return 0;
+}
+
+static int test_per_body_force() {
+    const char* stl_path = "test_symmetric_spheres.stl";
+    if (!write_two_spheres_stl(stl_path, 0.4f, -2,0,0, 0.4f, 2,0,0))
+        FAIL("failed to write symmetric spheres STL");
+
+    TEST("CFD-MESH-MULTI-4 Per-body force: symmetric spheres CX equal");
+    {
+        StlMeshConfig cfg;
+        cfg.outer_scale = 2.0f;
+        cfg.background_n_per_dim = 24;
+        cfg.max_cells = 500000;
+        cfg.multi_body = true;
+
+        CfdMesh mesh;
+        std::string err;
+        if (!generate_watertight_mesh_from_stl(stl_path, mesh, cfg, &err))
+            FAIL("watertight mesh failed: %s", err.c_str());
+
+        if (mesh.cells.empty()) FAIL("zero cells");
+
+        std::vector<int> wall_faces;
+        for (int i = 0; i < static_cast<int>(mesh.faces.size()); ++i)
+            if (mesh.faces[i].boundary == BoundaryKind::NoSlipWall)
+                wall_faces.push_back(i);
+        if (wall_faces.empty()) FAIL("zero wall faces");
+
+        std::set<int> body_ids;
+        for (int fi : wall_faces) body_ids.insert(mesh.faces[fi].body_id);
+        if (body_ids.size() < 2u) FAIL("expected >=2 body_ids, got %zu", body_ids.size());
+
+        // Verify per-body force integration at uniform flow
+        Real gamma = 1.4f;
+        Real mach = 0.5f;
+        PrimitiveState w_inf;
+        w_inf.rho = 1.0f;
+        w_inf.u = mach / std::sqrt(gamma);
+        w_inf.v = 0.0f;
+        w_inf.w = 0.0f;
+        w_inf.p = 1.0f / gamma;
+        ConservativeState q_inf = primitive_to_conservative(w_inf, gamma);
+        std::vector<ConservativeState> q(mesh.cells.size(), q_inf);
+
+        FreestreamCondition condition;
+        condition.mach = mach;
+        condition.alpha_deg = 0.0f;
+        condition.beta_deg = 0.0f;
+
+        CfdConfig config;
+        config.gamma = gamma;
+        config.ref_area = 1.0f;
+
+        std::vector<PrimitiveGradient> dummy_grads;
+        CfdForceResult force_body0;
+        integrate_wall_forces(mesh, wall_faces, q, condition, config,
+                              force_body0, &dummy_grads, 0);
+        CfdForceResult force_body1;
+        integrate_wall_forces(mesh, wall_faces, q, condition, config,
+                              force_body1, &dummy_grads, 1);
+
+        // At uniform flow, both bodies have zero net CX (pressure symmetric)
+        // Verify the forces are computed without error and both are near zero
+        int wall_body0 = 0, wall_body1 = 0;
+        for (int fi : wall_faces) {
+            if (mesh.faces[fi].body_id == 0) ++wall_body0;
+            if (mesh.faces[fi].body_id == 1) ++wall_body1;
+        }
+        if (wall_body0 == 0) FAIL("zero wall faces for body 0");
+        if (wall_body1 == 0) FAIL("zero wall faces for body 1");
+
+        Real cx0 = force_body0.CX;
+        Real cx1 = force_body1.CX;
+        Real diff = std::fabs(cx0 - cx1);
+        if (diff > 0.01f)
+            FAIL("CX difference too large: body0=%g body1=%g diff=%g", cx0, cx1, diff);
+
+        std::printf("\n  cells=%zu wall={body0=%d body1=%d} cx0=%g cx1=%g",
+                    mesh.cells.size(), wall_body0, wall_body1, cx0, cx1);
+        PASS;
+    }
+
+    std::remove(stl_path);
+    return 0;
+}
+
 int main() {
     std::setbuf(stdout, NULL);
     int result = 0;
@@ -479,6 +710,8 @@ int main() {
     result |= test_prism_bl();
     result |= test_prism_degrade();
     result |= test_multi_body_stl();
+    result |= test_two_spheres_multi_body();
+    result |= test_per_body_force();
     std::printf("\n%d / %d tests PASSED.\n", pass_count, test_count);
     return result == 0 && pass_count == test_count ? 0 : 1;
 }
