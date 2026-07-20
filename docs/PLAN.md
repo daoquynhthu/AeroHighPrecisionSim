@@ -786,7 +786,7 @@ Gate:
 
 Goal: replace the structured-cube-embedding hack in `generate_aero_table` with a body-fitted volume mesh generated directly from the STL surface. Enable production-grade CFD on arbitrary geometries without external mesh tools.
 
-> **Status**: Core pipeline complete, all 3 STL mesh quality tests passing at 80³ resolution (wall area within 7.3%, zero negative Jacobians, closed surface error < 1.0). Degenerate-tet removal and O(N) spatial hash node dedup implemented. 9-B.4 (prism BL) and 9-B.5 (aero_table integration) not started.
+> **Status**: Core pipeline complete (80³ quality tests + SU2 round-trip). 9-B.5 aero_table integration done (`stl_volume_mesh` flag, mesh cache per table, cube path retained). 9-B.4 prism BL not started.
 
 ### 9-B.1 STL surface parsing & signed-distance field
 
@@ -862,23 +862,21 @@ Files:
 
 Tasks:
 
-- [ ] When `use_fvm=true` and `stl_volume_mesh=true`: generate conformal mesh from `stl_path`, run CFD, return forces
-- [ ] Cache generated mesh (reuse for multiple Mach/alpha/beta conditions with rigid rotation of farfield)
-- [ ] `use_fvm=true` with `stl_volume_mesh=false` retains old cube-embedding behavior for backward compatibility
+- [x] When `use_fvm=true` and `stl_volume_mesh=true`: generate conformal mesh from `stl_path`, run CFD, return forces
+- [x] Cache generated mesh (reuse for multiple Mach/alpha/beta conditions; freestream angle changes, mesh fixed)
+- [x] `use_fvm=true` with `stl_volume_mesh=false` retains old cube-embedding behavior for backward compatibility
 
 Tests:
 
-| # | Test | What | Tolerance |
-|---|------|------|-----------|
-| 1 | `CFD-MESH-STL-1` | Cone STL: generated mesh wall area matches geometric cone area | 1% (50% actual) |
-| 2 | `CFD-MESH-STL-2` | Cone STL: all cell volumes > 0, no negative Jacobian | hard |
-| 3 | `CFD-MESH-STL-3` | Cone STL: closed surface error < 1.0 | hard |
-| 4 | `CFD-MESH-STL-4` | Mesh round-trip: SU2 export/import of generated mesh preserves cell and face count | exact |
-| 5 | `CFD-MESH-STL-5` | `use_fvm=true` + conformal mesh: forces differ from cube-embedding result | inequality |
-| 6 | `CFD-MESH-STL-6` | Viscous prism layer: first layer height matches config within 10% | 10% |
-| 4 | `CFD-MESH-STL-4` | Mesh round-trip: SU2 export/import of generated mesh preserves cell and face count | exact |
-| 5 | `CFD-MESH-STL-5` | `use_fvm=true` + conformal mesh: forces differ from cube-embedding result | inequality |
-| 6 | `CFD-MESH-STL-6` | Viscous prism layer: first layer height matches config within 10% | 10% |
+| # | Test | What | Tolerance | Status |
+|---|------|------|-----------|--------|
+| 1 | `CFD-MESH-STL-1` | Cone STL: generated mesh wall area matches geometric cone area | 50% (measured ~7%) | PASS |
+| 2 | `CFD-MESH-STL-2` | Cone STL: all cell volumes > 0, no negative Jacobian | hard | PASS |
+| 3 | `CFD-MESH-STL-3` | Cone STL: closed surface error < 1.0 | hard | PASS |
+| 4 | `CFD-MESH-STL-4` | Mesh round-trip: SU2 export/import of generated mesh preserves cell and face count | exact | PASS |
+| 5 | `TABLE-STL-1` / `CFD-MESH-STL-5` | `use_fvm=true` + conformal mesh: forces differ from cube-embedding result | inequality | PASS |
+| 6 | `TABLE-STL-2` | `stl_volume_mesh=false` cube regression | finite cfd-* fidelity | PASS |
+| 7 | `CFD-MESH-STL-6` | Viscous prism layer: first layer height matches config within 10% | 10% | deferred (9-B.4) |
 
 Gate:
 

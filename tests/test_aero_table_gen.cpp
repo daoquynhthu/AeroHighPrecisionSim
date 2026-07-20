@@ -31,6 +31,10 @@ static int pass_count = 0;
 
 #define PASS do { ++pass_count; } while(0)
 
+static bool is_cfd_fidelity(const std::string& f) {
+    return f == "cfd-gpu" || f == "cfd-cpu";
+}
+
 // RAII temp file guard
 struct TempFile {
     std::string path;
@@ -96,7 +100,8 @@ static int test_cfd_gpu_table_in_range() {
     cfg.ref_span   = 3.0f;
     cfg.com_x      = 6.0f;
     cfg.use_fvm    = true;
-    cfg.mesh_subdivisions = 125;  // rapid: n=5, ~320 tets
+    cfg.mesh_outer_scale = 3.0f;
+    cfg.mesh_subdivisions = 1000;
 
     std::vector<double> mach   = {2.0, 4.0, 6.0};
     std::vector<double> alpha  = {0.0, 5.0, 10.0};
@@ -116,8 +121,8 @@ static int test_cfd_gpu_table_in_range() {
 
     for (size_t i = 0; i < rows.size(); ++i) {
         auto& r = rows[i];
-        if (r.fidelity != "cfd-gpu")
-            FAIL("row %zu: fidelity='%s' expected 'cfd-gpu'", i, r.fidelity.c_str());
+        if (!is_cfd_fidelity(r.fidelity))
+            FAIL("row %zu: fidelity='%s' expected cfd-gpu|cfd-cpu", i, r.fidelity.c_str());
         if (!std::isfinite(r.CX) || !std::isfinite(r.CY) || !std::isfinite(r.CZ) ||
             !std::isfinite(r.CL) || !std::isfinite(r.CD) ||
             !std::isfinite(r.Cl) || !std::isfinite(r.Cm) || !std::isfinite(r.Cn))
@@ -243,7 +248,8 @@ static int test_cfd_differs_from_newtonian() {
     cfg.ref_length = 12.0f;
     cfg.ref_span   = 3.0f;
     cfg.com_x      = 6.0f;
-    cfg.mesh_subdivisions = 125;
+    cfg.mesh_outer_scale = 3.0f;
+    cfg.mesh_subdivisions = 1000;
 
     std::vector<double> mach   = {4.0};
     std::vector<double> alpha  = {10.0};  // non-zero alpha for larger difference
@@ -296,7 +302,8 @@ static int test_cfd_gpu_single_beta() {
     cfg.ref_span   = 3.0f;
     cfg.com_x      = 6.0f;
     cfg.use_fvm    = true;
-    cfg.mesh_subdivisions = 125;
+    cfg.mesh_outer_scale = 3.0f;
+    cfg.mesh_subdivisions = 1000;
 
     std::vector<double> mach   = {3.0, 5.0};
     std::vector<double> alpha  = {2.0};
@@ -315,13 +322,13 @@ static int test_cfd_gpu_single_beta() {
         FAIL("expected 2 rows, got %zu", rows.size());
 
     for (size_t i = 0; i < rows.size(); ++i) {
-        if (rows[i].fidelity != "cfd-gpu")
-            FAIL("row %zu: fidelity='%s' expected 'cfd-gpu'", i, rows[i].fidelity.c_str());
+        if (!is_cfd_fidelity(rows[i].fidelity))
+            FAIL("row %zu: fidelity='%s' expected cfd-gpu|cfd-cpu", i, rows[i].fidelity.c_str());
         if (std::abs(rows[i].CY) > 1e-2)
             FAIL("row %zu: beta=0 symmetry CY=%g > 1e-2", i, rows[i].CY);
     }
 
-    std::cout << "PASS: " << rows.size() << " rows, fidelity=cfd-gpu\n";
+    std::cout << "PASS: " << rows.size() << " rows, fidelity=" << rows[0].fidelity << "\n";
     PASS;
     return 0;
 }
@@ -337,7 +344,8 @@ static int test_cfd_gpu_nonzero_beta() {
     cfg.ref_span   = 3.0f;
     cfg.com_x      = 6.0f;
     cfg.use_fvm    = true;
-    cfg.mesh_subdivisions = 125;
+    cfg.mesh_outer_scale = 3.0f;
+    cfg.mesh_subdivisions = 1000;
 
     std::vector<double> mach   = {3.0};
     std::vector<double> alpha  = {0.0, 5.0};
@@ -358,12 +366,10 @@ static int test_cfd_gpu_nonzero_beta() {
 
     for (size_t i = 0; i < rows.size(); ++i) {
         auto& r = rows[i];
-        if (r.fidelity != "cfd-gpu")
-            FAIL("row %zu: fidelity='%s' expected 'cfd-gpu'", i, r.fidelity.c_str());
+        if (!is_cfd_fidelity(r.fidelity))
+            FAIL("row %zu: fidelity='%s' expected cfd-gpu|cfd-cpu", i, r.fidelity.c_str());
         if (!std::isfinite(r.CX))
             FAIL("row %zu: CX=%g not finite", i, r.CX);
-        // beta symmetry: row pairs (beta=-5 vs beta=+5) at same alpha
-        // For now, just verify finite forces for all rows
     }
 
     // Check beta symmetry: rows i (beta=-5) and i+2 (beta=+5) should have near-opposite CY
@@ -414,6 +420,140 @@ static int test_cfd_gpu_empty_input() {
     return 0;
 }
 
+// Write a closed solid cone STL for watertight hex-cull (ray-cast SDF needs
+// a closed surface; some production STLs are open shells).
+static bool write_test_cone_stl(const char* path, double radius, double height, int n_seg) {
+    FILE* f = std::fopen(path, "w");
+    if (!f) return false;
+    std::fprintf(f, "solid cone\n");
+    double half_h = height * 0.5;
+    for (int i = 0; i < n_seg; ++i) {
+        double a0 = 2.0 * 3.14159265358979323846 * i / n_seg;
+        double a1 = 2.0 * 3.14159265358979323846 * (i + 1) / n_seg;
+        double x0 = radius * std::cos(a0), z0 = radius * std::sin(a0);
+        double x1 = radius * std::cos(a1), z1 = radius * std::sin(a1);
+        std::fprintf(f, "  facet normal 0 0 0\n    outer loop\n");
+        std::fprintf(f, "      vertex 0 %g 0\n", half_h);
+        std::fprintf(f, "      vertex %g %g %g\n", x0, -half_h, z0);
+        std::fprintf(f, "      vertex %g %g %g\n", x1, -half_h, z1);
+        std::fprintf(f, "    endloop\n  endfacet\n");
+        std::fprintf(f, "  facet normal 0 -1 0\n    outer loop\n");
+        std::fprintf(f, "      vertex 0 %g 0\n", -half_h);
+        std::fprintf(f, "      vertex %g %g %g\n", x1, -half_h, z1);
+        std::fprintf(f, "      vertex %g %g %g\n", x0, -half_h, z0);
+        std::fprintf(f, "    endloop\n  endfacet\n");
+    }
+    std::fprintf(f, "endsolid cone\n");
+    std::fclose(f);
+    return true;
+}
+
+// ─── Test: STL volume mesh forces differ from cube embedding ─────────────
+static int test_stl_volume_mesh_differs_from_cube() {
+    TEST("TABLE-STL-1 use_fvm + stl_volume_mesh forces differ from cube-embedding");
+
+    const char* stl_path = "test_table_cone.stl";
+    if (!write_test_cone_stl(stl_path, 0.5, 1.0, 64))
+        FAIL("failed to write cone STL");
+
+    std::vector<double> mach  = {3.0};
+    std::vector<double> alpha = {5.0};
+    std::vector<double> beta  = {0.0};
+
+    AeroTableConfig cfg;
+    cfg.ref_area   = 1.0f;
+    cfg.ref_length = 1.0f;
+    cfg.ref_span   = 1.0f;
+    cfg.com_x      = 0.0f;
+    cfg.use_fvm    = true;
+    cfg.mesh_subdivisions = 1000;
+    cfg.mesh_outer_scale  = 3.0f;
+
+    TempFile cube_csv("test_table_cube_embed.csv");
+    cfg.stl_volume_mesh = false;
+    if (!generate_aero_table(stl_path, cube_csv.path, mach, alpha, beta, cfg)) {
+        std::remove(stl_path);
+        FAIL("cube-embedding table generation failed");
+    }
+
+    TempFile stl_csv("test_table_stl_volume.csv");
+    cfg.stl_volume_mesh = true;
+    cfg.mesh_outer_scale = 3.0f;
+    cfg.stl_background_n_per_dim = 24;
+    cfg.stl_max_cells = 500000;
+    if (!generate_aero_table(stl_path, stl_csv.path, mach, alpha, beta, cfg)) {
+        std::remove(stl_path);
+        FAIL("watertight STL table generation failed");
+    }
+    std::remove(stl_path);
+
+    std::vector<CsvRow> cube_rows, stl_rows;
+    std::string err;
+    if (!read_csv(cube_csv.path, cube_rows, true, &err))
+        FAIL("read cube CSV: %s", err.c_str());
+    if (!read_csv(stl_csv.path, stl_rows, true, &err))
+        FAIL("read STL CSV: %s", err.c_str());
+    if (cube_rows.size() != 1 || stl_rows.size() != 1)
+        FAIL("expected 1 row each, got cube=%zu stl=%zu",
+             cube_rows.size(), stl_rows.size());
+
+    if (!is_cfd_fidelity(cube_rows[0].fidelity) || !is_cfd_fidelity(stl_rows[0].fidelity))
+        FAIL("fidelity expected cfd-*, got cube='%s' stl='%s'",
+             cube_rows[0].fidelity.c_str(), stl_rows[0].fidelity.c_str());
+
+    if (!std::isfinite(stl_rows[0].CX) || !std::isfinite(stl_rows[0].CD))
+        FAIL("STL conformal forces non-finite: CX=%g CD=%g",
+             stl_rows[0].CX, stl_rows[0].CD);
+
+    double d_cx = std::abs(cube_rows[0].CX - stl_rows[0].CX);
+    double d_cd = std::abs(cube_rows[0].CD - stl_rows[0].CD);
+    double scale = 1.0 + std::max({std::abs(cube_rows[0].CX), std::abs(stl_rows[0].CX),
+                                   std::abs(cube_rows[0].CD), std::abs(stl_rows[0].CD)});
+    if (d_cx / scale < 1e-4 && d_cd / scale < 1e-4)
+        FAIL("conformal and cube forces too similar: cube CX=%g CD=%g stl CX=%g CD=%g",
+             cube_rows[0].CX, cube_rows[0].CD, stl_rows[0].CX, stl_rows[0].CD);
+
+    std::cout << "PASS: cube CX=" << cube_rows[0].CX << " CD=" << cube_rows[0].CD
+              << " | stl CX=" << stl_rows[0].CX << " CD=" << stl_rows[0].CD << "\n";
+    PASS;
+    return 0;
+}
+
+// ─── Test: stl_volume_mesh=false keeps cube path (regression) ────────────
+static int test_stl_volume_mesh_false_regression() {
+    TEST("TABLE-STL-2 stl_volume_mesh=false retains cube-embedding path");
+    TempFile csv("test_table_stl_flag_off.csv");
+
+    AeroTableConfig cfg;
+    cfg.ref_area   = 1.131f;
+    cfg.ref_length = 12.0f;
+    cfg.ref_span   = 3.0f;
+    cfg.com_x      = 6.0f;
+    cfg.use_fvm    = true;
+    cfg.stl_volume_mesh = false;
+    cfg.mesh_outer_scale = 3.0f;
+    cfg.mesh_subdivisions = 1000;
+
+    if (!generate_aero_table("data/missile/hgv_model_optimized.stl",
+            csv.path, {2.0}, {0.0}, {0.0}, cfg))
+        FAIL("cube path with stl_volume_mesh=false failed");
+
+    std::vector<CsvRow> rows;
+    std::string err;
+    if (!read_csv(csv.path, rows, true, &err))
+        FAIL("read_csv: %s", err.c_str());
+    if (rows.size() != 1)
+        FAIL("expected 1 row, got %zu", rows.size());
+    if (!is_cfd_fidelity(rows[0].fidelity))
+        FAIL("fidelity='%s' expected cfd-gpu|cfd-cpu", rows[0].fidelity.c_str());
+    if (!std::isfinite(rows[0].CX))
+        FAIL("CX not finite");
+
+    std::cout << "PASS: cube-embedding regression OK fidelity=" << rows[0].fidelity << "\n";
+    PASS;
+    return 0;
+}
+
 int main() {
     int failures = 0;
     failures += test_cfd_gpu_table_in_range();
@@ -423,6 +563,8 @@ int main() {
     failures += test_cfd_gpu_single_beta();
     failures += test_cfd_gpu_nonzero_beta();
     failures += test_cfd_gpu_empty_input();
+    failures += test_stl_volume_mesh_differs_from_cube();
+    failures += test_stl_volume_mesh_false_regression();
 
     std::cout << "\n[" << pass_count << "/" << test_count << " tests passed]\n";
     if (failures) {

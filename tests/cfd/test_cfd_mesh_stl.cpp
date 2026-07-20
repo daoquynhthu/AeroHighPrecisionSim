@@ -103,8 +103,6 @@ static int test_cone_stl_mesh() {
         Real expected = (Real)M_PI * radius * (radius + L);
         Real rel_err = std::fabs(wall_area - expected) / expected;
 
-
-
         if (rel_err > 0.5f) FAIL("wall area=%g expected=%g rel_err=%g", wall_area, expected, rel_err);
 
         std::printf("\n  cells=%d faces=%d wall_faces=%d farfield_faces=%d",
@@ -132,6 +130,33 @@ static int test_cone_stl_mesh() {
         if (!report.valid) FAIL("mesh invalid: %s", report.message.c_str());
         if (report.closed_surface_error > 1.0f)
             FAIL("closed_surface_error=%g", report.closed_surface_error);
+        PASS;
+    }
+
+    // CFD-MESH-STL-4: SU2 export/import preserves cell and face counts
+    TEST("CFD-MESH-STL-4 SU2 round-trip preserves cell/face counts");
+    {
+        const char* su2_path = "test_cone_stl_roundtrip.su2";
+        std::string err;
+        if (!write_mesh_su2(mesh, su2_path, &err))
+            FAIL("write_mesh_su2 failed: %s", err.c_str());
+
+        CfdMesh reloaded;
+        if (!read_mesh_su2(su2_path, reloaded, &err)) {
+            std::remove(su2_path);
+            FAIL("read_mesh_su2 failed: %s", err.c_str());
+        }
+        std::remove(su2_path);
+
+        if (static_cast<int>(reloaded.cells.size()) != static_cast<int>(mesh.cells.size()))
+            FAIL("cell count mismatch: orig=%zu reloaded=%zu",
+                mesh.cells.size(), reloaded.cells.size());
+        if (static_cast<int>(reloaded.faces.size()) != static_cast<int>(mesh.faces.size()))
+            FAIL("face count mismatch: orig=%zu reloaded=%zu",
+                mesh.faces.size(), reloaded.faces.size());
+        if (static_cast<int>(reloaded.nodes.size()) != static_cast<int>(mesh.nodes.size()))
+            FAIL("node count mismatch: orig=%zu reloaded=%zu",
+                mesh.nodes.size(), reloaded.nodes.size());
         PASS;
     }
 

@@ -24,12 +24,12 @@ add_cpu_executable(TestCfdRans cfd/test_cfd_rans.cpp)
 add_cpu_executable(TestMms cfd/test_mms.cpp)
 
 # These test targets need symbols from .cu files (GPU-only implementations).
-# Skip them in CPU-only builds.
+# Skip them in CPU-only builds. Link missile_lib for AeroSolver / GPU CFD.
 if(AEROSIM_USE_CUDA)
-    add_cpu_executable(TestAero test_aero.cpp)
-    add_cpu_executable(TestGuidance test_guidance.cpp)
-    add_cpu_executable(TestLaunch test_launch.cpp)
-    add_cpu_executable(TestAeroTableGen test_aero_table_gen.cpp)
+    add_cuda_executable(TestAero test_aero.cpp)
+    add_cuda_executable(TestGuidance test_guidance.cpp)
+    add_cuda_executable(TestLaunch test_launch.cpp)
+    add_cuda_executable(TestAeroTableGen test_aero_table_gen.cpp)
     add_cpu_executable(TestCompareAtm compare_atm.cpp)
 endif()
 

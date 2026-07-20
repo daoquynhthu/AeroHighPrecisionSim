@@ -336,11 +336,16 @@ static int test_edge_case_meshes() {
     return 0;
 }
 
-static int test_tet_mesh_solver() {
-    TEST("CFD-EULER-12 tet-only mesh (structured cube) solver produces finite forces");
+static int test_cube_mesh_solver() {
+    TEST("CFD-EULER-12 structured cube mesh solver produces finite forces");
     {
         CfdMesh mesh = generate_structured_cube_mesh(5.0f, 7);
         compute_mesh_metrics(mesh);
+        if (mesh.cells.empty()) FAIL("empty mesh");
+        for (const auto& c : mesh.cells) {
+            if (c.type != ElementType::HEX8)
+                FAIL("expected HEX8 cube embedding, got type=%d", static_cast<int>(c.type));
+        }
         FreestreamCondition cond;
         cond.mach = 2.0f; cond.alpha_deg = 0.0f; cond.beta_deg = 0.0f;
         CfdConfig cfg;
@@ -358,6 +363,8 @@ static int test_tet_mesh_solver() {
         }
         for (auto f : {summary.forces.CX, summary.forces.CY, summary.forces.CZ})
             if (!std::isfinite(f) || std::fabs(f) > 1e6f) FAIL("non-finite force component");
+        if (std::fabs(summary.forces.CY) > 1e-2f || std::fabs(summary.forces.CZ) > 1e-2f)
+            FAIL("beta=0 lateral force CY=%g CZ=%g", summary.forces.CY, summary.forces.CZ);
         PASS;
     }
     return 0;
@@ -373,7 +380,7 @@ int main() {
     result |= test_amr_solver_loop();
     result |= test_euler_residual_cpu_uniform();
     result |= test_edge_case_meshes();
-    result |= test_tet_mesh_solver();
+    result |= test_cube_mesh_solver();
     std::printf("\n%d / %d tests PASSED.\n", pass_count, test_count);
     return result == 0 && pass_count == test_count ? 0 : 1;
 }

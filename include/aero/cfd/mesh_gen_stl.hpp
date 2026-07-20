@@ -46,6 +46,15 @@ bool generate_conformal_mesh_from_stl(
     const StlMeshConfig& cfg,
     std::string* error = nullptr);
 
+// Watertight hex-cull mesh for solver production path (Phase 9-B.5).
+// Removes background hex cells whose centers lie inside the STL (SDF < 0).
+// No cut-cell clipping — closed surface matches CfdSolver::load_mesh (1e-4).
+bool generate_watertight_mesh_from_stl(
+    const std::string& stl_path,
+    CfdMesh& mesh,
+    const StlMeshConfig& cfg,
+    std::string* error = nullptr);
+
 } // namespace cfd
 } // namespace aero
 } // namespace aerosp

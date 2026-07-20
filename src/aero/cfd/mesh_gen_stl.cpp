@@ -12,6 +12,7 @@
 #include <fstream>
 #include <limits>
 #include <string>
+#include <tuple>
 #include <unordered_map>
 #include <vector>
 
@@ -999,22 +1000,34 @@ bool generate_conformal_mesh_from_stl(
                  static_cast<int64_t>(std::llround(p.z / eps)) };
     };
 
-    std::unordered_map<uint64_t, int> node_map;
+    using QuantKey = std::tuple<int64_t, int64_t, int64_t>;
+    struct QuantKeyHash {
+        std::size_t operator()(const QuantKey& k) const noexcept {
+            // Splitmix64-style mixing; equality is on the full tuple (no collisions).
+            auto mix = [](uint64_t x) {
+                x += 0x9e3779b97f4a7c15ULL;
+                x = (x ^ (x >> 30)) * 0xbf58476d1ce4e5b9ULL;
+                x = (x ^ (x >> 27)) * 0x94d049bb133111ebULL;
+                return x ^ (x >> 31);
+            };
+            uint64_t h = mix(static_cast<uint64_t>(std::get<0>(k)));
+            h ^= mix(static_cast<uint64_t>(std::get<1>(k)) + 0x9e3779b97f4a7c15ULL);
+            h ^= mix(static_cast<uint64_t>(std::get<2>(k)) + 0xbf58476d1ce4e5b9ULL);
+            return static_cast<std::size_t>(h);
+        }
+    };
+    std::unordered_map<QuantKey, int, QuantKeyHash> node_map;
     node_map.reserve(cells.size() * 4 / 3);
     std::vector<Vec3> node_positions;
     node_positions.reserve(cells.size() * 4 / 3);
 
     auto find_or_add_node = [&](Vec3 p) -> int {
-        auto tup = quantize(p);
-        // Simple combine for hash: 64-bit FNV-1a-like mixing
-        uint64_t key = static_cast<uint64_t>(std::get<0>(tup));
-        key = key * 14695981039346656037ULL ^ static_cast<uint64_t>(std::get<1>(tup));
-        key = key * 1099511628211ULL ^ static_cast<uint64_t>(std::get<2>(tup));
+        QuantKey key = quantize(p);
         auto it = node_map.find(key);
         if (it != node_map.end()) return it->second;
         int idx = static_cast<int>(node_positions.size());
         node_positions.push_back(p);
-        node_map[key] = idx;
+        node_map.emplace(key, idx);
         return idx;
     };
 
@@ -1045,27 +1058,24 @@ bool generate_conformal_mesh_from_stl(
 
     std::fprintf(stderr, "  Nodes: %zu, unique via spatial hash\n", node_positions.size());
 
-    // Post-processing: remove any remaining degenerate tets (vol <= 1e-10)
+    // Orient tets positive; do NOT delete near-zero cells — removal opens
+    // topological holes and breaks the load_mesh 1e-4 closed-surface gate.
     {
-        int n_removed = 0;
-        size_t dst = 0;
-        for (size_t si = 0; si < mesh.cells.size(); ++si) {
+        int n_flipped = 0;
+        for (auto& cell : mesh.cells) {
             Vec3 vv[4];
             for (int i = 0; i < 4; ++i) {
-                const auto& nd = mesh.nodes[mesh.cells[si].node[i]];
+                const auto& nd = mesh.nodes[cell.node[i]];
                 vv[i] = {static_cast<Real>(nd.x), static_cast<Real>(nd.y), static_cast<Real>(nd.z)};
             }
-            if (volume_tet_signed(vv[0], vv[1], vv[2], vv[3]) <= Real(1e-10)) {
-                ++n_removed;
-                continue;
+            Real vol = volume_tet_signed(vv[0], vv[1], vv[2], vv[3]);
+            if (vol < 0) {
+                std::swap(cell.node[2], cell.node[3]);
+                ++n_flipped;
             }
-            if (dst != si) mesh.cells[dst] = mesh.cells[si];
-            ++dst;
         }
-        if (n_removed > 0) {
-            mesh.cells.resize(dst);
-            std::fprintf(stderr, "  Removed %d degenerate tets\n", n_removed);
-        }
+        if (n_flipped > 0)
+            std::fprintf(stderr, "  Flipped %d negative-volume tets\n", n_flipped);
     }
 
     // Rebuild faces from cell connectivity
@@ -1126,9 +1136,235 @@ bool generate_conformal_mesh_from_stl(
         return false;
     }
 
+    // Closed-surface is enforced by CfdSolver::load_mesh (1e-4 relative).
+    // Cut-cell meshes may exceed that until edge-consistent iso-surface welding
+    // is complete; report only here for diagnostics.
+    {
+        Real sx = 0, sy = 0, sz = 0, ta = 0;
+        int n_wall = 0;
+        for (const auto& face : mesh.faces) {
+            if (face.boundary == BoundaryKind::Interior) continue;
+            if (face.boundary == BoundaryKind::SlipWall ||
+                face.boundary == BoundaryKind::NoSlipWall)
+                ++n_wall;
+            sx += face.area * face.nx;
+            sy += face.area * face.ny;
+            sz += face.area * face.nz;
+            ta += face.area;
+        }
+        Real ce = real_sqrt(sx * sx + sy * sy + sz * sz);
+        Real rel = ce / (ta + Real(1e-30));
+        std::fprintf(stderr,
+            "  closed-surface rel=%g n_wall=%d (load_mesh gate=1e-4)\n",
+            static_cast<double>(rel), n_wall);
+        if (n_wall <= 0) {
+            if (error) *error = "Generated mesh has no wall faces";
+            return false;
+        }
+    }
+
     std::fprintf(stderr, "Mesh OK: cells=%d nodes=%zu faces=%d wall=%d farfield=%d\n",
         report.cells, mesh.nodes.size(), report.faces,
         report.no_slip_wall_faces, report.farfield_faces);
+    return true;
+}
+
+bool generate_watertight_mesh_from_stl(
+    const std::string& stl_path,
+    CfdMesh& mesh,
+    const StlMeshConfig& cfg,
+    std::string* error)
+{
+    std::vector<Tri> tris = parse_stl(stl_path, error);
+    if (tris.empty()) {
+        if (error && error->empty()) *error = "No triangles loaded from STL";
+        return false;
+    }
+
+    BVH bvh;
+    bvh.build(tris);
+
+    AABB stl_box = tri_aabb(tris[0]);
+    for (size_t i = 1; i < tris.size(); ++i)
+        stl_box = aabb_union(stl_box, tri_aabb(tris[i]));
+
+    Vec3 stl_size = stl_box.bmax - stl_box.bmin;
+    Real max_dim = std::max({stl_size.x, stl_size.y, stl_size.z});
+
+    int n = std::max(4, cfg.background_n_per_dim);
+    Real padding = max_dim * (cfg.outer_scale - Real(1)) * Real(0.5);
+    Vec3 origin = {
+        stl_box.bmin.x - padding,
+        stl_box.bmin.y - padding,
+        stl_box.bmin.z - padding
+    };
+    Vec3 grid_size = stl_size + Vec3{padding * 2, padding * 2, padding * 2};
+    Real dx = grid_size.x / static_cast<Real>(n);
+    Real dy = grid_size.y / static_cast<Real>(n);
+    Real dz = grid_size.z / static_cast<Real>(n);
+
+    auto node_index = [n](int i, int j, int k) {
+        return (k * (n + 1) + j) * (n + 1) + i;
+    };
+
+    mesh.nodes.clear();
+    mesh.cells.clear();
+    mesh.faces.clear();
+    mesh.nodes.resize(static_cast<size_t>(n + 1) * (n + 1) * (n + 1));
+    for (int k = 0; k <= n; ++k) {
+        for (int j = 0; j <= n; ++j) {
+            for (int i = 0; i <= n; ++i) {
+                CfdNode nd;
+                nd.x = origin.x + i * dx;
+                nd.y = origin.y + j * dy;
+                nd.z = origin.z + k * dz;
+                mesh.nodes[static_cast<size_t>(node_index(i, j, k))] = nd;
+            }
+        }
+    }
+
+    // Precompute SDF on the same node lattice used by the cut-cell path so
+    // inside/outside is consistent with generate_conformal_mesh_from_stl.
+    SDFGrid grid;
+    grid.nx = n;
+    grid.ny = n;
+    grid.nz = n;
+    grid.origin = origin;
+    grid.dx = dx;
+    grid.dy = dy;
+    grid.dz = dz;
+    compute_sdf_grid(grid, bvh);
+    {
+        Real smin = std::numeric_limits<Real>::max();
+        Real smax = -std::numeric_limits<Real>::max();
+        for (Real v : grid.sdf) {
+            smin = std::min(smin, v);
+            smax = std::max(smax, v);
+        }
+        int n_neg = 0;
+        for (Real v : grid.sdf) if (v < 0) ++n_neg;
+        std::fprintf(stderr,
+            "Hex-cull SDF range [%g, %g] on %zu nodes (n_neg=%d)\n",
+            static_cast<double>(smin), static_cast<double>(smax),
+            grid.sdf.size(), n_neg);
+    }
+
+    int n_body = 0;
+    mesh.cells.reserve(static_cast<size_t>(n) * n * n);
+    for (int k = 0; k < n; ++k) {
+        for (int j = 0; j < n; ++j) {
+            for (int i = 0; i < n; ++i) {
+                // Body if majority of corners (or center) are inside (SDF < 0).
+                int n_in = 0;
+                Real s = 0;
+                for (int dk = 0; dk <= 1; ++dk)
+                    for (int dj = 0; dj <= 1; ++dj)
+                        for (int di = 0; di <= 1; ++di) {
+                            Real sc = grid.at(i + di, j + dj, k + dk);
+                            s += sc;
+                            if (sc < 0) ++n_in;
+                        }
+                s *= Real(0.125);
+                if (n_in >= 1 || s < 0) {
+                    ++n_body;
+                    continue;
+                }
+
+                CfdCell cell;
+                cell.type = ElementType::HEX8;
+                cell.node[0] = node_index(i,     j,     k);
+                cell.node[1] = node_index(i + 1, j,     k);
+                cell.node[2] = node_index(i + 1, j + 1, k);
+                cell.node[3] = node_index(i,     j + 1, k);
+                cell.node[4] = node_index(i,     j,     k + 1);
+                cell.node[5] = node_index(i + 1, j,     k + 1);
+                cell.node[6] = node_index(i + 1, j + 1, k + 1);
+                cell.node[7] = node_index(i,     j + 1, k + 1);
+                mesh.cells.push_back(cell);
+            }
+        }
+    }
+    std::fprintf(stderr, "Hex-cull: fluid=%zu body=%d / %d\n",
+        mesh.cells.size(), n_body, n * n * n);
+
+    if (mesh.cells.empty()) {
+        if (error) *error = "Hex-cull produced zero fluid cells";
+        return false;
+    }
+    if (static_cast<int>(mesh.cells.size()) > cfg.max_cells) {
+        if (error) *error = "Hex-cull exceeded max_cells";
+        return false;
+    }
+
+    rebuild_mesh_faces(mesh);
+    compute_mesh_metrics(mesh, false);
+
+    Real box_eps = std::max(std::min({dx, dy, dz}) * Real(0.01), Real(1e-12));
+    Real xmin = origin.x, xmax = origin.x + n * dx;
+    Real ymin = origin.y, ymax = origin.y + n * dy;
+    Real zmin = origin.z, zmax = origin.z + n * dz;
+    for (auto& face : mesh.faces) {
+        if (face.boundary == BoundaryKind::Interior) continue;
+        Vec3 fc{face.cx, face.cy, face.cz};
+        bool on_box =
+            std::fabs(fc.x - xmin) < box_eps || std::fabs(fc.x - xmax) < box_eps ||
+            std::fabs(fc.y - ymin) < box_eps || std::fabs(fc.y - ymax) < box_eps ||
+            std::fabs(fc.z - zmin) < box_eps || std::fabs(fc.z - zmax) < box_eps;
+        face.boundary = on_box ? BoundaryKind::Farfield : BoundaryKind::NoSlipWall;
+    }
+    compute_mesh_metrics(mesh, false);
+
+    MeshQualityReport report = compute_mesh_quality_detail(mesh);
+    if (report.negative_jacobian_count > 0) {
+        if (error) {
+            *error = "Hex-cull mesh has " +
+                std::to_string(report.negative_jacobian_count) +
+                " negative Jacobian cells";
+        }
+        return false;
+    }
+    if (report.min_volume <= 0) {
+        if (error) *error = "Hex-cull mesh has non-positive minimum volume";
+        return false;
+    }
+
+    Real sx = 0, sy = 0, sz = 0, ta = 0;
+    int n_wall = 0;
+    for (const auto& face : mesh.faces) {
+        if (face.boundary == BoundaryKind::Interior) continue;
+        if (face.boundary == BoundaryKind::SlipWall ||
+            face.boundary == BoundaryKind::NoSlipWall)
+            ++n_wall;
+        sx += face.area * face.nx;
+        sy += face.area * face.ny;
+        sz += face.area * face.nz;
+        ta += face.area;
+    }
+    Real ce = real_sqrt(sx * sx + sy * sy + sz * sz);
+    Real rel = ce / (ta + Real(1e-30));
+    if (n_wall <= 0) {
+        if (error) *error = "Hex-cull mesh has no wall faces";
+        return false;
+    }
+    if (rel > Real(1e-4f)) {
+        if (error) {
+            char buf[256];
+            std::snprintf(buf, sizeof(buf),
+                "Hex-cull closed-surface rel error %g exceeds 1e-4 "
+                "(closure=%g, total_bnd_area=%g)",
+                static_cast<double>(rel),
+                static_cast<double>(ce),
+                static_cast<double>(ta));
+            *error = buf;
+        }
+        return false;
+    }
+
+    std::fprintf(stderr,
+        "Hex-cull OK: cells=%d nodes=%zu faces=%d wall=%d farfield=%d rel=%g\n",
+        report.cells, mesh.nodes.size(), report.faces,
+        report.no_slip_wall_faces, report.farfield_faces,
+        static_cast<double>(rel));
     return true;
 }
 

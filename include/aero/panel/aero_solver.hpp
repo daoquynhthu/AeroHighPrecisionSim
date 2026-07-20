@@ -84,7 +84,7 @@ namespace panel {
         float3* d_forces = nullptr;
         float3* d_moments = nullptr;
         int num_triangles = 0;
-        
+
         float ref_area = 1.0f;
         float ref_length = 1.0f;
         float ref_span = 1.0f;
@@ -109,12 +109,17 @@ namespace panel {
 
         // When true, uses GPU CFD solver for conditions in
         // Mach [1.2, 30], |alpha| <= 30, |beta| <= 10.
-        // NOTE: CFD uses a structured cube mesh embeding a unit-cube slip-wall
-        // body, NOT the loaded STL geometry. Forces correspond to the cube body,
-        // not the actual vehicle shape. See comment in generate_aero_table.
         bool   use_fvm = false;
         int    mesh_subdivisions = 5000;
         float  mesh_outer_scale = 10.0f;
+
+        // When true with use_fvm: body-fitted volume mesh from stl_path
+        // (Phase 9-B). When false: structured cube-embedding mesh (legacy).
+        bool   stl_volume_mesh = false;
+        // Background hex resolution for conformal meshing (0 = derive from
+        // mesh_subdivisions). Typical production range 20–80.
+        int    stl_background_n_per_dim = 0;
+        int    stl_max_cells = 5000000;
 
         // Viscous NS parameters (only used when use_fvm=true).
         bool   viscous = false;
@@ -129,13 +134,8 @@ namespace panel {
     //
     // When cfg.use_fvm=true, replaces results with GPU CFD solver for
     // in-range conditions (Mach [1.2,30], |alpha|<=30, |beta|<=10).
-    //
-    // LIMITATION: The CFD solver runs on a structured cube mesh with an
-    // embedded unit-cube slip-wall body, NOT the loaded STL geometry.
-    // The resulting force coefficients correspond to the cube body and
-    // are NOT representative of the actual vehicle shape. This is a
-    // pipeline demonstration — a conformal volume mesh generator is
-    // required for production use.
+    // Mesh: stl_volume_mesh=true uses generate_conformal_mesh_from_stl;
+    // stl_volume_mesh=false keeps the legacy cube-embedding body.
     bool generate_aero_table(
         const std::string& stl_path,
         const std::string& csv_path,

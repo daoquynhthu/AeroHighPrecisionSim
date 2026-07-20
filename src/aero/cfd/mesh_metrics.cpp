@@ -374,15 +374,22 @@ CfdMesh generate_structured_cube_mesh(Real outer_scale, int n_nodes_per_dim) {
 
     int n_hex = n - 1;
     std::vector<bool> is_body(static_cast<std::size_t>(n_hex) * n_hex * n_hex, false);
+    // Unit-cube body [-1,1]^3: mark hex if AABB intersects body
+    // (centroid-only tests miss the body when delta > 2 on coarse grids).
+    const Real body_lo = -1.0f - 1e-6f;
+    const Real body_hi = 1.0f + 1e-6f;
     for (int k = 0; k < n_hex; ++k) {
         for (int j = 0; j < n_hex; ++j) {
             for (int i = 0; i < n_hex; ++i) {
-                Real cx = -outer_scale + (i + 0.5f) * delta;
-                Real cy = -outer_scale + (j + 0.5f) * delta;
-                Real cz = -outer_scale + (k + 0.5f) * delta;
-                bool body = std::fabs(cx) < 1.0f + 1e-6f &&
-                            std::fabs(cy) < 1.0f + 1e-6f &&
-                            std::fabs(cz) < 1.0f + 1e-6f;
+                Real x0 = -outer_scale + i * delta;
+                Real y0 = -outer_scale + j * delta;
+                Real z0 = -outer_scale + k * delta;
+                Real x1 = x0 + delta;
+                Real y1 = y0 + delta;
+                Real z1 = z0 + delta;
+                bool body = (x0 < body_hi && x1 > body_lo) &&
+                            (y0 < body_hi && y1 > body_lo) &&
+                            (z0 < body_hi && z1 > body_lo);
                 is_body[hex_index(i, j, k, n_hex)] = body;
             }
         }
@@ -400,7 +407,8 @@ CfdMesh generate_structured_cube_mesh(Real outer_scale, int n_nodes_per_dim) {
                 int p5 = grid_index(i+1, j,   k+1, n);
                 int p6 = grid_index(i+1, j+1, k+1, n);
                 int p7 = grid_index(i,   j+1, k+1, n);
-                add_hex_tets(mesh, p0, p1, p2, p3, p4, p5, p6, p7);
+                // HEX8 keeps coordinate-plane reflection symmetry (tet fans do not).
+                add_hex(mesh, p0, p1, p2, p3, p4, p5, p6, p7);
             }
         }
     }

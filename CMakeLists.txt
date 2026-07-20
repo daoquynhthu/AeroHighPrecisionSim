@@ -142,6 +142,7 @@ endif()
 
 if(AEROSIM_USE_CUDA)
     target_link_libraries(missile_cpu PUBLIC CUDA::cudart)
+    target_compile_definitions(missile_cpu PUBLIC AEROSP_HAS_CUDA=1)
 endif()
 
 if(AEROSIM_USE_CGNS)

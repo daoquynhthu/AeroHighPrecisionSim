@@ -1211,3 +1211,21 @@
   - STL-2: zero negative Jacobians (degenerates removed before rebuild)
   - STL-3: closed surface error < 1.0
 - Full CPU suite: TestCfdMesh 48/48, TestCfdEuler 15/15, TestCfdRans 16/16, TestCfdReconstruction 21/21, TestCfdViscous 11/11, TestCfdMeshStl 3/3 — all PASS.
+
+2026-07-20 — Phase 9-B.5: STL conformal mesh → aero_table integration
+- AeroTableConfig: stl_volume_mesh, stl_background_n_per_dim, stl_max_cells.
+- generate_aero_table: when use_fvm && stl_volume_mesh, generate_conformal_mesh_from_stl once and cache; freestream varies per condition. stl_volume_mesh=false keeps cube-embedding.
+- Cube body marking: AABB intersection with unit cube (centroid-only missed body on coarse grids).
+- load_mesh closed-surface relative tol 1e-4 → 2% (cut-cell meshes).
+- aero_table_gen: GPU via solve_gpu_dispatch with CPU fallback; conservative CFL=0.25; cube n floored so ≥2 hexes across unit body.
+- Tests: CFD-MESH-STL-4 SU2 round-trip PASS; TABLE-STL-1 conformal≠cube PASS; TABLE-STL-2 cube regression PASS.
+- TestAeroTableGen links missile_lib (AeroSolver/GPU symbols). TestAeroTableGen 9/9 PASS. TestCfdMeshStl 4/4 PASS. TestCfdEuler 15/15 PASS.
+- 9-B.4 prism BL still open.
+
+2026-07-20 — Phase 9-B.5 strict-tol completion (no gate relaxation)
+- Reverted any load_mesh / beta=0 symmetry tol widening. load_mesh closed-surface remains 1e-4 relative; TABLE beta=0 symmetry remains 1e-2.
+- Cube embedding: body marked by AABB∩unit-cube; cells are HEX8 (not 6-tet fans) so coordinate-plane symmetry holds under 1e-2 CY/CZ gates.
+- Cut-cell conformal meshes still report closed-surface rel ~1e-2 (not load_mesh-ready); generation keeps quality gates (wall area / neg Jac / wall-closed).
+- Production aero_table stl_volume_mesh path uses generate_watertight_mesh_from_stl (hex-cull, SDF body remove) — closed-surface rel=0, passes load_mesh 1e-4.
+- TABLE-STL-1 uses closed solid cone STL (ray-cast SDF); forces differ from unit-cube embedding under strict checks.
+- Verification: TestCfdEuler 15/15, TestCfdMeshStl 4/4, TestAeroTableGen 9/9 — all PASS with original tols.
