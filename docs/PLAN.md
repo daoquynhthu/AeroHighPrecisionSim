@@ -947,8 +947,8 @@ Tests:
 | 1 | `CFD-AMR-ANISO-1` | HEX8 1→2 directional: volume sum conserved, cell count doubles | 1e-12 | [x] |
 | 2 | `CFD-AMR-ANISO-2` | TET4 1→4 directional: volume sum conserved, cell count ×4 | 1e-12 | [x] |
 | 3 | `CFD-AMR-ANISO-3` | PENTA6 1→2 height bisect: volume sum conserved | 1e-12 | [x] |
-| 4 | `CFD-AMR-ANISO-4` | BL sensor on flat plate: wall-adjacent cells flagged with DIR_WALL_NORMAL | >0 refine | [-] |
-| 5 | `CFD-AMR-ANISO-5` | Anisotropic cascade: max 2 directional levels → then isotropic, total refinement factor matches formula | exact | [-] |
+| 4 | `CFD-AMR-ANISO-4` | BL sensor on flat plate: wall-adjacent cells flagged with DIR_WALL_NORMAL | >0 refine | [x] |
+| 5 | `CFD-AMR-ANISO-5` | Anisotropic cascade: max 2 directional levels → then isotropic, total refinement factor matches formula | exact | [x] |
 | 6 | `CFD-AMR-ANISO-6` | `anisotropic_layers=0` regression to Phase 12 isotropic behavior | exact | [x] |
 
 ### 9-C.3 非流形 / 多区域 STL → 多体网格

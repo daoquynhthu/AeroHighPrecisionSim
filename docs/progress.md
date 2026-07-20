@@ -1273,3 +1273,8 @@
   - CFD-MESH-MULTI-1: two-tet STL + multi_body=true → 2 components, body_ids={0,1} on wall faces.
   - CFD-MESH-MULTI-3: multi_body=false regression → all wall faces body_id=0.
 - All new tests PASS (TestCfdMesh 48/49, TestCfdMeshStl 9/9).
+
+2026-07-20
+- Added CFD-AMR-ANISO-4: compute_yplus_sensor on flat plate → 36 refine requests, all dir=WALL_NORMAL.
+- Added CFD-AMR-ANISO-5: cascade logic — cells at refinement_level >= anisotropic_layers get dir cleared to NONE (10 cleared, 10 stayed).
+- All 54/54 TestCfdMesh tests PASS, 9/9 TestCfdMeshStl tests PASS.

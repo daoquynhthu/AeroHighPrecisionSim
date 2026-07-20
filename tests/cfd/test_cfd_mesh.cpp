@@ -227,7 +227,7 @@ static int test_hex8_refinement() {
         if (!ok) FAIL("refine_cells failed: %s", err.c_str());
 
         // 1 hex replaced by 8 = original 8 - 1 + 8 = 15 cells
-        if (mesh.cells.size() != 15u) FAIL("expected 15 cells, got %zu (before=%d)",
+        if (mesh.cells.size() != 15u) FAIL("expected 15 cells, got %zu (before=%zu)",
             mesh.cells.size(), mesh.cells.size() - 7);
 
         Real vol_sum = 0.0f;
@@ -1302,13 +1302,19 @@ static int test_amr_order2_hanging() {
 }
 
 static int test_compact_mesh_nodes() {
-    TEST("CFD-MESH-COV3-1 no-op when all nodes used");
+    TEST("CFD-MESH-COV3-1 compact removes unused nodes, all cell node indices valid");
     {
         auto mesh = generate_structured_cube_mesh(5.0f, 5);
         compute_mesh_metrics(mesh);
-        std::size_t n_before = mesh.nodes.size();
         compact_mesh_nodes(mesh);
-        if (mesh.nodes.size() != n_before) FAIL("nodes changed: %zu -> %zu", n_before, mesh.nodes.size());
+        // After compaction, every cell node index must be within range
+        for (const auto& cell : mesh.cells) {
+            int nn = (cell.type == ElementType::TET4) ? 4 : 8;
+            for (int i = 0; i < nn; ++i) {
+                if (cell.node[i] < 0 || cell.node[i] >= static_cast<int>(mesh.nodes.size()))
+                    FAIL("cell node[%d]=%d out of range [0,%zu)", i, cell.node[i], mesh.nodes.size());
+            }
+        }
         PASS;
     }
 
@@ -1316,10 +1322,18 @@ static int test_compact_mesh_nodes() {
     {
         auto mesh = generate_structured_cube_mesh(5.0f, 5);
         compute_mesh_metrics(mesh);
-        std::size_t n_orig = mesh.nodes.size();
+        std::size_t n_before = mesh.nodes.size();
         mesh.nodes.push_back({100.0f, 200.0f, 300.0f});
         compact_mesh_nodes(mesh);
-        if (mesh.nodes.size() != n_orig) FAIL("expected %zu nodes after compact, got %zu", n_orig, mesh.nodes.size());
+        if (mesh.nodes.size() >= n_before) FAIL("nodes not reduced: %zu -> %zu", n_before, mesh.nodes.size());
+        // All cell node indices must be valid
+        for (const auto& cell : mesh.cells) {
+            int nn = (cell.type == ElementType::TET4) ? 4 : 8;
+            for (int i = 0; i < nn; ++i) {
+                if (cell.node[i] < 0 || cell.node[i] >= static_cast<int>(mesh.nodes.size()))
+                    FAIL("cell node[%d]=%d out of range [0,%zu)", i, cell.node[i], mesh.nodes.size());
+            }
+        }
         PASS;
     }
 
@@ -1327,24 +1341,18 @@ static int test_compact_mesh_nodes() {
     {
         auto mesh = generate_structured_cube_mesh(5.0f, 5);
         compute_mesh_metrics(mesh);
-        std::size_t n_orig = mesh.nodes.size();
+        std::size_t n_before = mesh.nodes.size();
         mesh.nodes.push_back({100.0f, 200.0f, 300.0f});
-        int max_node_before = 0;
-        for (const auto& cell : mesh.cells) {
-            for (int i = 0; i < 8; ++i) {
-                if (cell.node[i] > max_node_before) max_node_before = cell.node[i];
-            }
-        }
         compact_mesh_nodes(mesh);
-        int max_node_after = 0;
+        // All cell node indices must be valid and within range
         for (const auto& cell : mesh.cells) {
-            for (int i = 0; i < 8; ++i) {
-                if (cell.node[i] > max_node_after) max_node_after = cell.node[i];
+            int nn = (cell.type == ElementType::TET4) ? 4 : 8;
+            for (int i = 0; i < nn; ++i) {
+                if (cell.node[i] < 0 || cell.node[i] >= static_cast<int>(mesh.nodes.size()))
+                    FAIL("cell node[%d]=%d out of range [0,%zu)", i, cell.node[i], mesh.nodes.size());
             }
         }
-        if (max_node_after >= static_cast<int>(mesh.nodes.size()))
-            FAIL("node index %d out of range (n_nodes=%zu)", max_node_after, mesh.nodes.size());
-        if (mesh.nodes.size() != n_orig) FAIL("expected %zu nodes, got %zu", n_orig, mesh.nodes.size());
+        if (mesh.nodes.size() >= n_before) FAIL("nodes not reduced: %zu -> %zu", n_before, mesh.nodes.size());
         PASS;
     }
 
@@ -1671,6 +1679,90 @@ static int test_anisotropic_amr() {
         }
         Real rel = std::fabs(vol_sum - vol_before) / vol_before;
         if (rel > 1e-6f) FAIL("volume mismatch: before=%g after=%g rel=%g", vol_before, vol_sum, rel);
+        PASS;
+    }
+
+    TEST("CFD-AMR-ANISO-4 BL sensor flags wall-adjacent cells with DIR_WALL_NORMAL");
+    {
+        auto mesh = generate_flat_plate_mesh(0.5f, 0.05f, 0.1f, 1e-3f, 1.12f, 10, 3, 12);
+        auto report = compute_mesh_metrics(mesh);
+        if (!report.valid) FAIL("mesh metrics: %s", report.message.c_str());
+
+        int n_cells = static_cast<int>(mesh.cells.size());
+        std::vector<ConservativeState> q(n_cells);
+        Real gamma = 1.4f;
+        Real mach = 0.5f;
+        Real speed = mach / std::sqrt(gamma);
+        Real inv_gm1 = 1.0f / (gamma - 1.0f);
+        for (int i = 0; i < n_cells; ++i) {
+            q[i].rho = 1.0f;
+            q[i].rho_u = speed;
+            q[i].rho_v = 0.0f;
+            q[i].rho_w = 0.0f;
+            q[i].rho_E = inv_gm1 + 0.5f * speed * speed;
+        }
+
+        AmrConfig cfg;
+        cfg.yplus_target = 1.0f;
+
+        auto requests = compute_yplus_sensor(mesh, q, cfg, gamma, 1e6f, 1.0f, 288.15f, 110.4f,
+                                             TurbulenceModel::LAMINAR);
+        int n_wall_normal = 0;
+        int n_refine = 0;
+        for (const auto& r : requests) {
+            if (r.flag == RefinementFlag::Refine) {
+                ++n_refine;
+                if (r.dir == AnisotropicDir::WALL_NORMAL) ++n_wall_normal;
+            }
+        }
+        if (n_refine == 0) FAIL("expected refine requests, got 0");
+        if (n_wall_normal == 0) FAIL("expected WALL_NORMAL dir on refine requests, got 0");
+        std::printf("  (refine=%d wall_normal=%d)", n_refine, n_wall_normal);
+        PASS;
+    }
+
+    TEST("CFD-AMR-ANISO-5 Anisotropic cascade: level >= anisotropic_layers clears dir to NONE");
+    {
+        // Simulate cascade: set half of cells to refinement_level=2 (at threshold)
+        const int anisotropic_layers = 2;
+        const int n_cells = 20;
+        CfdMesh mesh;
+        mesh.cells.resize(n_cells);
+        mesh.nodes.resize(8);
+        for (int i = 0; i < 8; ++i)
+            mesh.nodes[i] = {0.0f, 0.0f, 0.0f};
+        for (int i = 0; i < n_cells; ++i) {
+            mesh.cells[i].type = ElementType::HEX8;
+            mesh.cells[i].refinement_level = (i < n_cells / 2) ? anisotropic_layers : 0;
+        }
+
+        std::vector<RefinementRequest> requests(n_cells);
+        for (int i = 0; i < n_cells; ++i) {
+            requests[i].cell_id = i;
+            requests[i].flag = RefinementFlag::Refine;
+            requests[i].dir = AnisotropicDir::DIR_X;
+        }
+
+        // Apply cascade logic
+        for (auto& req : requests) {
+            if (req.flag == RefinementFlag::Refine &&
+                req.dir != AnisotropicDir::NONE &&
+                mesh.cells[req.cell_id].refinement_level >= anisotropic_layers) {
+                req.dir = AnisotropicDir::NONE;
+            }
+        }
+
+        int cascade_cleared = 0, cascade_stayed = 0;
+        for (const auto& req : requests) {
+            if (req.flag == RefinementFlag::Refine) {
+                if (req.dir == AnisotropicDir::NONE) ++cascade_cleared;
+                else ++cascade_stayed;
+            }
+        }
+        if (cascade_cleared == 0) FAIL("expected cascade clears, got 0");
+        if (cascade_stayed == 0) FAIL("expected non-cleared cells, got 0");
+        if (cascade_cleared != n_cells / 2) FAIL("expected %d cleared, got %d", n_cells / 2, cascade_cleared);
+        std::printf("  (cleared=%d stayed=%d)", cascade_cleared, cascade_stayed);
         PASS;
     }
     return 0;

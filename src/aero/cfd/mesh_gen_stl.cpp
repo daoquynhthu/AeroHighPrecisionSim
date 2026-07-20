@@ -299,6 +299,7 @@ private:
         count_ray_hits_node(node.right, origin, dir, t_max, hits);
     }
 
+    // Private helpers (AABB-specific; not shared with linear-scan)
     static Real box_dist(const AABB& b, Vec3 p) {
         Real dx = std::max({b.bmin.x - p.x, p.x - b.bmax.x, Real(0)});
         Real dy = std::max({b.bmin.y - p.y, p.y - b.bmax.y, Real(0)});
@@ -325,71 +326,156 @@ private:
         return true;
     }
 
+public:
     // Moller-Trumbore ray-triangle intersection
-    static bool ray_tri_intersect(Vec3 origin, Vec3 dir, Vec3 v0, Vec3 v1, Vec3 v2, Real& t) {
-        Vec3 e1 = v1 - v0;
-        Vec3 e2 = v2 - v0;
-        Vec3 pvec = cross(dir, e2);
-        Real det = dot(e1, pvec);
-        if (std::fabs(det) < std::numeric_limits<Real>::epsilon()) return false;
-        Real inv_det = 1.0f / det;
-        Vec3 tvec = origin - v0;
-        Real u = dot(tvec, pvec) * inv_det;
-        if (u < 0 || u > 1) return false;
-        Vec3 qvec = cross(tvec, e1);
-        Real v = dot(dir, qvec) * inv_det;
-        if (v < 0 || u + v > 1) return false;
-        t = dot(e2, qvec) * inv_det;
-        if (t < 0) return false;
-        return true;
-    }
+    static bool ray_tri_intersect(Vec3 origin, Vec3 dir, Vec3 v0, Vec3 v1, Vec3 v2, Real& t);
 
     // Distance from point p to triangle (v0,v1,v2)
-    static Real point_tri_distance(Vec3 p, Vec3 v0, Vec3 v1, Vec3 v2) {
-        Vec3 e0 = v1 - v0;
-        Vec3 e1 = v2 - v0;
-        Vec3 n = cross(e0, e1);
-        Real n_len = norm(n);
-        if (n_len < std::numeric_limits<Real>::min())
-            return norm(p - v0); // degenerate triangle
+    static Real point_tri_distance(Vec3 p, Vec3 v0, Vec3 v1, Vec3 v2);
+};
 
-        n = n / n_len;
+// ---------------------------------------------------------------------------
+// Triangle distance / ray-intersect implementations (out-of-line to share with
+// linear-scan fallback below)
+// ---------------------------------------------------------------------------
+bool BVH::ray_tri_intersect(Vec3 origin, Vec3 dir, Vec3 v0, Vec3 v1, Vec3 v2, Real& t) {
+    Vec3 e1 = v1 - v0;
+    Vec3 e2 = v2 - v0;
+    Vec3 pvec = cross(dir, e2);
+    Real det = dot(e1, pvec);
+    if (std::fabs(det) < std::numeric_limits<Real>::epsilon()) return false;
+    Real inv_det = 1.0f / det;
+    Vec3 tvec = origin - v0;
+    Real u = dot(tvec, pvec) * inv_det;
+    if (u < 0 || u > 1) return false;
+    Vec3 qvec = cross(tvec, e1);
+    Real v = dot(dir, qvec) * inv_det;
+    if (v < 0 || u + v > 1) return false;
+    t = dot(e2, qvec) * inv_det;
+    if (t < 0) return false;
+    return true;
+}
 
-        // Project p onto triangle plane
-        Real d = dot(p - v0, n);
-        Vec3 proj = p - n * d;
+Real BVH::point_tri_distance(Vec3 p, Vec3 v0, Vec3 v1, Vec3 v2) {
+    Vec3 e0 = v1 - v0;
+    Vec3 e1 = v2 - v0;
+    Vec3 n = cross(e0, e1);
+    Real n_len = norm(n);
+    if (n_len < std::numeric_limits<Real>::min())
+        return norm(p - v0); // degenerate triangle
 
-        // Barycentric coordinates of projected point
-        Vec3 vp = proj - v0;
-        Real dot00 = dot(e0, e0);
-        Real dot01 = dot(e0, e1);
-        Real dot11 = dot(e1, e1);
-        Real dot0p = dot(e0, vp);
-        Real dot1p = dot(e1, vp);
+    n = n / n_len;
 
-        Real denom = dot00 * dot11 - dot01 * dot01;
-        if (std::fabs(denom) < std::numeric_limits<Real>::min()) {
-            // Near-degenerate triangle — distance to closest vertex/edge
-            Real d0 = norm(p - v0);
-            Real d1 = norm(p - v1);
-            Real d2 = norm(p - v2);
-            return std::min({d0, d1, d2});
-        }
+    // Project p onto triangle plane
+    Real d = dot(p - v0, n);
+    Vec3 proj = p - n * d;
 
-        Real u = (dot11 * dot0p - dot01 * dot1p) / denom;
-        Real v = (dot00 * dot1p - dot01 * dot0p) / denom;
-        Real w = 1 - u - v;
+    // Barycentric coordinates of projected point
+    Vec3 vp = proj - v0;
+    Real dot00 = dot(e0, e0);
+    Real dot01 = dot(e0, e1);
+    Real dot11 = dot(e1, e1);
+    Real dot0p = dot(e0, vp);
+    Real dot1p = dot(e1, vp);
 
-        if (u >= 0 && v >= 0 && w >= 0) {
-            // Inside triangle
-            return std::fabs(d);
-        }
-
-        // Outside triangle — distance to closest edge or vertex
+    Real denom = dot00 * dot11 - dot01 * dot01;
+    if (std::fabs(denom) < std::numeric_limits<Real>::min()) {
         Real d0 = norm(p - v0);
         Real d1 = norm(p - v1);
         Real d2 = norm(p - v2);
         return std::min({d0, d1, d2});
+    }
+
+    Real u = (dot11 * dot0p - dot01 * dot1p) / denom;
+    Real v = (dot00 * dot1p - dot01 * dot0p) / denom;
+    Real w = 1 - u - v;
+
+    if (u >= 0 && v >= 0 && w >= 0) {
+        return std::fabs(d);
+    }
+
+    Real d0 = norm(p - v0);
+    Real d1 = norm(p - v1);
+    Real d2 = norm(p - v2);
+    return std::min({d0, d1, d2});
+}
+
+// ---------------------------------------------------------------------------
+// Linear-scan fallback for small meshes (< 10K triangles)
+// ---------------------------------------------------------------------------
+static Real closest_distance_linear(const std::vector<Tri>& tris, Vec3 p) {
+    Real best = std::numeric_limits<Real>::max();
+    for (const auto& t : tris) {
+        Real d = BVH::point_tri_distance(p, t.v0, t.v1, t.v2);
+        if (d < best) best = d;
+    }
+    return best;
+}
+
+static void count_ray_hits_linear(const std::vector<Tri>& tris, Vec3 origin, Vec3 dir, Real t_max, int& hits) {
+    for (const auto& t : tris) {
+        Real t_tri;
+        if (BVH::ray_tri_intersect(origin, dir, t.v0, t.v1, t.v2, t_tri)) {
+            if (t_tri > Real(1e-10))
+                ++hits;
+        }
+    }
+}
+
+static Real signed_distance_linear(const std::vector<Tri>& tris, Vec3 p, int* ray_dir = nullptr) {
+    Real d = closest_distance_linear(tris, p);
+    if (d <= Real(1e-12))
+        return Real(0);
+
+    if (ray_dir) {
+        Vec3 dir;
+        int a = *ray_dir % 3;
+        if (a == 0) dir = {1, 0, 0};
+        else if (a == 1) dir = {0, 1, 0};
+        else dir = {0, 0, 1};
+        int hits = 0;
+        count_ray_hits_linear(tris, p, dir, Real(1e10), hits);
+        if (hits % 2 == 1) d = -d;
+        return d;
+    }
+
+    static const Vec3 k_dirs[] = {
+        {1, 0, 0}, {-1, 0, 0},
+        {0, 1, 0}, {0, -1, 0},
+        {0, 0, 1}, {0, 0, -1},
+        {1, 1, 1}, {1, 1, -1}, {1, -1, 1}, {-1, 1, 1},
+        {1, -1, -1}, {-1, 1, -1}, {-1, -1, 1}
+    };
+    const int n_dirs = static_cast<int>(sizeof(k_dirs) / sizeof(k_dirs[0]));
+    int inside_votes = 0;
+    for (int i = 0; i < n_dirs; ++i) {
+        Vec3 dir = k_dirs[i];
+        Real len = norm(dir);
+        if (len < Real(1e-20)) continue;
+        dir = dir / len;
+        int hits = 0;
+        count_ray_hits_linear(tris, p, dir, Real(1e10), hits);
+        if ((hits % 2) == 1)
+            ++inside_votes;
+    }
+    if (inside_votes * 2 > n_dirs)
+        d = -d;
+    return d;
+}
+
+// Thin wrapper: BVH for large meshes, linear scan for small meshes
+struct SDFEngine {
+    const BVH* bvh = nullptr;
+    const std::vector<Tri>* tris = nullptr;
+
+    Real signed_distance(Vec3 p, int* ray_dir = nullptr) const {
+        if (tris) return signed_distance_linear(*tris, p, ray_dir);
+        return bvh->signed_distance(p, ray_dir);
+    }
+
+    Real closest_distance(Vec3 p) const {
+        if (tris) return closest_distance_linear(*tris, p);
+        return bvh->closest_distance(p);
     }
 };
 
@@ -711,7 +797,7 @@ struct SDFGrid {
     }
 };
 
-void compute_sdf_grid(SDFGrid& grid, const BVH& bvh) {
+void compute_sdf_grid(SDFGrid& grid, const SDFEngine& sdf) {
     int npts = (grid.nx + 1) * (grid.ny + 1) * (grid.nz + 1);
     grid.sdf.resize(npts);
 
@@ -722,8 +808,7 @@ void compute_sdf_grid(SDFGrid& grid, const BVH& bvh) {
         for (int j = 0; j <= grid.ny; ++j) {
             for (int i = 0; i <= grid.nx; ++i) {
                 Vec3 p = grid.grid_point(i, j, k);
-                // Multi-ray majority (ray_dir=null) for production STL solids.
-                Real d = bvh.signed_distance(p, nullptr);
+                Real d = sdf.signed_distance(p, nullptr);
                 grid.at(i, j, k) = d;
             }
         }
@@ -939,9 +1024,15 @@ bool generate_conformal_mesh_from_stl(
         return false;
     }
 
-    // 2. Build BVH
+    // 2. Build SDF engine (BVH for large meshes, linear scan for small)
+    SDFEngine sdf;
     BVH bvh;
-    bvh.build(tris);
+    if (tris.size() >= 10000) {
+        bvh.build(tris);
+        sdf.bvh = &bvh;
+    } else {
+        sdf.tris = &tris;
+    }
 
     // 3. Compute STL bounding box
     AABB stl_box = tri_aabb(tris[0]);
@@ -976,7 +1067,7 @@ bool generate_conformal_mesh_from_stl(
     grid.dz = grid_size.z / static_cast<Real>(grid.nz);
 
     // 5. Compute SDF on grid
-    compute_sdf_grid(grid, bvh);
+    compute_sdf_grid(grid, sdf);
 
     // 6. Classify background cells and generate output (shared edge cuts)
     std::vector<GeneratedCell> cells;
@@ -1167,15 +1258,15 @@ bool generate_conformal_mesh_from_stl(
                 continue;
             }
             // Wall: near STL surface (unsigned) and normal points into body.
-            Real d_surf = bvh.closest_distance(fc);
+            Real d_surf = sdf.closest_distance(fc);
             if (d_surf > wall_dist_threshold) {
                 face.boundary = BoundaryKind::Farfield;
                 continue;
             }
             Vec3 n{face.nx, face.ny, face.nz};
-            Real eps_n = std::max(min_spacing * Real(0.05f), Real(1e-8f));
-            Real s0 = bvh.signed_distance(fc, nullptr);
-            Real s_plus = bvh.signed_distance(fc + n * eps_n, nullptr);
+            Real eps_n = std::max(min_spacing * 0.001f, Real(1e-12f));
+            Real s0 = sdf.signed_distance(fc, nullptr);
+            Real s_plus = sdf.signed_distance(fc + n * eps_n, nullptr);
             if (s_plus < s0)
                 face.boundary = BoundaryKind::NoSlipWall;
             else
@@ -1536,10 +1627,10 @@ bool generate_watertight_mesh_from_stl(
         return false;
     }
 
-    // Multi-body: decompose into components; single-body: build one BVH
+    // Multi-body: decompose into components; single-body: build BVH or linear scan
     ComponentSet comp;
     BVH single_bvh;
-    const BVH* use_bvh = nullptr;
+    SDFEngine single_sdf;
     bool multi = cfg.multi_body;
 
     if (multi) {
@@ -1553,16 +1644,17 @@ bool generate_watertight_mesh_from_stl(
         comp = decompose_components(tris, vert_tol);
         std::fprintf(stderr, "Multi-body: %d components from %zu triangles\n",
             comp.n_components, tris.size());
-        // For SDF grid, use first component's BVH (grid SDF only used for diagnostics)
-        if (comp.n_components > 0) {
-            use_bvh = &comp.bvhs[0];
-        } else {
+        if (comp.n_components <= 0) {
             if (error) *error = "Multi-body component decomposition failed";
             return false;
         }
     } else {
-        single_bvh.build(tris);
-        use_bvh = &single_bvh;
+        if (tris.size() >= 10000) {
+            single_bvh.build(tris);
+            single_sdf.bvh = &single_bvh;
+        } else {
+            single_sdf.tris = &tris;
+        }
     }
 
     AABB stl_box = tri_aabb(tris[0]);
@@ -1631,7 +1723,7 @@ bool generate_watertight_mesh_from_stl(
             grid.sdf[idx] = s_min;
         }
     } else {
-        compute_sdf_grid(grid, *use_bvh);
+        compute_sdf_grid(grid, single_sdf);
     }
     {
         Real smin = std::numeric_limits<Real>::max();
@@ -1670,7 +1762,8 @@ bool generate_watertight_mesh_from_stl(
                     origin.y + (j + Real(0.5)) * dy,
                     origin.z + (k + Real(0.5)) * dz
                 };
-                Real s_cen = use_bvh->signed_distance(cen);
+                Real s_cen = multi ? comp.bvhs[0].signed_distance(cen)
+                                   : single_sdf.signed_distance(cen);
                 if (multi) {
                     // Check all components: inside if ANY component says inside
                     for (int ci = 0; ci < comp.n_components; ++ci) {
