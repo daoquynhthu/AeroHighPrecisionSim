@@ -79,8 +79,8 @@ static int test_cone_stl_mesh() {
 
     StlMeshConfig cfg;
     cfg.outer_scale = 3.0f;
-    cfg.background_n_per_dim = 40;
-    cfg.max_cells = 500000;
+    cfg.background_n_per_dim = 80;
+    cfg.max_cells = 5000000;
 
     CfdMesh mesh;
     std::string err;
@@ -102,6 +102,9 @@ static int test_cone_stl_mesh() {
         Real L = std::sqrt(radius * radius + height * height);
         Real expected = (Real)M_PI * radius * (radius + L);
         Real rel_err = std::fabs(wall_area - expected) / expected;
+
+
+
         if (rel_err > 0.5f) FAIL("wall area=%g expected=%g rel_err=%g", wall_area, expected, rel_err);
 
         std::printf("\n  cells=%d faces=%d wall_faces=%d farfield_faces=%d",

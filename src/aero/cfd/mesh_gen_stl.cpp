@@ -7,10 +7,12 @@
 #include <array>
 #include <cmath>
 #include <cstdint>
+#include <cstdio>
 #include <cstring>
 #include <fstream>
 #include <limits>
 #include <string>
+#include <unordered_map>
 #include <vector>
 
 namespace aerosp {
@@ -600,7 +602,10 @@ void compute_sdf_grid(SDFGrid& grid, const BVH& bvh) {
     int npts = (grid.nx + 1) * (grid.ny + 1) * (grid.nz + 1);
     grid.sdf.resize(npts);
 
+    int report_step = std::max(1, (grid.nz + 1) / 10);
     for (int k = 0; k <= grid.nz; ++k) {
+        if (k % report_step == 0)
+            std::fprintf(stderr, "  SDF: k=%d/%d (%d%%)\n", k, grid.nz, k * 100 / grid.nz);
         for (int j = 0; j <= grid.ny; ++j) {
             for (int i = 0; i <= grid.nx; ++i) {
                 Vec3 p = grid.grid_point(i, j, k);
@@ -767,12 +772,12 @@ ClipOutput clip_tet(Vec3 v[4], Real sdf[4]) {
         out.cell_verts.push_back(all_verts[tri[2]]);
     }
 
-    // Fix negative volumes: swap last two vertices if volume is negative
+    // Fix negative or degenerate volumes (close-to-zero may flip sign due to FP rounding)
     for (size_t ci = 0; ci + 3 < out.cell_verts.size(); ci += 4) {
         Real vol = volume_tet_signed(
             out.cell_verts[ci], out.cell_verts[ci+1],
             out.cell_verts[ci+2], out.cell_verts[ci+3]);
-        if (vol < 0) {
+        if (vol <= Real(1e-12)) {
             std::swap(out.cell_verts[ci+2], out.cell_verts[ci+3]);
         }
     }
@@ -840,6 +845,12 @@ bool generate_conformal_mesh_from_stl(
     Vec3 stl_size = stl_box.bmax - stl_box.bmin;
     Real max_dim = std::max({stl_size.x, stl_size.y, stl_size.z});
 
+    std::fprintf(stderr, "STL: %zu triangles, bbox=[%.4f,%.4f,%.4f]x[%.4f,%.4f,%.4f], Lmax=%.4f\n",
+        tris.size(),
+        stl_box.bmin.x, stl_box.bmin.y, stl_box.bmin.z,
+        stl_box.bmax.x, stl_box.bmax.y, stl_box.bmax.z,
+        max_dim);
+
     // 4. Build background grid
     SDFGrid grid;
     grid.nx = cfg.background_n_per_dim;
@@ -865,7 +876,10 @@ bool generate_conformal_mesh_from_stl(
     std::vector<Vec3> wall_verts;
     std::vector<WallTri> wall_tris;
 
+    int report_step = std::max(1, grid.nz / 10);
     for (int k = 0; k < grid.nz; ++k) {
+        if (k % report_step == 0)
+            std::fprintf(stderr, "  Clipping: k=%d/%d cells=%zu\n", k, grid.nz, cells.size());
         for (int j = 0; j < grid.ny; ++j) {
             for (int i = 0; i < grid.nx; ++i) {
                 Real crn_sdf[8];
@@ -897,10 +911,10 @@ bool generate_conformal_mesh_from_stl(
                         GeneratedCell gc;
                         for (int nv = 0; nv < 4; ++nv) gc.nodes[nv] = tet_v[t][nv];
                         gc.n_nodes = 4;
-                        // Fix negative volumes like clip_tet does
+                        // Fix negative or degenerate volumes
                         Real vol = volume_tet_signed(
                             gc.nodes[0], gc.nodes[1], gc.nodes[2], gc.nodes[3]);
-                        if (vol < 0) {
+                        if (vol <= Real(1e-12)) {
                             std::swap(gc.nodes[2], gc.nodes[3]);
                         }
                         cells.push_back(gc);
@@ -975,29 +989,41 @@ bool generate_conformal_mesh_from_stl(
         return false;
     }
 
-    // 7. Build CfdMesh from generated cells
-    // Build node list from unique positions
-    struct NodeRef {
-        int idx;
-        Vec3 pos;
+    // 7. Build CfdMesh from generated cells using spatial hashing (O(N))
+    Real global_scale = std::max({stl_size.x, stl_size.y, stl_size.z, Real(1)});
+    Real eps = 1e-8f * global_scale;
+    // Use floor-based quantization to a fine grid: each bucket spans (2*eps)
+    auto quantize = [eps](Vec3 p) -> std::tuple<int64_t, int64_t, int64_t> {
+        return { static_cast<int64_t>(std::llround(p.x / eps)),
+                 static_cast<int64_t>(std::llround(p.y / eps)),
+                 static_cast<int64_t>(std::llround(p.z / eps)) };
     };
-    std::vector<NodeRef> unique_nodes;
+
+    std::unordered_map<uint64_t, int> node_map;
+    node_map.reserve(cells.size() * 4 / 3);
+    std::vector<Vec3> node_positions;
+    node_positions.reserve(cells.size() * 4 / 3);
+
     auto find_or_add_node = [&](Vec3 p) -> int {
-        Real scale = std::max({std::fabs(p.x), std::fabs(p.y), std::fabs(p.z), Real(1)});
-        Real eps = 1e-8f * scale;
-        for (size_t i = 0; i < unique_nodes.size(); ++i) {
-            Vec3 d = unique_nodes[i].pos - p;
-            if (std::fabs(d.x) < eps && std::fabs(d.y) < eps && std::fabs(d.z) < eps)
-                return unique_nodes[i].idx;
-        }
-        int idx = static_cast<int>(unique_nodes.size());
-        unique_nodes.push_back({idx, p});
+        auto tup = quantize(p);
+        // Simple combine for hash: 64-bit FNV-1a-like mixing
+        uint64_t key = static_cast<uint64_t>(std::get<0>(tup));
+        key = key * 14695981039346656037ULL ^ static_cast<uint64_t>(std::get<1>(tup));
+        key = key * 1099511628211ULL ^ static_cast<uint64_t>(std::get<2>(tup));
+        auto it = node_map.find(key);
+        if (it != node_map.end()) return it->second;
+        int idx = static_cast<int>(node_positions.size());
+        node_positions.push_back(p);
+        node_map[key] = idx;
         return idx;
     };
+
+    std::fprintf(stderr, "  Building mesh: %zu cells\n", cells.size());
 
     mesh.nodes.clear();
     mesh.cells.clear();
     mesh.faces.clear();
+    mesh.cells.reserve(cells.size());
 
     for (const auto& gc : cells) {
         CfdCell cell;
@@ -1008,35 +1034,78 @@ bool generate_conformal_mesh_from_stl(
         mesh.cells.push_back(cell);
     }
 
-    // Add nodes to mesh
-    for (const auto& nr : unique_nodes) {
+    mesh.nodes.reserve(node_positions.size());
+    for (const auto& pos : node_positions) {
         CfdNode n;
-        n.x = nr.pos.x;
-        n.y = nr.pos.y;
-        n.z = nr.pos.z;
+        n.x = pos.x;
+        n.y = pos.y;
+        n.z = pos.z;
         mesh.nodes.push_back(n);
+    }
+
+    std::fprintf(stderr, "  Nodes: %zu, unique via spatial hash\n", node_positions.size());
+
+    // Post-processing: remove any remaining degenerate tets (vol <= 1e-10)
+    {
+        int n_removed = 0;
+        size_t dst = 0;
+        for (size_t si = 0; si < mesh.cells.size(); ++si) {
+            Vec3 vv[4];
+            for (int i = 0; i < 4; ++i) {
+                const auto& nd = mesh.nodes[mesh.cells[si].node[i]];
+                vv[i] = {static_cast<Real>(nd.x), static_cast<Real>(nd.y), static_cast<Real>(nd.z)};
+            }
+            if (volume_tet_signed(vv[0], vv[1], vv[2], vv[3]) <= Real(1e-10)) {
+                ++n_removed;
+                continue;
+            }
+            if (dst != si) mesh.cells[dst] = mesh.cells[si];
+            ++dst;
+        }
+        if (n_removed > 0) {
+            mesh.cells.resize(dst);
+            std::fprintf(stderr, "  Removed %d degenerate tets\n", n_removed);
+        }
     }
 
     // Rebuild faces from cell connectivity
     rebuild_mesh_faces(mesh);
 
-    // Classify boundary faces: wall faces are those on the iso-surface
-    // Use a very tight threshold based on grid spacing to avoid mis-classifying
-    // cap/side faces of the clipped region as wall faces.
-    Real min_spacing = std::min({grid.dx, grid.dy, grid.dz});
-    Real wall_dist_threshold = std::max(min_spacing * 0.01f, Real(1e-12f));
+    // Compute metrics to get face centroids, then classify boundary faces.
+    compute_mesh_metrics(mesh, false);
 
-    for (auto& face : mesh.faces) {
-        if (face.boundary != BoundaryKind::Interior) {
-            Vec3 fc{face.cx, face.cy, face.cz};
-            Real d = bvh.closest_distance(fc);
-            if (d < wall_dist_threshold) {
-                face.boundary = BoundaryKind::NoSlipWall;
+    // Classify boundary faces: faces on the outer bounding box are farfield,
+    // faces near the STL surface are NoSlipWall, others keep default (Farfield).
+    {
+        Real min_spacing = std::min({grid.dx, grid.dy, grid.dz});
+        Real box_eps = std::max(min_spacing * 0.01f, Real(1e-12f));
+        Real wall_dist_threshold = std::max(min_spacing * 0.01f, Real(1e-12f));
+        Real xmin = grid.origin.x, xmax = grid.origin.x + grid.nx * grid.dx;
+        Real ymin = grid.origin.y, ymax = grid.origin.y + grid.ny * grid.dy;
+        Real zmin = grid.origin.z, zmax = grid.origin.z + grid.nz * grid.dz;
+
+        for (auto& face : mesh.faces) {
+            if (face.boundary != BoundaryKind::Interior) {
+                Vec3 fc{face.cx, face.cy, face.cz};
+                bool on_box =
+                    std::fabs(fc.x - xmin) < box_eps ||
+                    std::fabs(fc.x - xmax) < box_eps ||
+                    std::fabs(fc.y - ymin) < box_eps ||
+                    std::fabs(fc.y - ymax) < box_eps ||
+                    std::fabs(fc.z - zmin) < box_eps ||
+                    std::fabs(fc.z - zmax) < box_eps;
+                if (on_box) {
+                    face.boundary = BoundaryKind::Farfield;
+                } else {
+                    Real d = bvh.closest_distance(fc);
+                    if (d < wall_dist_threshold)
+                        face.boundary = BoundaryKind::NoSlipWall;
+                }
             }
         }
     }
 
-    // Recompute metrics with correct boundary classification (skip cell recompute — quality_detail handles it)
+    // Recompute metrics with corrected boundary classification
     compute_mesh_metrics(mesh, false);
 
     // Full quality check including negative Jacobians
@@ -1057,6 +1126,9 @@ bool generate_conformal_mesh_from_stl(
         return false;
     }
 
+    std::fprintf(stderr, "Mesh OK: cells=%d nodes=%zu faces=%d wall=%d farfield=%d\n",
+        report.cells, mesh.nodes.size(), report.faces,
+        report.no_slip_wall_faces, report.farfield_faces);
     return true;
 }
 

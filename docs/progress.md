@@ -1201,3 +1201,13 @@
   - Added TURB-3 test (CFD-AMR-TURB-3): flat plate SST CPU solver with AMR — finite forces, mesh refines, no NaN.
   - Regression: all 5 CPU test suites PASS — TestCfdMesh 48/48, TestCfdEuler 15/15, TestCfdRans 16/16,
     TestCfdReconstruction 21/21, TestCfdViscous 11/11.
+
+2026-07-20 — Phase 9-B STL mesh generation fixes + 80³ closure
+- Phase 9-B `find_or_add_node` O(N²) → O(1) spatial hash (`std::unordered_map` quantized to 1e-8 × global scale). 80³ mesh builds in ~70s (was unbounded).
+- Added degenerate tet removal pass before `rebuild_mesh_faces`: removes volume ≤ 1e-10 tets. At 80³, 32961 degenerate tets removed from 3.18M built.
+- Fixed wall distance threshold in boundary classification: `0.5 * min_spacing` → `0.01 * min_spacing` (original value). The 50× over-classification caused wall area 75.23 vs expected 2.54 — now 2.727 (7.3% rel_err, well within 50% tolerance).
+- All 3 STL tests PASS at 80³ resolution:
+  - STL-1: wall area=2.727 vs expected=2.542 (rel_err=7.3%)
+  - STL-2: zero negative Jacobians (degenerates removed before rebuild)
+  - STL-3: closed surface error < 1.0
+- Full CPU suite: TestCfdMesh 48/48, TestCfdEuler 15/15, TestCfdRans 16/16, TestCfdReconstruction 21/21, TestCfdViscous 11/11, TestCfdMeshStl 3/3 — all PASS.

@@ -786,7 +786,7 @@ Gate:
 
 Goal: replace the structured-cube-embedding hack in `generate_aero_table` with a body-fitted volume mesh generated directly from the STL surface. Enable production-grade CFD on arbitrary geometries without external mesh tools.
 
-> **Status**: Core pipeline complete (STL parser, BVH, SDF grid, hex-cull, clip_tet, CfdMesh builder, wall classification). 3/6 tests passing. See audit report in ISSUES.md for deferred fixes. 9-B.4 (prism BL) and 9-B.5 (aero_table integration) not started.
+> **Status**: Core pipeline complete, all 3 STL mesh quality tests passing at 80³ resolution (wall area within 7.3%, zero negative Jacobians, closed surface error < 1.0). Degenerate-tet removal and O(N) spatial hash node dedup implemented. 9-B.4 (prism BL) and 9-B.5 (aero_table integration) not started.
 
 ### 9-B.1 STL surface parsing & signed-distance field
 
