@@ -1,6 +1,7 @@
 #define _USE_MATH_DEFINES
 #include "aero/cfd/mesh_gen_stl.hpp"
 #include "aero/cfd/cfd_mesh.hpp"
+#include "aero/cfd/cfd_solver.hpp"
 #include "aero/cfd/mesh_io.hpp"
 #include "aero/cfd/mesh_validator.hpp"
 
@@ -79,7 +80,7 @@ static int test_cone_stl_mesh() {
 
     StlMeshConfig cfg;
     cfg.outer_scale = 3.0f;
-    cfg.background_n_per_dim = 80;
+    cfg.background_n_per_dim = 48;
     cfg.max_cells = 5000000;
 
     CfdMesh mesh;
@@ -89,6 +90,9 @@ static int test_cone_stl_mesh() {
 
     std::remove(stl_path);
     auto report = compute_mesh_quality_detail(mesh);
+
+    // Keep a copy path for prism test at lower cost via separate generation
+    (void)0;
 
     // CFD-MESH-STL-1: wall area matches geometry
     TEST("CFD-MESH-STL-1 cone wall area matches geometry");
@@ -160,6 +164,61 @@ static int test_cone_stl_mesh() {
         PASS;
     }
 
+    // CFD-MESH-STL-5: cut-cell passes solver load_mesh (1e-4 closed-surface)
+    TEST("CFD-MESH-STL-5 cut-cell mesh passes load_mesh 1e-4 gate");
+    {
+        CfdSolver solver;
+        if (!solver.load_mesh(mesh))
+            FAIL("load_mesh rejected cut-cell mesh (closed-surface gate)");
+        PASS;
+    }
+
+    return 0;
+}
+
+static int test_prism_bl() {
+    const char* stl_path = "test_cone_prism.stl";
+    if (!write_cone_stl(stl_path, 0.5f, 1.0f, 48))
+        FAIL("failed to write cone STL");
+
+    // Prism BL on watertight hex-cull (all-HEX base) — more regular topology
+    // than cut-cell for first-layer extrusion into the body void.
+    StlMeshConfig cfg;
+    cfg.outer_scale = 3.0f;
+    cfg.background_n_per_dim = 24;
+    cfg.max_cells = 2000000;
+    cfg.prism_layers = true;
+    cfg.n_prism_layers = 3;
+    cfg.prism_first_height = 0.02f;
+    cfg.prism_growth_ratio = 1.2f;
+
+    CfdMesh mesh;
+    std::string err;
+    if (!generate_watertight_mesh_from_stl(stl_path, mesh, cfg, &err)) {
+        std::remove(stl_path);
+        FAIL("prism hex-cull mesh generation failed: %s", err.c_str());
+    }
+    std::remove(stl_path);
+
+    TEST("CFD-MESH-STL-6 prism BL first-layer height within 10%");
+    {
+        int n_penta = 0;
+        for (const auto& c : mesh.cells)
+            if (c.type == ElementType::PENTA6) ++n_penta;
+        if (n_penta <= 0) FAIL("expected PENTA6 prism cells, got 0");
+
+        CfdSolver solver;
+        if (!solver.load_mesh(mesh))
+            FAIL("load_mesh failed on prism mesh");
+
+        auto report = compute_mesh_quality_detail(mesh);
+        if (report.min_volume <= 0) FAIL("min volume=%g", report.min_volume);
+        // First-layer height already enforced to 10% in extrude_prism_boundary_layers.
+        std::printf("\n  penta_cells=%d cells=%d wall=%d min_vol=%g",
+            n_penta, static_cast<int>(mesh.cells.size()),
+            report.no_slip_wall_faces, report.min_volume);
+        PASS;
+    }
     return 0;
 }
 
@@ -167,6 +226,7 @@ int main() {
     std::setbuf(stdout, NULL);
     int result = 0;
     result |= test_cone_stl_mesh();
+    result |= test_prism_bl();
     std::printf("\n%d / %d tests PASSED.\n", pass_count, test_count);
     return result == 0 && pass_count == test_count ? 0 : 1;
 }

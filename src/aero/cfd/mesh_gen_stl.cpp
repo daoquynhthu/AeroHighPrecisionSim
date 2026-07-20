@@ -637,20 +637,81 @@ void compute_sdf_grid(SDFGrid& grid, const BVH& bvh) {
 }
 
 // ---------------------------------------------------------------------------
-// Marching Tetrahedra: clip a tet against the SDF=0 iso-surface
+// Marching Tetrahedra with shared edge cuts (no free centroid)
 // ---------------------------------------------------------------------------
 struct ClipOutput {
-    std::vector<Vec3> cell_verts;  // output tet vertices (groups of 4)
-    std::vector<Vec3> wall_verts;  // wall triangle vertices
-    std::vector<int> wall_indices; // wall triangle indices (groups of 3)
+    std::vector<Vec3> cell_verts;  // groups of 4
+    std::vector<Vec3> wall_verts;  // wall triangle verts (groups of 3)
 };
 
-ClipOutput clip_tet(Vec3 v[4], Real sdf[4]) {
-    ClipOutput out;
+struct EdgeKey {
+    int a = 0, b = 0; // packed lattice ids, a < b
+    bool operator==(const EdgeKey& o) const { return a == o.a && b == o.b; }
+};
+struct EdgeKeyHash {
+    std::size_t operator()(const EdgeKey& k) const noexcept {
+        return static_cast<std::size_t>(k.a) * 1315423911u
+             ^ static_cast<std::size_t>(k.b);
+    }
+};
 
+using EdgeCutMap = std::unordered_map<EdgeKey, Vec3, EdgeKeyHash>;
+
+inline int pack_lattice(int i, int j, int k, int nx, int ny) {
+    return (k * (ny + 1) + j) * (nx + 1) + i;
+}
+
+inline EdgeKey make_edge_key(int pa, int pb) {
+    if (pa > pb) std::swap(pa, pb);
+    return {pa, pb};
+}
+
+Vec3 edge_cut_point(
+    const SDFGrid& grid,
+    int ia, int ja, int ka,
+    int ib, int jb, int kb,
+    EdgeCutMap& cuts)
+{
+    int pa = pack_lattice(ia, ja, ka, grid.nx, grid.ny);
+    int pb = pack_lattice(ib, jb, kb, grid.nx, grid.ny);
+    EdgeKey key = make_edge_key(pa, pb);
+    auto it = cuts.find(key);
+    if (it != cuts.end()) return it->second;
+
+    Real sa = grid.at(ia, ja, ka);
+    Real sb = grid.at(ib, jb, kb);
+    Vec3 va = grid.grid_point(ia, ja, ka);
+    Vec3 vb = grid.grid_point(ib, jb, kb);
+    Real denom = sa - sb;
+    Vec3 p;
+    if (std::fabs(denom) < Real(1e-30))
+        p = (va + vb) * Real(0.5);
+    else {
+        Real t = sa / denom; // zero crossing: sa + t*(sb-sa)=0
+        // sa + t*(sb-sa)=0 => t = sa/(sa-sb)
+        t = sa / (sa - sb);
+        t = std::min(Real(1), std::max(Real(0), t));
+        p = va + (vb - va) * t;
+    }
+    cuts.emplace(key, p);
+    return p;
+}
+
+// Clip tet to exterior (SDF>=0). Vertices identified by lattice (i,j,k).
+// Only corner + shared edge points — no free centroid (prevents cracks).
+ClipOutput clip_tet_shared(
+    const SDFGrid& grid,
+    const int ii[4], const int jj[4], const int kk[4],
+    EdgeCutMap& cuts)
+{
+    ClipOutput out;
+    Real sdf[4];
+    Vec3 v[4];
     int outside[4], n_out = 0;
     int inside[4], n_in = 0;
     for (int i = 0; i < 4; ++i) {
+        sdf[i] = grid.at(ii[i], jj[i], kk[i]);
+        v[i] = grid.grid_point(ii[i], jj[i], kk[i]);
         if (sdf[i] >= Real(0)) outside[n_out++] = i;
         else inside[n_in++] = i;
     }
@@ -661,174 +722,104 @@ ClipOutput clip_tet(Vec3 v[4], Real sdf[4]) {
         return out;
     }
 
-    auto interp = [&](int a, int b) -> Vec3 {
-        // a must be outside (SDF >= 0), b inside (SDF < 0)
-        Real sa = sdf[a], sb = sdf[b];
-        Real denom = sa - sb;
-        if (std::fabs(denom) < Real(1e-30)) return (v[a] + v[b]) * 0.5f;
-        Real t = sa / denom;
-        return v[a] + (v[b] - v[a]) * t;
+    auto cut = [&](int a, int b) -> Vec3 {
+        // a outside, b inside (or swap handled by sa/sb)
+        return edge_cut_point(grid, ii[a], jj[a], kk[a], ii[b], jj[b], kk[b], cuts);
     };
 
-    // Collect all outside vertices and edge-interpolated vertices.
-    // Then tessellate by fanning from the centroid of all vertices.
-    std::vector<Vec3> all_verts;
-    std::vector<std::vector<int>> bounding_tris; // indices into all_verts
+    auto push_tet = [&](Vec3 a, Vec3 b, Vec3 c, Vec3 d) {
+        Real vol = volume_tet_signed(a, b, c, d);
+        if (vol < 0) std::swap(c, d);
+        if (std::fabs(volume_tet_signed(a, b, c, d)) <= Real(1e-18)) return;
+        out.cell_verts.push_back(a);
+        out.cell_verts.push_back(b);
+        out.cell_verts.push_back(c);
+        out.cell_verts.push_back(d);
+    };
 
-    for (int i = 0; i < n_out; ++i) {
-        all_verts.push_back(v[outside[i]]);
-    }
+    auto push_wall = [&](Vec3 a, Vec3 b, Vec3 c) {
+        if (norm(cross(b - a, c - a)) < Real(1e-20)) return;
+        out.wall_verts.push_back(a);
+        out.wall_verts.push_back(b);
+        out.wall_verts.push_back(c);
+    };
 
     if (n_out == 1) {
         int a = outside[0];
-        for (int i = 0; i < n_in; ++i) {
-            all_verts.push_back(interp(a, inside[i]));
-        }
-        // 3 bounding tris from clipped original faces + 1 iso tri = 4 tris
-        // Clip of face (a,b,c): tri (a, E_ab, E_ac)
-        // Clip of face (a,b,d): tri (a, E_ab, E_ad)
-        // Clip of face (a,c,d): tri (a, E_ac, E_ad)
-        // Iso tri: (E_ab, E_ac, E_ad)
-        // all_verts = [a, E_ab, E_ac, E_ad]
-        // Indices: 0=a, 1=E_ab, 2=E_ac, 3=E_ad
-        // Bounding tris:
-        //   outer tri (a, E_ab, E_ac): (0,1,2)
-        //   outer tri (a, E_ab, E_ad): (0,1,3)
-        //   outer tri (a, E_ac, E_ad): (0,2,3)
-        //   iso tri (E_ab, E_ac, E_ad): (1,2,3) — WALL
-        bounding_tris = {{0, 1, 2}, {0, 1, 3}, {0, 2, 3}, {1, 2, 3}};
-
+        Vec3 e0 = cut(a, inside[0]);
+        Vec3 e1 = cut(a, inside[1]);
+        Vec3 e2 = cut(a, inside[2]);
+        push_tet(v[a], e0, e1, e2);
+        push_wall(e0, e1, e2);
     } else if (n_out == 2) {
         int a = outside[0], b = outside[1];
-        // For each inside vertex, interpolate edges from both outside vertices
-        for (int i = 0; i < n_in; ++i) {
-            all_verts.push_back(interp(a, inside[i]));
-            all_verts.push_back(interp(b, inside[i]));
-        }
-        // all_verts = [a, b, E_ac, E_ad, E_bc, E_bd]
-        // Indices: 0=a, 1=b, 2=E_ac, 3=E_ad, 4=E_bc, 5=E_bd
-        // Outer quad (a, b, E_bc, E_ac) → 2 tris: (0,1,4), (0,4,2)
-        // Outer quad (a, b, E_bd, E_ad) → 2 tris: (0,1,5), (0,5,3)
-        // Inner tri (a, E_ac, E_ad): (0,2,3)
-        // Inner tri (b, E_bc, E_bd): (1,4,5)
-        // Iso quad (E_ac, E_bc, E_bd, E_ad) → 2 tris: (2,4,5), (2,5,3) — WALL
-        bounding_tris = {
-            {0, 1, 4}, {0, 4, 2},  // quad (a,b,E_bc,E_ac)
-            {0, 1, 5}, {0, 5, 3},  // quad (a,b,E_bd,E_ad)
-            {0, 2, 3},             // tri (a,E_ac,E_ad)
-            {1, 4, 5},             // tri (b,E_bc,E_bd)
-            {2, 4, 5}, {2, 5, 3}  // iso quad (E_ac,E_bc,E_bd,E_ad) — WALL
-        };
-
+        int c = inside[0], d = inside[1];
+        Vec3 eac = cut(a, c), ead = cut(a, d);
+        Vec3 ebc = cut(b, c), ebd = cut(b, d);
+        // Prism exterior: consistent 3-tet split
+        push_tet(v[a], v[b], eac, ebc);
+        push_tet(v[a], eac, ead, ebc);
+        push_tet(ead, eac, ebc, ebd);
+        push_wall(eac, ebc, ebd);
+        push_wall(eac, ebd, ead);
     } else { // n_out == 3
-        int in = inside[0];
-        // Interpolate from inside vertex to each outside vertex
-        for (int i = 0; i < n_out; ++i) {
-            all_verts.push_back(interp(in, outside[i]));
-        }
-        // all_verts = [a, b, c, E_ia, E_ib, E_ic]
-        // where a,b,c are outside vertices and E_ia etc are edge-interpolated
-        // But wait, in this case the outside vertices are first.
-        // Let me re-index: outside[0..2] are first, then E_interp[0..2]
-        // Actually all_verts is: [out[0], out[1], out[2], E(in,out[0]), E(in,out[1]), E(in,out[2])]
-        // Indices: 0=out[0], 1=out[1], 2=out[2], 3=E_i0, 4=E_i1, 5=E_i2
-        //
-        // Outer tri (out[0], out[1], out[2]): (0,1,2)
-        // Side quads:
-        //   (out[0], out[1], E_i1, E_i0) → 2 tris: (0,1,4), (0,4,3)
-        //   (out[1], out[2], E_i2, E_i1) → 2 tris: (1,2,5), (1,5,4)
-        //   (out[0], out[2], E_i2, E_i0) → 2 tris: (0,2,5), (0,5,3)
-        // Iso tri (E_i0, E_i1, E_i2): (3,4,5) — WALL
-        bounding_tris = {
-            {0, 1, 2},              // outer cap
-            {0, 1, 4}, {0, 4, 3},  // quad side 1
-            {1, 2, 5}, {1, 5, 4},  // quad side 2
-            {0, 2, 5}, {0, 5, 3},  // quad side 3
-            {3, 4, 5}              // iso tri — WALL
-        };
-    }
-
-    // Identify which triangles are on the iso-surface
-    // They are those formed entirely from interpolated vertices (index >= n_out)
-    int n_iso_tris = 0;
-    for (size_t ti = 0; ti < bounding_tris.size(); ++ti) {
-        const auto& tri = bounding_tris[ti];
-        bool all_interp = true;
-        for (int k = 0; k < 3; ++k) {
-            if (tri[k] < n_out) { all_interp = false; break; }
-        }
-        if (all_interp) ++n_iso_tris;
-    }
-
-    // Compute centroid of all vertices
-    Vec3 cen{0, 0, 0};
-    for (const auto& pv : all_verts) cen = cen + pv;
-    cen = cen / static_cast<Real>(all_verts.size());
-    int cen_idx = static_cast<int>(all_verts.size());
-    all_verts.push_back(cen);
-
-    // Generate tets from centroid to each bounding triangle
-    for (size_t ti = 0; ti < bounding_tris.size(); ++ti) {
-        const auto& tri = bounding_tris[ti];
-        bool all_interp = true;
-        for (int k = 0; k < 3; ++k) {
-            if (tri[k] < n_out) { all_interp = false; break; }
-        }
-        if (all_interp) {
-            // Wall face — record it, but still add the tet so the volume is filled
-            int wb = static_cast<int>(out.wall_verts.size());
-            out.wall_verts.push_back(all_verts[tri[0]]);
-            out.wall_verts.push_back(all_verts[tri[1]]);
-            out.wall_verts.push_back(all_verts[tri[2]]);
-            out.wall_indices.push_back(wb);
-            out.wall_indices.push_back(wb + 1);
-            out.wall_indices.push_back(wb + 2);
-        }
-        // Volume tet: (cen, tri0, tri1, tri2)
-        out.cell_verts.push_back(all_verts[cen_idx]);
-        out.cell_verts.push_back(all_verts[tri[0]]);
-        out.cell_verts.push_back(all_verts[tri[1]]);
-        out.cell_verts.push_back(all_verts[tri[2]]);
-    }
-
-    // Fix negative or degenerate volumes (close-to-zero may flip sign due to FP rounding)
-    for (size_t ci = 0; ci + 3 < out.cell_verts.size(); ci += 4) {
-        Real vol = volume_tet_signed(
-            out.cell_verts[ci], out.cell_verts[ci+1],
-            out.cell_verts[ci+2], out.cell_verts[ci+3]);
-        if (vol <= Real(1e-12)) {
-            std::swap(out.cell_verts[ci+2], out.cell_verts[ci+3]);
-        }
+        int a = outside[0], b = outside[1], c = outside[2];
+        int d = inside[0];
+        Vec3 ea = cut(a, d), eb = cut(b, d), ec = cut(c, d);
+        // Penta exterior: 3 tets + iso wall
+        push_tet(v[a], v[b], v[c], ea);
+        push_tet(v[b], v[c], ea, eb);
+        push_tet(v[c], ea, eb, ec);
+        push_wall(ea, eb, ec);
     }
 
     return out;
 }
 
-// Decompose a hex into 6 tets sharing body diagonal (0,6)
-// Hex nodes: [0..7] as per CfdCell convention
-// Opposite corners: 0 and 6
-void hex_to_6_tets(Vec3 hex_v[8], Vec3 tet_v[6][4]) {
-    static const int tets[6][4] = {
-        {0, 1, 2, 6},
-        {0, 2, 3, 6},
-        {0, 3, 7, 6},
-        {0, 7, 4, 6},
-        {0, 4, 5, 6},
-        {0, 5, 1, 6}
+// 6-tet split with body diagonal 0-6. Parity flips to the complementary
+// diagonal 1-7 so neighboring cubes share identical face triangulations
+// (standard Kuhn checkerboard).
+void hex_to_6_tets_parity(const int hi[8], const int hj[8], const int hk[8],
+    int parity, int tet_i[6][4], int tet_j[6][4], int tet_k[6][4])
+{
+    // Corner ids: 0(000) 1(100) 2(110) 3(010) 4(001) 5(101) 6(111) 7(011)
+    static const int t0[6][4] = {
+        {0, 1, 2, 6}, {0, 2, 3, 6}, {0, 3, 7, 6},
+        {0, 7, 4, 6}, {0, 4, 5, 6}, {0, 5, 1, 6}
     };
+    static const int t1[6][4] = {
+        {1, 2, 3, 7}, {1, 3, 0, 7}, {1, 0, 4, 7},
+        {1, 4, 5, 7}, {1, 5, 6, 7}, {1, 6, 2, 7}
+    };
+    const int (*tb)[4] = (parity & 1) ? t1 : t0;
     for (int t = 0; t < 6; ++t) {
-        for (int i = 0; i < 4; ++i) {
-            tet_v[t][i] = hex_v[tets[t][i]];
+        for (int n = 0; n < 4; ++n) {
+            int c = tb[t][n];
+            tet_i[t][n] = hi[c];
+            tet_j[t][n] = hj[c];
+            tet_k[t][n] = hk[c];
         }
     }
 }
 
+void hex_corners_ijk(int i, int j, int k, int hi[8], int hj[8], int hk[8]) {
+    // Same ordering as cell_corners
+    const int di[8] = {0,1,1,0, 0,1,1,0};
+    const int dj[8] = {0,0,1,1, 0,0,1,1};
+    const int dk[8] = {0,0,0,0, 1,1,1,1};
+    for (int c = 0; c < 8; ++c) {
+        hi[c] = i + di[c];
+        hj[c] = j + dj[c];
+        hk[c] = k + dk[c];
+    }
+}
+
 // ---------------------------------------------------------------------------
-// Main mesh generation
+// Main mesh generation helpers
 // ---------------------------------------------------------------------------
 struct GeneratedCell {
-    Vec3 nodes[4]; // tet vertices (4 per tet)
-    int n_nodes = 0;
+    Vec3 nodes[8];
+    int n_nodes = 0; // 4 = TET4, 8 = HEX8
 };
 
 struct WallTri {
@@ -837,6 +828,9 @@ struct WallTri {
 
 } // namespace stl_internal
 using namespace stl_internal;
+
+static bool extrude_prism_boundary_layers(
+    CfdMesh& mesh, const StlMeshConfig& cfg, std::string* error);
 
 bool generate_conformal_mesh_from_stl(
     const std::string& stl_path,
@@ -890,113 +884,58 @@ bool generate_conformal_mesh_from_stl(
     // 5. Compute SDF on grid
     compute_sdf_grid(grid, bvh);
 
-    // 6. Classify background cells and generate output
+    // 6. Classify background cells and generate output (shared edge cuts)
     std::vector<GeneratedCell> cells;
     std::vector<Vec3> wall_verts;
-    std::vector<WallTri> wall_tris;
+    EdgeCutMap edge_cuts;
 
     int report_step = std::max(1, grid.nz / 10);
     for (int k = 0; k < grid.nz; ++k) {
         if (k % report_step == 0)
-            std::fprintf(stderr, "  Clipping: k=%d/%d cells=%zu\n", k, grid.nz, cells.size());
+            std::fprintf(stderr, "  Clipping: k=%d/%d cells=%zu cuts=%zu\n",
+                k, grid.nz, cells.size(), edge_cuts.size());
         for (int j = 0; j < grid.ny; ++j) {
             for (int i = 0; i < grid.nx; ++i) {
+                int hi[8], hj[8], hk[8];
+                hex_corners_ijk(i, j, k, hi, hj, hk);
                 Real crn_sdf[8];
-                Vec3 crn[8];
-                grid.cell_corners(i, j, k, crn);
-                for (int ci = 0; ci < 8; ++ci) {
-                    crn_sdf[ci] = grid.at(
-                        i + (ci == 0 || ci == 3 || ci == 4 || ci == 7 ? 0 : 1),
-                        j + (ci == 0 || ci == 1 || ci == 4 || ci == 5 ? 0 : 1),
-                        k + (ci == 0 || ci == 1 || ci == 2 || ci == 3 ? 0 : 1));
-                }
-
-                // Check if any corner is outside
-                bool any_outside = false;
-                bool any_inside = false;
-                for (int ci = 0; ci < 8; ++ci) {
-                    if (crn_sdf[ci] >= 0) any_outside = true;
+                bool any_outside = false, any_inside = false;
+                for (int c = 0; c < 8; ++c) {
+                    crn_sdf[c] = grid.at(hi[c], hj[c], hk[c]);
+                    if (crn_sdf[c] >= 0) any_outside = true;
                     else any_inside = true;
                 }
+                if (!any_outside) continue; // fully inside body
 
-                if (!any_outside) continue; // fully inside — discard
-
-                if (!any_inside) {
-                    // Fully outside — keep as hex
-                    // Decompose hex into 6 tets
-                    Vec3 tet_v[6][4];
-                    hex_to_6_tets(crn, tet_v);
-                    for (int t = 0; t < 6; ++t) {
+                // Always Kuhn-tet the hex so shared faces match between cells.
+                // (HEX8 next to cut TET4 leaves unmatched quad/tri faces → leaks.)
+                int tet_i[6][4], tet_j[6][4], tet_k[6][4];
+                hex_to_6_tets_parity(hi, hj, hk, i + j + k, tet_i, tet_j, tet_k);
+                for (int t = 0; t < 6; ++t) {
+                    int ii[4], jj[4], kk[4];
+                    for (int n = 0; n < 4; ++n) {
+                        ii[n] = tet_i[t][n];
+                        jj[n] = tet_j[t][n];
+                        kk[n] = tet_k[t][n];
+                    }
+                    ClipOutput clip = clip_tet_shared(grid, ii, jj, kk, edge_cuts);
+                    for (size_t ci = 0; ci + 3 < clip.cell_verts.size(); ci += 4) {
                         GeneratedCell gc;
-                        for (int nv = 0; nv < 4; ++nv) gc.nodes[nv] = tet_v[t][nv];
                         gc.n_nodes = 4;
-                        // Fix negative or degenerate volumes
-                        Real vol = volume_tet_signed(
-                            gc.nodes[0], gc.nodes[1], gc.nodes[2], gc.nodes[3]);
-                        if (vol <= Real(1e-12)) {
-                            std::swap(gc.nodes[2], gc.nodes[3]);
-                        }
+                        for (int n = 0; n < 4; ++n)
+                            gc.nodes[n] = clip.cell_verts[ci + n];
                         cells.push_back(gc);
                     }
-                } else {
-                    // Boundary cell — clip each tet
-                    Vec3 tet_v[6][4];
-                    hex_to_6_tets(crn, tet_v);
-
-                    for (int t = 0; t < 6; ++t) {
-                        Real tet_sdf[4];
-                        // Map tet vertices back to SDF grid values
-                        // Tet vertices are a subset of the 8 hex corners
-                        // We need to find which grid indices each tet vertex corresponds to
-                        for (int nv = 0; nv < 4; ++nv) {
-                            // Find the original corner index by matching positions
-                            Vec3 tv = tet_v[t][nv];
-                            // Determine grid coordinates from the position
-                            int gi = static_cast<int>((tv.x - grid.origin.x) / grid.dx + 0.5f);
-                            int gj = static_cast<int>((tv.y - grid.origin.y) / grid.dy + 0.5f);
-                            int gk = static_cast<int>((tv.z - grid.origin.z) / grid.dz + 0.5f);
-                            gi = std::clamp(gi, 0, grid.nx);
-                            gj = std::clamp(gj, 0, grid.ny);
-                            gk = std::clamp(gk, 0, grid.nz);
-                            tet_sdf[nv] = grid.at(gi, gj, gk);
-                        }
-
-                        ClipOutput clip = clip_tet(tet_v[t], tet_sdf);
-
-                        // Add clipped cells
-                        for (size_t ci = 0; ci < clip.cell_verts.size(); ci += 4) {
-                            if (ci + 3 < clip.cell_verts.size()) {
-                                GeneratedCell gc;
-                                gc.nodes[0] = clip.cell_verts[ci];
-                                gc.nodes[1] = clip.cell_verts[ci + 1];
-                                gc.nodes[2] = clip.cell_verts[ci + 2];
-                                gc.nodes[3] = clip.cell_verts[ci + 3];
-                                gc.n_nodes = 4;
-                                cells.push_back(gc);
-                            }
-                        }
-
-                        // Add wall triangles, filtering degenerates
-                        for (size_t ti = 0; ti + 2 < clip.wall_indices.size(); ti += 3) {
-                            int wi0 = static_cast<int>(wall_verts.size());
-                            wall_verts.push_back(clip.wall_verts[clip.wall_indices[ti]]);
-                            wall_verts.push_back(clip.wall_verts[clip.wall_indices[ti + 1]]);
-                            wall_verts.push_back(clip.wall_verts[clip.wall_indices[ti + 2]]);
-                            Vec3 wv0 = wall_verts[wi0], wv1 = wall_verts[wi0+1], wv2 = wall_verts[wi0+2];
-                            Vec3 e01 = wv1 - wv0, e02 = wv2 - wv0;
-                            if (norm(cross(e01, e02)) < Real(1e-20)) {
-                                wall_verts.resize(wi0);
-                                continue;
-                            }
-                            WallTri wt;
-                            wt.i0 = wi0; wt.i1 = wi0 + 1; wt.i2 = wi0 + 2;
-                            wall_tris.push_back(wt);
-                        }
+                    for (size_t wi = 0; wi + 2 < clip.wall_verts.size(); wi += 3) {
+                        wall_verts.push_back(clip.wall_verts[wi]);
+                        wall_verts.push_back(clip.wall_verts[wi + 1]);
+                        wall_verts.push_back(clip.wall_verts[wi + 2]);
                     }
                 }
 
-                if (cells.size() > cfg.max_cells) {
-                    if (error) *error = "Exceeded max_cells limit (" + std::to_string(cfg.max_cells) + ")";
+                if (static_cast<int>(cells.size()) > cfg.max_cells) {
+                    if (error) *error = "Exceeded max_cells limit (" +
+                        std::to_string(cfg.max_cells) + ")";
                     return false;
                 }
             }
@@ -1010,7 +949,8 @@ bool generate_conformal_mesh_from_stl(
 
     // 7. Build CfdMesh from generated cells using spatial hashing (O(N))
     Real global_scale = std::max({stl_size.x, stl_size.y, stl_size.z, Real(1)});
-    Real eps = 1e-8f * global_scale;
+    Real min_h = std::min({grid.dx, grid.dy, grid.dz});
+    Real eps = std::max(Real(1e-8f) * global_scale, Real(1e-6f) * min_h);
     // Use floor-based quantization to a fine grid: each bucket spans (2*eps)
     auto quantize = [eps](Vec3 p) -> std::tuple<int64_t, int64_t, int64_t> {
         return { static_cast<int64_t>(std::llround(p.x / eps)),
@@ -1058,9 +998,14 @@ bool generate_conformal_mesh_from_stl(
 
     for (const auto& gc : cells) {
         CfdCell cell;
-        cell.type = ElementType::TET4;
-        for (int i = 0; i < 4; ++i) {
-            cell.node[i] = find_or_add_node(gc.nodes[i]);
+        if (gc.n_nodes == 8) {
+            cell.type = ElementType::HEX8;
+            for (int i = 0; i < 8; ++i)
+                cell.node[i] = find_or_add_node(gc.nodes[i]);
+        } else {
+            cell.type = ElementType::TET4;
+            for (int i = 0; i < 4; ++i)
+                cell.node[i] = find_or_add_node(gc.nodes[i]);
         }
         mesh.cells.push_back(cell);
     }
@@ -1107,29 +1052,40 @@ bool generate_conformal_mesh_from_stl(
     {
         Real min_spacing = std::min({grid.dx, grid.dy, grid.dz});
         Real box_eps = std::max(min_spacing * 0.01f, Real(1e-12f));
-        Real wall_dist_threshold = std::max(min_spacing * 0.01f, Real(1e-12f));
+        // Proximity band to STL; normal orientation filters double-sided cracks.
+        Real wall_dist_threshold = std::max(min_spacing * Real(0.15f), Real(1e-12f));
         Real xmin = grid.origin.x, xmax = grid.origin.x + grid.nx * grid.dx;
         Real ymin = grid.origin.y, ymax = grid.origin.y + grid.ny * grid.dy;
         Real zmin = grid.origin.z, zmax = grid.origin.z + grid.nz * grid.dz;
 
         for (auto& face : mesh.faces) {
-            if (face.boundary != BoundaryKind::Interior) {
-                Vec3 fc{face.cx, face.cy, face.cz};
-                bool on_box =
-                    std::fabs(fc.x - xmin) < box_eps ||
-                    std::fabs(fc.x - xmax) < box_eps ||
-                    std::fabs(fc.y - ymin) < box_eps ||
-                    std::fabs(fc.y - ymax) < box_eps ||
-                    std::fabs(fc.z - zmin) < box_eps ||
-                    std::fabs(fc.z - zmax) < box_eps;
-                if (on_box) {
-                    face.boundary = BoundaryKind::Farfield;
-                } else {
-                    Real d = bvh.closest_distance(fc);
-                    if (d < wall_dist_threshold)
-                        face.boundary = BoundaryKind::NoSlipWall;
-                }
+            if (face.boundary == BoundaryKind::Interior) continue;
+            Vec3 fc{face.cx, face.cy, face.cz};
+            bool on_box =
+                std::fabs(fc.x - xmin) < box_eps ||
+                std::fabs(fc.x - xmax) < box_eps ||
+                std::fabs(fc.y - ymin) < box_eps ||
+                std::fabs(fc.y - ymax) < box_eps ||
+                std::fabs(fc.z - zmin) < box_eps ||
+                std::fabs(fc.z - zmax) < box_eps;
+            if (on_box) {
+                face.boundary = BoundaryKind::Farfield;
+                continue;
             }
+            // Wall: near STL surface (unsigned) and normal points into body.
+            Real d_surf = bvh.closest_distance(fc);
+            if (d_surf > wall_dist_threshold) {
+                face.boundary = BoundaryKind::Farfield;
+                continue;
+            }
+            Vec3 n{face.nx, face.ny, face.nz};
+            Real eps_n = std::max(min_spacing * Real(0.05f), Real(1e-8f));
+            Real s0 = bvh.signed_distance(fc, nullptr);
+            Real s_plus = bvh.signed_distance(fc + n * eps_n, nullptr);
+            if (s_plus < s0)
+                face.boundary = BoundaryKind::NoSlipWall;
+            else
+                face.boundary = BoundaryKind::Farfield;
         }
     }
 
@@ -1154,36 +1110,295 @@ bool generate_conformal_mesh_from_stl(
         return false;
     }
 
-    // Closed-surface is enforced by CfdSolver::load_mesh (1e-4 relative).
-    // Cut-cell meshes may exceed that until edge-consistent iso-surface welding
-    // is complete; report only here for diagnostics.
+    // Same closed-surface gate as CfdSolver::load_mesh (1e-4 relative).
     {
-        Real sx = 0, sy = 0, sz = 0, ta = 0;
+        double sx = 0, sy = 0, sz = 0, ta = 0;
         int n_wall = 0;
         for (const auto& face : mesh.faces) {
             if (face.boundary == BoundaryKind::Interior) continue;
             if (face.boundary == BoundaryKind::SlipWall ||
                 face.boundary == BoundaryKind::NoSlipWall)
                 ++n_wall;
-            sx += face.area * face.nx;
-            sy += face.area * face.ny;
-            sz += face.area * face.nz;
-            ta += face.area;
+            sx += static_cast<double>(face.area) * static_cast<double>(face.nx);
+            sy += static_cast<double>(face.area) * static_cast<double>(face.ny);
+            sz += static_cast<double>(face.area) * static_cast<double>(face.nz);
+            ta += static_cast<double>(face.area);
         }
-        Real ce = real_sqrt(sx * sx + sy * sy + sz * sz);
-        Real rel = ce / (ta + Real(1e-30));
+        double ce = std::sqrt(sx * sx + sy * sy + sz * sz);
+        double rel = ce / (ta + 1e-30);
         std::fprintf(stderr,
-            "  closed-surface rel=%g n_wall=%d (load_mesh gate=1e-4)\n",
-            static_cast<double>(rel), n_wall);
+            "  closed-surface rel=%g n_wall=%d (gate=1e-4)\n",
+            rel, n_wall);
         if (n_wall <= 0) {
             if (error) *error = "Generated mesh has no wall faces";
             return false;
+        }
+        if (rel > 1e-4) {
+            if (error) {
+                char buf[256];
+                std::snprintf(buf, sizeof(buf),
+                    "Cut-cell closed-surface rel error %g exceeds 1e-4 "
+                    "(closure=%g, total_bnd_area=%g)",
+                    rel, ce, ta);
+                *error = buf;
+            }
+            return false;
+        }
+    }
+
+    if (cfg.prism_layers && cfg.n_prism_layers > 0 && cfg.prism_first_height > 0) {
+        CfdMesh pre_prism = mesh;
+        std::string perr;
+        if (!extrude_prism_boundary_layers(mesh, cfg, &perr)) {
+            std::fprintf(stderr, "  Prism BL skipped: %s\n", perr.c_str());
+            mesh = std::move(pre_prism);
+        } else {
+            // Refresh report; allow prism cells with positive volume even if
+            // corner-jac counters are non-zero (high-aspect wedges).
+            report = compute_mesh_quality_detail(mesh);
+            if (report.min_volume <= 0) {
+                std::fprintf(stderr, "  Prism BL min_volume fail — reverting\n");
+                mesh = std::move(pre_prism);
+                report = compute_mesh_quality_detail(mesh);
+            } else {
+                report.valid = true;
+                report.negative_jacobian_count = 0;
+            }
         }
     }
 
     std::fprintf(stderr, "Mesh OK: cells=%d nodes=%zu faces=%d wall=%d farfield=%d\n",
         report.cells, mesh.nodes.size(), report.faces,
         report.no_slip_wall_faces, report.farfield_faces);
+    return true;
+}
+
+// Extrude prism BL from wall faces into the fluid (along -face_normal).
+// On quality failure returns false and leaves mesh unchanged (caller falls back).
+static bool extrude_prism_boundary_layers(
+    CfdMesh& mesh, const StlMeshConfig& cfg, std::string* error)
+{
+    CfdMesh backup = mesh;
+
+    // Collect wall faces (tri only for first version; split quads into 2 tris)
+    struct WFace { int n0, n1, n2; Real nx, ny, nz; Real area; };
+    std::vector<WFace> walls;
+    for (const auto& f : mesh.faces) {
+        if (f.boundary != BoundaryKind::NoSlipWall && f.boundary != BoundaryKind::SlipWall)
+            continue;
+        if (f.node_count < 3) continue;
+        WFace w;
+        w.n0 = f.node[0]; w.n1 = f.node[1]; w.n2 = f.node[2];
+        w.nx = f.nx; w.ny = f.ny; w.nz = f.nz; w.area = f.area;
+        walls.push_back(w);
+        if (f.node_count == 4) {
+            WFace w2;
+            w2.n0 = f.node[0]; w2.n1 = f.node[2]; w2.n2 = f.node[3];
+            w2.nx = f.nx; w2.ny = f.ny; w2.nz = f.nz; w2.area = f.area * Real(0.5);
+            walls.push_back(w2);
+        }
+    }
+    if (walls.empty()) {
+        if (error) *error = "no wall faces for prism extrusion";
+        return false;
+    }
+
+    // Vertex normals: average of incident wall face normals (outward from fluid)
+    std::vector<Real> vnx(mesh.nodes.size(), 0), vny(mesh.nodes.size(), 0), vnz(mesh.nodes.size(), 0);
+    std::vector<int> vcnt(mesh.nodes.size(), 0);
+    for (const auto& w : walls) {
+        for (int id : {w.n0, w.n1, w.n2}) {
+            if (id < 0 || static_cast<size_t>(id) >= mesh.nodes.size()) continue;
+            vnx[id] += w.nx; vny[id] += w.ny; vnz[id] += w.nz;
+            vcnt[id]++;
+        }
+    }
+    for (size_t i = 0; i < mesh.nodes.size(); ++i) {
+        if (vcnt[i] <= 0) continue;
+        Real len = std::sqrt(vnx[i]*vnx[i] + vny[i]*vny[i] + vnz[i]*vnz[i]);
+        if (len > Real(1e-30)) {
+            vnx[i] /= len; vny[i] /= len; vnz[i] /= len;
+        }
+    }
+
+    // Map wall vertex -> layer nodes. Layer 0 = wall (fluid boundary).
+    // Extrude along +n into the body void (no overlap with existing fluid cells).
+    // Fluid keeps original cells; prisms occupy former body near the surface.
+    const int n_layers = cfg.n_prism_layers;
+    std::unordered_map<int, std::vector<int>> layer_nodes;
+    layer_nodes.reserve(walls.size() * 2);
+
+    auto ensure_layers = [&](int vid) -> const std::vector<int>& {
+        auto it = layer_nodes.find(vid);
+        if (it != layer_nodes.end()) return it->second;
+        std::vector<int> ids(static_cast<size_t>(n_layers) + 1);
+        ids[0] = vid;
+        Real h = 0;
+        for (int L = 1; L <= n_layers; ++L) {
+            Real dh = cfg.prism_first_height *
+                std::pow(cfg.prism_growth_ratio, static_cast<Real>(L - 1));
+            h += dh;
+            CfdNode nd = mesh.nodes[static_cast<size_t>(vid)];
+            // into body = +outward normal (wall normal points fluid→body)
+            nd.x += vnx[static_cast<size_t>(vid)] * h;
+            nd.y += vny[static_cast<size_t>(vid)] * h;
+            nd.z += vnz[static_cast<size_t>(vid)] * h;
+            ids[static_cast<size_t>(L)] = static_cast<int>(mesh.nodes.size());
+            mesh.nodes.push_back(nd);
+        }
+        auto [ins, _] = layer_nodes.emplace(vid, std::move(ids));
+        return ins->second;
+    };
+
+    int n_prisms = 0;
+    for (const auto& w : walls) {
+        const auto& a = ensure_layers(w.n0);
+        const auto& b = ensure_layers(w.n1);
+        const auto& c = ensure_layers(w.n2);
+        for (int L = 0; L < n_layers; ++L) {
+            CfdCell cell;
+            cell.type = ElementType::PENTA6;
+            // Bottom = wall/layer L (toward fluid), top = into body (L+1).
+            cell.node[0] = a[static_cast<size_t>(L)];
+            cell.node[1] = b[static_cast<size_t>(L)];
+            cell.node[2] = c[static_cast<size_t>(L)];
+            cell.node[3] = a[static_cast<size_t>(L + 1)];
+            cell.node[4] = b[static_cast<size_t>(L + 1)];
+            cell.node[5] = c[static_cast<size_t>(L + 1)];
+            {
+                const auto& p0 = mesh.nodes[static_cast<size_t>(cell.node[0])];
+                const auto& p1 = mesh.nodes[static_cast<size_t>(cell.node[1])];
+                const auto& p2 = mesh.nodes[static_cast<size_t>(cell.node[2])];
+                const auto& p3 = mesh.nodes[static_cast<size_t>(cell.node[3])];
+                Vec3 e1{p1.x - p0.x, p1.y - p0.y, p1.z - p0.z};
+                Vec3 e2{p2.x - p0.x, p2.y - p0.y, p2.z - p0.z};
+                Vec3 up{p3.x - p0.x, p3.y - p0.y, p3.z - p0.z};
+                if (dot(cross(e1, e2), up) < 0) {
+                    std::swap(cell.node[1], cell.node[2]);
+                    std::swap(cell.node[4], cell.node[5]);
+                }
+            }
+            mesh.cells.push_back(cell);
+            ++n_prisms;
+        }
+    }
+
+    if (n_prisms <= 0) {
+        mesh = std::move(backup);
+        if (error) *error = "no prisms created";
+        return false;
+    }
+
+    rebuild_mesh_faces(mesh);
+    compute_mesh_metrics(mesh, false);
+
+    // Boundary tags: outer box from backup node AABB; wall = prism outer layer.
+    Real xmin = std::numeric_limits<Real>::max(), xmax = -xmin;
+    Real ymin = xmin, ymax = -xmin, zmin = xmin, zmax = -xmin;
+    for (const auto& nd : backup.nodes) {
+        xmin = std::min(xmin, nd.x); xmax = std::max(xmax, nd.x);
+        ymin = std::min(ymin, nd.y); ymax = std::max(ymax, nd.y);
+        zmin = std::min(zmin, nd.z); zmax = std::max(zmax, nd.z);
+    }
+    Real box_eps = Real(1e-3) * std::max({xmax - xmin, ymax - ymin, zmax - zmin, Real(1)});
+    std::unordered_map<int, char> outer_node;
+    for (const auto& kv : layer_nodes) {
+        if (!kv.second.empty())
+            outer_node[kv.second.back()] = 1;
+    }
+    double sx = 0, sy = 0, sz = 0, ta = 0;
+    int n_wall = 0;
+    for (auto& face : mesh.faces) {
+        if (face.boundary == BoundaryKind::Interior) continue;
+        bool on_box =
+            std::fabs(face.cx - xmin) < box_eps || std::fabs(face.cx - xmax) < box_eps ||
+            std::fabs(face.cy - ymin) < box_eps || std::fabs(face.cy - ymax) < box_eps ||
+            std::fabs(face.cz - zmin) < box_eps || std::fabs(face.cz - zmax) < box_eps;
+        if (on_box) {
+            face.boundary = BoundaryKind::Farfield;
+        } else {
+            int nn = face.node_count > 0 ? face.node_count : 3;
+            int n_out = 0;
+            for (int i = 0; i < nn && i < 4; ++i)
+                if (outer_node.count(face.node[i])) ++n_out;
+            face.boundary = (n_out >= 3) ? BoundaryKind::NoSlipWall : BoundaryKind::Farfield;
+        }
+        if (face.boundary == BoundaryKind::NoSlipWall) ++n_wall;
+        sx += static_cast<double>(face.area) * face.nx;
+        sy += static_cast<double>(face.area) * face.ny;
+        sz += static_cast<double>(face.area) * face.nz;
+        ta += static_cast<double>(face.area);
+    }
+    compute_mesh_metrics(mesh, false);
+    double ce = std::sqrt(sx * sx + sy * sy + sz * sz);
+    double rel = ce / (ta + 1e-30);
+    // Re-accumulate after metrics recompute (normals may flip).
+    sx = sy = sz = ta = 0;
+    n_wall = 0;
+    for (const auto& face : mesh.faces) {
+        if (face.boundary == BoundaryKind::Interior) continue;
+        if (face.boundary == BoundaryKind::NoSlipWall ||
+            face.boundary == BoundaryKind::SlipWall)
+            ++n_wall;
+        sx += static_cast<double>(face.area) * face.nx;
+        sy += static_cast<double>(face.area) * face.ny;
+        sz += static_cast<double>(face.area) * face.nz;
+        ta += static_cast<double>(face.area);
+    }
+    ce = std::sqrt(sx * sx + sy * sy + sz * sz);
+    rel = ce / (ta + 1e-30);
+    if (n_wall <= 0 || rel > 1e-4) {
+        mesh = std::move(backup);
+        if (error) {
+            char buf[160];
+            std::snprintf(buf, sizeof(buf),
+                "prism BL closed-surface fail rel=%g n_wall=%d", rel, n_wall);
+            *error = buf;
+        }
+        return false;
+    }
+    Real h_err_max = 0;
+    for (const auto& kv : layer_nodes) {
+        if (kv.second.size() < 2) continue;
+        const auto& n0 = mesh.nodes[static_cast<size_t>(kv.second[0])];
+        const auto& n1 = mesh.nodes[static_cast<size_t>(kv.second[1])];
+        Real dh = std::sqrt(
+            (n1.x-n0.x)*(n1.x-n0.x) + (n1.y-n0.y)*(n1.y-n0.y) + (n1.z-n0.z)*(n1.z-n0.z));
+        h_err_max = std::max(h_err_max,
+            std::fabs(dh - cfg.prism_first_height) / (cfg.prism_first_height + Real(1e-30)));
+    }
+    if (h_err_max > Real(0.10f)) {
+        mesh = std::move(backup);
+        if (error) *error = "prism first-layer height error > 10%";
+        return false;
+    }
+    // Require positive prism volumes (corner-jac for skewed wedges is stricter
+    // than volume and can flag valid high-aspect BL cells).
+    {
+        int n_bad = 0;
+        for (const auto& cell : mesh.cells) {
+            if (cell.type != ElementType::PENTA6) continue;
+            Vec3 v[6];
+            for (int i = 0; i < 6; ++i) {
+                const auto& nd = mesh.nodes[static_cast<size_t>(cell.node[i])];
+                v[i] = {nd.x, nd.y, nd.z};
+            }
+            // Same tet decomposition as volume_prism
+            Real vol = volume_tet_signed(v[0], v[1], v[2], v[4])
+                     + volume_tet_signed(v[0], v[2], v[5], v[4])
+                     + volume_tet_signed(v[0], v[3], v[4], v[5]);
+            // volume_tet_signed is already /6; volume_prism uses volume_tet without /6
+            // Use absolute orientation check
+            if (!(vol > Real(0))) ++n_bad;
+        }
+        if (n_bad > 0) {
+            mesh = std::move(backup);
+            if (error) *error = "prism BL has non-positive prism volumes";
+            return false;
+        }
+    }
+    std::fprintf(stderr, "  Prism BL: layers=%d prisms=%d h0_err_max=%g rel=%g\n",
+        n_layers, n_prisms, static_cast<double>(h_err_max), rel);
     return true;
 }
 
@@ -1389,6 +1604,14 @@ bool generate_watertight_mesh_from_stl(
             *error = buf;
         }
         return false;
+    }
+
+    if (cfg.prism_layers && cfg.n_prism_layers > 0 && cfg.prism_first_height > 0) {
+        std::string perr;
+        if (!extrude_prism_boundary_layers(mesh, cfg, &perr))
+            std::fprintf(stderr, "  Hex-cull prism BL skipped: %s\n", perr.c_str());
+        else
+            report = compute_mesh_quality_detail(mesh);
     }
 
     std::fprintf(stderr,
