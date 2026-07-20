@@ -20,6 +20,7 @@ struct StlMeshConfig {
     int n_prism_layers = 5;
     Real prism_first_height = 1e-4f;
     Real prism_growth_ratio = 1.2f;
+    int prism_fallback_min_layers = 1;
 };
 
 // Generate a body-fitted conformal volume mesh from an STL surface mesh.

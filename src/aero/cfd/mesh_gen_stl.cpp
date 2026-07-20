@@ -1174,7 +1174,7 @@ bool generate_conformal_mesh_from_stl(
 }
 
 // Extrude prism BL from wall faces into the fluid (along -face_normal).
-// On quality failure returns false and leaves mesh unchanged (caller falls back).
+// On quality failure, degrades layer count progressively before falling back.
 static bool extrude_prism_boundary_layers(
     CfdMesh& mesh, const StlMeshConfig& cfg, std::string* error)
 {
@@ -1221,160 +1221,172 @@ static bool extrude_prism_boundary_layers(
         }
     }
 
-    // Map wall vertex -> layer nodes. Layer 0 = wall (fluid boundary).
-    // Extrude along +n into the body void (no overlap with existing fluid cells).
-    // Fluid keeps original cells; prisms occupy former body near the surface.
-    const int n_layers = cfg.n_prism_layers;
-    std::unordered_map<int, std::vector<int>> layer_nodes;
-    layer_nodes.reserve(walls.size() * 2);
+    const int max_layers = cfg.n_prism_layers;
+    const int min_layers = cfg.prism_fallback_min_layers;
 
-    auto ensure_layers = [&](int vid) -> const std::vector<int>& {
-        auto it = layer_nodes.find(vid);
-        if (it != layer_nodes.end()) return it->second;
-        std::vector<int> ids(static_cast<size_t>(n_layers) + 1);
-        ids[0] = vid;
-        Real h = 0;
-        for (int L = 1; L <= n_layers; ++L) {
-            Real dh = cfg.prism_first_height *
-                std::pow(cfg.prism_growth_ratio, static_cast<Real>(L - 1));
-            h += dh;
-            CfdNode nd = mesh.nodes[static_cast<size_t>(vid)];
-            // into body = +outward normal (wall normal points fluid→body)
-            nd.x += vnx[static_cast<size_t>(vid)] * h;
-            nd.y += vny[static_cast<size_t>(vid)] * h;
-            nd.z += vnz[static_cast<size_t>(vid)] * h;
-            ids[static_cast<size_t>(L)] = static_cast<int>(mesh.nodes.size());
-            mesh.nodes.push_back(nd);
-        }
-        auto [ins, _] = layer_nodes.emplace(vid, std::move(ids));
-        return ins->second;
-    };
-
-    int n_prisms = 0;
-    for (const auto& w : walls) {
-        const auto& a = ensure_layers(w.n0);
-        const auto& b = ensure_layers(w.n1);
-        const auto& c = ensure_layers(w.n2);
-        for (int L = 0; L < n_layers; ++L) {
-            CfdCell cell;
-            cell.type = ElementType::PENTA6;
-            // Bottom = wall/layer L (toward fluid), top = into body (L+1).
-            cell.node[0] = a[static_cast<size_t>(L)];
-            cell.node[1] = b[static_cast<size_t>(L)];
-            cell.node[2] = c[static_cast<size_t>(L)];
-            cell.node[3] = a[static_cast<size_t>(L + 1)];
-            cell.node[4] = b[static_cast<size_t>(L + 1)];
-            cell.node[5] = c[static_cast<size_t>(L + 1)];
-            {
-                const auto& p0 = mesh.nodes[static_cast<size_t>(cell.node[0])];
-                const auto& p1 = mesh.nodes[static_cast<size_t>(cell.node[1])];
-                const auto& p2 = mesh.nodes[static_cast<size_t>(cell.node[2])];
-                const auto& p3 = mesh.nodes[static_cast<size_t>(cell.node[3])];
-                Vec3 e1{p1.x - p0.x, p1.y - p0.y, p1.z - p0.z};
-                Vec3 e2{p2.x - p0.x, p2.y - p0.y, p2.z - p0.z};
-                Vec3 up{p3.x - p0.x, p3.y - p0.y, p3.z - p0.z};
-                if (dot(cross(e1, e2), up) < 0) {
-                    std::swap(cell.node[1], cell.node[2]);
-                    std::swap(cell.node[4], cell.node[5]);
-                }
-            }
-            mesh.cells.push_back(cell);
-            ++n_prisms;
-        }
-    }
-
-    if (n_prisms <= 0) {
-        mesh = std::move(backup);
-        if (error) *error = "no prisms created";
-        return false;
-    }
-
-    rebuild_mesh_faces(mesh);
-    compute_mesh_metrics(mesh, false);
-
-    // Boundary tags: outer box from backup node AABB; wall = prism outer layer.
-    Real xmin = std::numeric_limits<Real>::max(), xmax = -xmin;
-    Real ymin = xmin, ymax = -xmin, zmin = xmin, zmax = -xmin;
+    // Compute AABB from backup for box-eps (needed in each attempt).
+    Real box_xmin = std::numeric_limits<Real>::max(), box_xmax = -box_xmin;
+    Real box_ymin = box_xmin, box_ymax = -box_xmin, box_zmin = box_xmin, box_zmax = -box_xmin;
     for (const auto& nd : backup.nodes) {
-        xmin = std::min(xmin, nd.x); xmax = std::max(xmax, nd.x);
-        ymin = std::min(ymin, nd.y); ymax = std::max(ymax, nd.y);
-        zmin = std::min(zmin, nd.z); zmax = std::max(zmax, nd.z);
+        box_xmin = std::min(box_xmin, nd.x); box_xmax = std::max(box_xmax, nd.x);
+        box_ymin = std::min(box_ymin, nd.y); box_ymax = std::max(box_ymax, nd.y);
+        box_zmin = std::min(box_zmin, nd.z); box_zmax = std::max(box_zmax, nd.z);
     }
-    Real box_eps = Real(1e-3) * std::max({xmax - xmin, ymax - ymin, zmax - zmin, Real(1)});
-    std::unordered_map<int, char> outer_node;
-    for (const auto& kv : layer_nodes) {
-        if (!kv.second.empty())
-            outer_node[kv.second.back()] = 1;
-    }
-    double sx = 0, sy = 0, sz = 0, ta = 0;
-    int n_wall = 0;
-    for (auto& face : mesh.faces) {
-        if (face.boundary == BoundaryKind::Interior) continue;
-        bool on_box =
-            std::fabs(face.cx - xmin) < box_eps || std::fabs(face.cx - xmax) < box_eps ||
-            std::fabs(face.cy - ymin) < box_eps || std::fabs(face.cy - ymax) < box_eps ||
-            std::fabs(face.cz - zmin) < box_eps || std::fabs(face.cz - zmax) < box_eps;
-        if (on_box) {
-            face.boundary = BoundaryKind::Farfield;
-        } else {
-            int nn = face.node_count > 0 ? face.node_count : 3;
-            int n_out = 0;
-            for (int i = 0; i < nn && i < 4; ++i)
-                if (outer_node.count(face.node[i])) ++n_out;
-            face.boundary = (n_out >= 3) ? BoundaryKind::NoSlipWall : BoundaryKind::Farfield;
+    Real box_eps = Real(1e-3) * std::max({box_xmax - box_xmin, box_ymax - box_ymin,
+                                           box_zmax - box_zmin, Real(1)});
+
+    int best_layers = 0;
+    int best_prisms = 0;
+    double best_rel = 0;
+    double best_h_err = 0;
+    std::string last_error;
+
+    for (int try_layers = max_layers; try_layers >= min_layers; --try_layers) {
+        mesh = backup;
+
+        // Map wall vertex -> layer nodes. Layer 0 = wall (fluid boundary).
+        std::unordered_map<int, std::vector<int>> layer_nodes;
+        layer_nodes.reserve(walls.size() * 2);
+
+        auto ensure_layers = [&](int vid) -> const std::vector<int>& {
+            auto it = layer_nodes.find(vid);
+            if (it != layer_nodes.end()) return it->second;
+            std::vector<int> ids(static_cast<size_t>(try_layers) + 1);
+            ids[0] = vid;
+            Real h = 0;
+            for (int L = 1; L <= try_layers; ++L) {
+                Real dh = cfg.prism_first_height *
+                    std::pow(cfg.prism_growth_ratio, static_cast<Real>(L - 1));
+                h += dh;
+                CfdNode nd = mesh.nodes[static_cast<size_t>(vid)];
+                nd.x += vnx[static_cast<size_t>(vid)] * h;
+                nd.y += vny[static_cast<size_t>(vid)] * h;
+                nd.z += vnz[static_cast<size_t>(vid)] * h;
+                ids[static_cast<size_t>(L)] = static_cast<int>(mesh.nodes.size());
+                mesh.nodes.push_back(nd);
+            }
+            auto [ins, _] = layer_nodes.emplace(vid, std::move(ids));
+            return ins->second;
+        };
+
+        int n_prisms = 0;
+        for (const auto& w : walls) {
+            const auto& a = ensure_layers(w.n0);
+            const auto& b = ensure_layers(w.n1);
+            const auto& c = ensure_layers(w.n2);
+            for (int L = 0; L < try_layers; ++L) {
+                CfdCell cell;
+                cell.type = ElementType::PENTA6;
+                cell.node[0] = a[static_cast<size_t>(L)];
+                cell.node[1] = b[static_cast<size_t>(L)];
+                cell.node[2] = c[static_cast<size_t>(L)];
+                cell.node[3] = a[static_cast<size_t>(L + 1)];
+                cell.node[4] = b[static_cast<size_t>(L + 1)];
+                cell.node[5] = c[static_cast<size_t>(L + 1)];
+                {
+                    const auto& p0 = mesh.nodes[static_cast<size_t>(cell.node[0])];
+                    const auto& p1 = mesh.nodes[static_cast<size_t>(cell.node[1])];
+                    const auto& p2 = mesh.nodes[static_cast<size_t>(cell.node[2])];
+                    const auto& p3 = mesh.nodes[static_cast<size_t>(cell.node[3])];
+                    Vec3 e1{p1.x - p0.x, p1.y - p0.y, p1.z - p0.z};
+                    Vec3 e2{p2.x - p0.x, p2.y - p0.y, p2.z - p0.z};
+                    Vec3 up{p3.x - p0.x, p3.y - p0.y, p3.z - p0.z};
+                    if (dot(cross(e1, e2), up) < 0) {
+                        std::swap(cell.node[1], cell.node[2]);
+                        std::swap(cell.node[4], cell.node[5]);
+                    }
+                }
+                mesh.cells.push_back(cell);
+                ++n_prisms;
+            }
         }
-        if (face.boundary == BoundaryKind::NoSlipWall) ++n_wall;
-        sx += static_cast<double>(face.area) * face.nx;
-        sy += static_cast<double>(face.area) * face.ny;
-        sz += static_cast<double>(face.area) * face.nz;
-        ta += static_cast<double>(face.area);
-    }
-    compute_mesh_metrics(mesh, false);
-    double ce = std::sqrt(sx * sx + sy * sy + sz * sz);
-    double rel = ce / (ta + 1e-30);
-    // Re-accumulate after metrics recompute (normals may flip).
-    sx = sy = sz = ta = 0;
-    n_wall = 0;
-    for (const auto& face : mesh.faces) {
-        if (face.boundary == BoundaryKind::Interior) continue;
-        if (face.boundary == BoundaryKind::NoSlipWall ||
-            face.boundary == BoundaryKind::SlipWall)
-            ++n_wall;
-        sx += static_cast<double>(face.area) * face.nx;
-        sy += static_cast<double>(face.area) * face.ny;
-        sz += static_cast<double>(face.area) * face.nz;
-        ta += static_cast<double>(face.area);
-    }
-    ce = std::sqrt(sx * sx + sy * sy + sz * sz);
-    rel = ce / (ta + 1e-30);
-    if (n_wall <= 0 || rel > 1e-4) {
-        mesh = std::move(backup);
-        if (error) {
+
+        if (n_prisms <= 0) {
+            last_error = "no prisms created";
+            continue;
+        }
+
+        rebuild_mesh_faces(mesh);
+        compute_mesh_metrics(mesh, false);
+
+        // Boundary tags: outer box is farfield; prism outer layer is wall.
+        std::unordered_map<int, char> outer_node;
+        for (const auto& kv : layer_nodes) {
+            if (!kv.second.empty())
+                outer_node[kv.second.back()] = 1;
+        }
+        double sx = 0, sy = 0, sz = 0, ta = 0;
+        int n_wall = 0;
+        for (auto& face : mesh.faces) {
+            if (face.boundary == BoundaryKind::Interior) continue;
+            bool on_box =
+                std::fabs(face.cx - box_xmin) < box_eps ||
+                std::fabs(face.cx - box_xmax) < box_eps ||
+                std::fabs(face.cy - box_ymin) < box_eps ||
+                std::fabs(face.cy - box_ymax) < box_eps ||
+                std::fabs(face.cz - box_zmin) < box_eps ||
+                std::fabs(face.cz - box_zmax) < box_eps;
+            if (on_box) {
+                face.boundary = BoundaryKind::Farfield;
+            } else {
+                int nn = face.node_count > 0 ? face.node_count : 3;
+                int n_out = 0;
+                for (int i = 0; i < nn && i < 4; ++i)
+                    if (outer_node.count(face.node[i])) ++n_out;
+                face.boundary = (n_out >= 3) ? BoundaryKind::NoSlipWall : BoundaryKind::Farfield;
+            }
+            if (face.boundary == BoundaryKind::NoSlipWall) ++n_wall;
+            sx += static_cast<double>(face.area) * face.nx;
+            sy += static_cast<double>(face.area) * face.ny;
+            sz += static_cast<double>(face.area) * face.nz;
+            ta += static_cast<double>(face.area);
+        }
+        compute_mesh_metrics(mesh, false);
+        double ce = std::sqrt(sx * sx + sy * sy + sz * sz);
+        double rel = ce / (ta + 1e-30);
+        sx = sy = sz = ta = 0;
+        n_wall = 0;
+        for (const auto& face : mesh.faces) {
+            if (face.boundary == BoundaryKind::Interior) continue;
+            if (face.boundary == BoundaryKind::NoSlipWall ||
+                face.boundary == BoundaryKind::SlipWall)
+                ++n_wall;
+            sx += static_cast<double>(face.area) * face.nx;
+            sy += static_cast<double>(face.area) * face.ny;
+            sz += static_cast<double>(face.area) * face.nz;
+            ta += static_cast<double>(face.area);
+        }
+        ce = std::sqrt(sx * sx + sy * sy + sz * sz);
+        rel = ce / (ta + 1e-30);
+
+        bool fail_closed = (n_wall <= 0 || rel > 1e-4);
+        if (fail_closed) {
             char buf[160];
             std::snprintf(buf, sizeof(buf),
                 "prism BL closed-surface fail rel=%g n_wall=%d", rel, n_wall);
-            *error = buf;
+            last_error = buf;
+            continue;
         }
-        return false;
-    }
-    Real h_err_max = 0;
-    for (const auto& kv : layer_nodes) {
-        if (kv.second.size() < 2) continue;
-        const auto& n0 = mesh.nodes[static_cast<size_t>(kv.second[0])];
-        const auto& n1 = mesh.nodes[static_cast<size_t>(kv.second[1])];
-        Real dh = std::sqrt(
-            (n1.x-n0.x)*(n1.x-n0.x) + (n1.y-n0.y)*(n1.y-n0.y) + (n1.z-n0.z)*(n1.z-n0.z));
-        h_err_max = std::max(h_err_max,
-            std::fabs(dh - cfg.prism_first_height) / (cfg.prism_first_height + Real(1e-30)));
-    }
-    if (h_err_max > Real(0.10f)) {
-        mesh = std::move(backup);
-        if (error) *error = "prism first-layer height error > 10%";
-        return false;
-    }
-    // Require positive prism volumes (corner-jac for skewed wedges is stricter
-    // than volume and can flag valid high-aspect BL cells).
-    {
+
+        double h_err_max = 0;
+        for (const auto& kv : layer_nodes) {
+            if (kv.second.size() < 2) continue;
+            const auto& n0 = mesh.nodes[static_cast<size_t>(kv.second[0])];
+            const auto& n1 = mesh.nodes[static_cast<size_t>(kv.second[1])];
+            Real dh = std::sqrt(
+                (n1.x-n0.x)*(n1.x-n0.x) + (n1.y-n0.y)*(n1.y-n0.y) + (n1.z-n0.z)*(n1.z-n0.z));
+            h_err_max = std::max(h_err_max,
+                static_cast<double>(std::fabs(dh - cfg.prism_first_height) /
+                    (cfg.prism_first_height + Real(1e-30))));
+        }
+        if (h_err_max > 0.10) {
+            char buf[160];
+            std::snprintf(buf, sizeof(buf),
+                "prism first-layer height error %g > 10%%", h_err_max);
+            last_error = buf;
+            continue;
+        }
+
         int n_bad = 0;
         for (const auto& cell : mesh.cells) {
             if (cell.type != ElementType::PENTA6) continue;
@@ -1383,22 +1395,38 @@ static bool extrude_prism_boundary_layers(
                 const auto& nd = mesh.nodes[static_cast<size_t>(cell.node[i])];
                 v[i] = {nd.x, nd.y, nd.z};
             }
-            // Same tet decomposition as volume_prism
             Real vol = volume_tet_signed(v[0], v[1], v[2], v[4])
                      + volume_tet_signed(v[0], v[2], v[5], v[4])
                      + volume_tet_signed(v[0], v[3], v[4], v[5]);
-            // volume_tet_signed is already /6; volume_prism uses volume_tet without /6
-            // Use absolute orientation check
             if (!(vol > Real(0))) ++n_bad;
         }
         if (n_bad > 0) {
-            mesh = std::move(backup);
-            if (error) *error = "prism BL has non-positive prism volumes";
-            return false;
+            char buf[160];
+            std::snprintf(buf, sizeof(buf),
+                "prism BL has %d non-positive prism volumes", n_bad);
+            last_error = buf;
+            continue;
         }
+
+        best_layers = try_layers;
+        best_prisms = n_prisms;
+        best_rel = rel;
+        best_h_err = h_err_max;
+        break;
     }
+
+    if (best_layers <= 0) {
+        mesh = std::move(backup);
+        if (error) *error = last_error;
+        return false;
+    }
+
+    if (best_layers < max_layers)
+        std::fprintf(stderr, "  Prism BL degraded: %d -> %d layers (%s)\n",
+            max_layers, best_layers, last_error.c_str());
+
     std::fprintf(stderr, "  Prism BL: layers=%d prisms=%d h0_err_max=%g rel=%g\n",
-        n_layers, n_prisms, static_cast<double>(h_err_max), rel);
+        best_layers, best_prisms, best_h_err, best_rel);
     return true;
 }
 

@@ -176,6 +176,106 @@ static int test_cone_stl_mesh() {
     return 0;
 }
 
+static bool write_sphere_stl(const char* path, Real radius, int n_lat, int n_lon) {
+    FILE* f = std::fopen(path, "w");
+    if (!f) return false;
+    std::fprintf(f, "solid sphere\n");
+    for (int ilat = 0; ilat < n_lat; ++ilat) {
+        Real theta0 = (Real)ilat / (Real)n_lat * (Real)M_PI;
+        Real theta1 = (Real)(ilat + 1) / (Real)n_lat * (Real)M_PI;
+        for (int ilon = 0; ilon < n_lon; ++ilon) {
+            Real phi0 = (Real)ilon / (Real)n_lon * 2.0f * (Real)M_PI;
+            Real phi1 = (Real)(ilon + 1) / (Real)n_lon * 2.0f * (Real)M_PI;
+            auto v = [&](Real th, Real ph) {
+                Real x = radius * std::sin(th) * std::cos(ph);
+                Real y = radius * std::cos(th);
+                Real z = radius * std::sin(th) * std::sin(ph);
+                return x, y, z;
+            };
+            Real x[4], y[4], z[4];
+            x[0] = radius * std::sin(theta0) * std::cos(phi0); y[0] = radius * std::cos(theta0); z[0] = radius * std::sin(theta0) * std::sin(phi0);
+            x[1] = radius * std::sin(theta0) * std::cos(phi1); y[1] = radius * std::cos(theta0); z[1] = radius * std::sin(theta0) * std::sin(phi1);
+            x[2] = radius * std::sin(theta1) * std::cos(phi1); y[2] = radius * std::cos(theta1); z[2] = radius * std::sin(theta1) * std::sin(phi1);
+            x[3] = radius * std::sin(theta1) * std::cos(phi0); y[3] = radius * std::cos(theta1); z[3] = radius * std::sin(theta1) * std::sin(phi0);
+            // Two tris per quad: (0,1,2) and (0,2,3)
+            auto write_tri = [&](int i, int j, int k) {
+                Real ex = x[j] - x[i], ey = y[j] - y[i], ez = z[j] - z[i];
+                Real fx = x[k] - x[i], fy = y[k] - y[i], fz = z[k] - z[i];
+                Real nx = ey * fz - ez * fy;
+                Real ny = ez * fx - ex * fz;
+                Real nz = ex * fy - ey * fx;
+                Real len = std::sqrt(nx * nx + ny * ny + nz * nz);
+                if (len > 0) { nx /= len; ny /= len; nz /= len; }
+                // Normal should point outward: away from origin
+                Real cx = (x[i]+x[j]+x[k])/3, cy = (y[i]+y[j]+y[k])/3, cz = (z[i]+z[j]+z[k])/3;
+                if (nx*cx + ny*cy + nz*cz < 0) { nx = -nx; ny = -ny; nz = -nz; }
+                std::fprintf(f, "  facet normal %e %e %e\n", nx, ny, nz);
+                std::fprintf(f, "    outer loop\n");
+                std::fprintf(f, "      vertex %e %e %e\n", x[i], y[i], z[i]);
+                std::fprintf(f, "      vertex %e %e %e\n", x[j], y[j], z[j]);
+                std::fprintf(f, "      vertex %e %e %e\n", x[k], y[k], z[k]);
+                std::fprintf(f, "    endloop\n");
+                std::fprintf(f, "  endfacet\n");
+            };
+            write_tri(0, 1, 2);
+            write_tri(0, 2, 3);
+        }
+    }
+    std::fprintf(f, "endsolid sphere\n");
+    std::fclose(f);
+    return true;
+}
+
+static int test_prism_degrade() {
+    // Aggressive prism params cause overlap at high layer counts on a sphere.
+    // The fallback should degrade to fewer layers and produce a valid mesh.
+    // Sphere has no sharp edges — even 1 layer gives closed surface.
+    const char* stl_path = "test_sphere_degrade.stl";
+    if (!write_sphere_stl(stl_path, 0.4f, 16, 16))
+        FAIL("failed to write sphere STL");
+
+    StlMeshConfig cfg;
+    cfg.outer_scale = 3.0f;
+    cfg.background_n_per_dim = 20;
+    cfg.max_cells = 2000000;
+    cfg.prism_layers = true;
+    cfg.n_prism_layers = 10;
+    cfg.prism_first_height = 0.08f;
+    cfg.prism_growth_ratio = 1.5f;
+    cfg.prism_fallback_min_layers = 1;
+
+    CfdMesh mesh;
+    std::string err;
+    if (!generate_watertight_mesh_from_stl(stl_path, mesh, cfg, &err)) {
+        std::remove(stl_path);
+        FAIL("aggressive prism mesh generation failed: %s", err.c_str());
+    }
+    std::remove(stl_path);
+
+    TEST("CFD-MESH-STL-7 aggressive prism degrades to valid mesh");
+    {
+        int n_penta = 0;
+        for (const auto& c : mesh.cells)
+            if (c.type == ElementType::PENTA6) ++n_penta;
+        if (n_penta <= 0)
+            FAIL("expected some PENTA6 prism cells after degradation, got 0");
+
+        CfdSolver solver;
+        if (!solver.load_mesh(mesh))
+            FAIL("load_mesh failed on degraded prism mesh");
+
+        auto report = compute_mesh_quality_detail(mesh);
+        if (report.min_volume <= 0)
+            FAIL("min volume=%g after degradation", report.min_volume);
+
+        std::printf("\n  penta_cells=%d cells=%d wall=%d min_vol=%g",
+            n_penta, static_cast<int>(mesh.cells.size()),
+            report.no_slip_wall_faces, report.min_volume);
+        PASS;
+    }
+    return 0;
+}
+
 static int test_prism_bl() {
     const char* stl_path = "test_cone_prism.stl";
     if (!write_cone_stl(stl_path, 0.5f, 1.0f, 48))
@@ -227,6 +327,7 @@ int main() {
     int result = 0;
     result |= test_cone_stl_mesh();
     result |= test_prism_bl();
+    result |= test_prism_degrade();
     std::printf("\n%d / %d tests PASSED.\n", pass_count, test_count);
     return result == 0 && pass_count == test_count ? 0 : 1;
 }

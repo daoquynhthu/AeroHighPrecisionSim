@@ -786,7 +786,7 @@ Gate:
 
 Goal: replace the structured-cube-embedding hack in `generate_aero_table` with a body-fitted volume mesh generated directly from the STL surface. Enable production-grade CFD on arbitrary geometries without external mesh tools.
 
-> **Status**: Core pipeline complete (80³ quality tests + SU2 round-trip). 9-B.5 production path: `stl_volume_mesh` → `generate_watertight_mesh_from_stl` (hex-cull, multi-ray SDF, compact nodes, load_mesh 1e-4). Cut-cell retained for geometry quality. Cube embedding HEX8+AABB. 9-B.4 prism BL not started.
+> **Status**: Core pipeline complete (80³ quality tests + SU2 round-trip). 9-B.5 production path: `stl_volume_mesh` → `generate_watertight_mesh_from_stl` (hex-cull, multi-ray SDF, compact nodes, load_mesh 1e-4). Cut-cell retained for geometry quality. Cube embedding HEX8+AABB. 9-B.4 prism BL complete.
 
 ### 9-B.1 STL surface parsing & signed-distance field
 
@@ -846,10 +846,10 @@ For viscous/RANS use, extrude prism layers from the STL surface inward (growing 
 
 Tasks:
 
-- [ ] Wall-normal computation from STL vertex normals (averaged from incident triangle normals)
-- [ ] Prism layer generation: advance each wall vertex along its normal → form PENTA6 cells
-- [ ] Quality check: min prism orthogonality > 30 degrees, min volume > 0
-- [ ] Fallback: if prism quality fails, use all-tet mesh (no boundary layer)
+- [x] Wall-normal computation from STL vertex normals (averaged from incident triangle normals)
+- [x] Prism layer generation: advance each wall vertex along its normal → form PENTA6 cells
+- [x] Quality check: min prism orthogonality > 30 degrees, min volume > 0
+- [x] Fallback: if prism quality fails, use all-tet mesh (no boundary layer)
 
 ### 9-B.5 Integration with aero_table generation
 
@@ -876,7 +876,7 @@ Tests:
 | 4 | `CFD-MESH-STL-4` | Mesh round-trip: SU2 export/import of generated mesh preserves cell and face count | exact | PASS |
 | 5 | `TABLE-STL-1` / `CFD-MESH-STL-5` | `use_fvm=true` + conformal mesh: forces differ from cube-embedding result | inequality | PASS |
 | 6 | `TABLE-STL-2` | `stl_volume_mesh=false` cube regression | finite cfd-* fidelity | PASS |
-| 7 | `CFD-MESH-STL-6` | Viscous prism layer: first layer height matches config within 10% | 10% | deferred (9-B.4) |
+| 7 | `CFD-MESH-STL-6` | Viscous prism layer: first layer height matches config within 10% | 10% | PASS |
 
 Gate:
 
@@ -884,6 +884,105 @@ Gate:
 - Wall area matches STL reference area within 1% for convex geometries (cone, sphere).
 - `generate_aero_table` with `stl_volume_mesh=true` produces forces corresponding to the STL shape, not a cube.
 - Cube-embedding code remains available behind `stl_volume_mesh=false` flag (regression).
+
+---
+
+## Phase 9-C — Mesh Capability Gaps (棱柱层回退 / 各向异性 AMR / 多体 STL)
+
+Goal: close the three remaining mesh capability gaps identified after Phase 9-B.4. All are optional quality-of-life improvements — the existing pipeline is functional for single-body, isotropic-refinement, all-tet/hex workflows.
+
+### 9-C.1 棱柱层渐进降级回退
+
+Current behavior: `extrude_prism_boundary_layers` returns false on any quality failure (closed-surface > 1e-4, negative volume). Caller restores the backup all-tet mesh — all-or-nothing.
+
+Improvement: degrade gracefully by peeling outermost layers until quality passes.
+
+Files:
+
+| File | Action | Content |
+|------|--------|---------|
+| `src/aero/cfd/mesh_gen_stl.cpp` | MODIFY | `extrude_prism_boundary_layers`: on closed-surface/volume failure, retry with `n_layers-1` iteratively down to 1; only then fall back to error |
+| `include/aero/cfd/mesh_gen_stl.hpp` | MODIFY | `StlMeshConfig::prism_fallback_min_layers = 1` — minimum layers before all-tet fallback |
+
+Tasks:
+
+- [x] Iterative layer peeling: after extrusion, if quality fails, remove outermost layer, re-extrude, recheck
+- [x] Only when `n_prism_layers < prism_fallback_min_layers` → restore all-tet backup
+- [x] Diagnostic output: "Prism BL degraded: 5→3 layers (closed-surface 3e-4 > 1e-4)"
+
+Tests:
+
+| # | Test | What | Tolerance | Status |
+|---|------|------|-----------|--------|
+| 1 | `CFD-MESH-STL-7` | Aggressive prism (10 layers, h0=0.08): degrades to min_layers=1, mesh still passes load_mesh | 1e-4 | PASS |
+
+### 9-C.2 各向异性 AMR 细化
+
+Current behavior: all AMR refinement is isotropic (TET4 1→8, HEX8 1→8). Wake-cone region selector exists but still produces isotropic split.
+
+Improvement: add directionally-biased refinement — split only along the dominant direction for stretched cells in boundary layers and wakes.
+
+Files:
+
+| File | Action | Content |
+|------|--------|---------|
+| `include/aero/cfd/amr_types.hpp` | MODIFY | `AnisotropicDir` enum (`DIR_NONE=0, DIR_X, DIR_Y, DIR_Z, DIR_STREAMWISE`); `RefinementRequest` gains `AnisotropicDir dir` field |
+| `src/aero/cfd/amr_refine.cpp` | MODIFY | HEX8 1→2 (edge bisect in dominant dir), TET4 1→4 (face-split), PENTA6 1→2 (height bisect); fallback to isotropic when `dir==DIR_NONE` |
+| `src/aero/cfd/amr_sensor.cpp` | MODIFY | Boundary-layer sensor returns `DIR_WALL_NORMAL` (anisotropic away from wall); wake-cone sensor returns `DIR_STREAMWISE` |
+| `include/aero/cfd/cfd_config.hpp` | MODIFY | `AmrConfig::anisotropic_layers` — max refinement levels using anisotropic split before switching to isotropic |
+
+Tasks:
+
+- [ ] HEX8 1→2 directional bisect along specified axis
+- [ ] TET4 1→4: split edges along dominant direction, keep other edges unchanged
+- [ ] PENTA6 1→2: bisect along prism height direction
+- [ ] BL sensor: adjacent to wall → `DIR_WALL_NORMAL` (from face normal / wall distance gradient)
+- [ ] Wake sensor: downstream of body → `DIR_STREAMWISE` (from local velocity unit vector)
+- [ ] Anisotropic → isotropic cascade: after `anisotropic_layers` of directional split, switch to regular isotropic 1→8
+
+Tests:
+
+| # | Test | What | Tolerance | Status |
+|---|------|------|-----------|--------|
+| 1 | `CFD-AMR-ANISO-1` | HEX8 1→2 directional: volume sum conserved, cell count doubles | 1e-12 | [ ] |
+| 2 | `CFD-AMR-ANISO-2` | TET4 1→4 directional: volume sum conserved, cell count ×4 | 1e-12 | [ ] |
+| 3 | `CFD-AMR-ANISO-3` | PENTA6 1→2 height bisect: volume sum conserved | 1e-12 | [ ] |
+| 4 | `CFD-AMR-ANISO-4` | BL sensor on flat plate: wall-adjacent cells flagged with DIR_WALL_NORMAL | >0 refine | [ ] |
+| 5 | `CFD-AMR-ANISO-5` | Anisotropic cascade: max 2 directional levels → then isotropic, total refinement factor matches formula | exact | [ ] |
+| 6 | `CFD-AMR-ANISO-6` | `anisotropic_layers=0` regression to Phase 12 isotropic behavior | exact | [ ] |
+
+### 9-C.3 非流形 / 多区域 STL → 多体网格
+
+Current behavior: SDF ray-cast assumes a single closed manifold. Multi-body STL (missile + fins + pylon) produces ambiguous inside/outside classification.
+
+Improvement: decompose STL into connected components, assign independent wall boundary markers, classify cells by per-component outside test.
+
+Files:
+
+| File | Action | Content |
+|------|--------|---------|
+| `include/aero/cfd/mesh_gen_stl.hpp` | MODIFY | `StlMeshConfig::multi_body = false` — enable multi-body support |
+| `src/aero/cfd/mesh_gen_stl.cpp` | MODIFY | STL parse: build component graph via Union-Find on shared vertices/edges; each component gets independent BVH |
+| `src/aero/cfd/mesh_gen_stl.cpp` | MODIFY | SDF: per component unsigned distance → cell center classification: "outside all components" → fluid; inside any → body |
+| `include/aero/cfd/cfd_mesh.hpp` | MODIFY | `BoundaryKind` add `Body1Wall, Body2Wall, ...` or generalize via `int body_id` on wall faces |
+| `src/aero/cfd/mesh_metrics.cpp` | MODIFY | Face boundary assignment: wall face stores originating `body_id` for per-body force integration |
+
+Tasks:
+
+- [ ] STL component decomposition: Union-Find over vertex-sharing triangles, build per-component triangle list + BVH
+- [ ] Multi-body SDF: each cell center tested against each component's BVH (unsigned closest + ray-cast sign); fluid = outside all
+- [ ] Per-component wall coloring: wall faces from component i → `boundary_body_id = i`
+- [ ] Per-body force integration: `integrate_wall_faces` accepts optional body_id filter; dashboard reports per-body CX/CY/CZ
+- [ ] Gap resolution: `StlMeshConfig::gap_cell_threshold = 0` — if >0, cells whose center is within gap of two components are forced fluid (prevent cavity isolation)
+
+Tests:
+
+| # | Test | What | Tolerance | Status |
+|---|------|------|-----------|--------|
+| 1 | `CFD-MESH-MULTI-1` | Two disjoint spheres in STL: fluid region = bounding box minus both spheres, wall area = sum of both sphere areas | 1% | [ ] |
+| 2 | `CFD-MESH-MULTI-2` | Concentric spheres (inner body, outer flow): inner surface tagged as Body1Wall, outer as Body2Wall | exact | [ ] |
+| 3 | `CFD-MESH-MULTI-3` | `multi_body=false` regression: single sphere matches Phase 9-B result | exact | [ ] |
+| 4 | `CFD-MESH-MULTI-4` | Per-body force: symmetric body pair in uniform flow, each body CX equal | 1e-12 | [ ] |
 
 ---
 
