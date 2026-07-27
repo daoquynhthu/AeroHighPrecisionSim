@@ -35,9 +35,10 @@ struct SpeciesRecord {
 struct TransportRecord {
     std::string name;
     int n_intervals;
-    Real T_break[CEA4_NINTV - 1];
-    Real mu_coeffs[CEA4_NINTV][CEA4_NCOEF];
-    Real kappa_coeffs[CEA4_NINTV][CEA4_NCOEF];
+    Real T_min[CEA4_NINTV];       // low end of each temperature interval
+    Real T_max[CEA4_NINTV];       // high end of each temperature interval
+    Real mu_coeffs[CEA4_NINTV][CEA4_NCOEF];     // ln(mu) = A*ln(T) + B/T + C/T^2 + D
+    Real kappa_coeffs[CEA4_NINTV][CEA4_NCOEF];  // ln(lambda) = A*ln(T) + B/T + C/T^2 + D
 };
 
 // ─── ThermoDb: load + query thermodynamic data ─────────────────────
@@ -70,6 +71,9 @@ public:
     const TransportRecord& get_record(int idx) const { return records_[idx]; }
 
     int find_species(const std::string& name) const;
+
+    // Evaluate viscosity [Pa*s] using CEA log formula
+    static Real evaluate_mu(const TransportRecord& rec, Real T);
 
 private:
     std::vector<TransportRecord> records_;

@@ -314,12 +314,15 @@ bool TransportDb::parse_trans_inp(const std::string& path, std::string* error) {
                 fields[nf++] = (float)std::atof(field_str.c_str());
             }
 
-            if (nf >= 4) {
-                Real A = fields[0], B = fields[1];
-                Real C = fields[2], D = fields[3];
+            if (nf >= 6) {
+                Real T_low = fields[0], T_high = fields[1];
+                Real A = fields[2], B = fields[3];
+                Real C = fields[4], D = fields[5];
 
                 if (rec.n_intervals < CEA4_NINTV) {
                     int iv = rec.n_intervals;
+                    rec.T_min[iv] = T_low;
+                    rec.T_max[iv] = T_high;
                     if (is_viscosity) {
                         rec.mu_coeffs[iv][0] = A;
                         rec.mu_coeffs[iv][1] = B;
@@ -355,6 +358,21 @@ bool TransportDb::parse_trans_inp(const std::string& path, std::string* error) {
     }
 
     return record_count() > 0;
+}
+
+// ─── TransportDb viscosity evaluation ─────────────────────────────
+
+Real TransportDb::evaluate_mu(const TransportRecord& rec, Real T) {
+    if (rec.n_intervals < 1) return Real(0);
+
+    int iv = 0;
+    for (int i = 0; i < rec.n_intervals - 1; ++i) {
+        if (T >= rec.T_max[i]) iv = i + 1;
+    }
+
+    const Real* c = rec.mu_coeffs[iv];
+    Real ln_mu = c[0] * std::log(T) + c[1] / T + c[2] / (T * T) + c[3];
+    return std::exp(ln_mu) * Real(1e-7);  // micropoise → Pa*s
 }
 
 // ─── SpeciesConfig key=value parser ───────────────────────────────

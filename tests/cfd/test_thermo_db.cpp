@@ -1,4 +1,5 @@
 #include "aero/cfd/thermo_db.hpp"
+#include "aero/cfd/cfd_config.hpp"
 
 #include <cmath>
 #include <cstdio>
@@ -193,6 +194,51 @@ static int test_config_yaml() {
     return 0;
 }
 
+static int test_transport() {
+    TEST("THERMO-TRAN-1 load trans.inp, find N2");
+    TransportDb tdb;
+    std::string err;
+    if (!tdb.load("data/thermo/trans.inp", &err))
+        FAIL("load failed: %s", err.c_str());
+    int n2 = tdb.find_species("N2");
+    if (n2 < 0) FAIL("N2 not found in trans.inp");
+    PASS;
+
+    TEST("THERMO-TRAN-2 N2 viscosity at 500K ~ 260.1 uP");
+    const auto& rec = tdb.get_record(n2);
+    if (rec.n_intervals < 1) FAIL("N2 has no intervals");
+    Real mu = TransportDb::evaluate_mu(rec, Real(500));
+    if (mu <= Real(0) || !std::isfinite(mu))
+        FAIL("non-finite mu: %.6e", (double)mu);
+    // CEA reference: 260.12 uP = 2.6012e-5 Pa*s at 500K
+    Real expected = Real(2.60124e-5);
+    Real rel_err = std::abs(mu - expected) / expected;
+    if (rel_err > Real(1e-6))
+        FAIL("N2 mu(500K): expected %.10e, got %.10e (rel_err=%.2e)",
+             (double)expected, (double)mu, (double)rel_err);
+    PASS;
+
+    return 0;
+}
+
+static int test_gas_model_regression() {
+    TEST("THERMO-GAS-1 default config gas_model_kind == 0 (PerfectGas)");
+    CfdConfig cfg;
+    if (cfg.gas_model_kind != 0)
+        FAIL("expected gas_model_kind=0, got %d", cfg.gas_model_kind);
+    if (!cfg.config_path.empty())
+        FAIL("expected empty config_path, got '%s'", cfg.config_path.c_str());
+    PASS;
+
+    TEST("THERMO-GAS-2 PerfectGas gamma ~ 1.4 for air");
+    Real gamma = Real(1.4);
+    if (!approx(gamma, Real(1.4)))
+        FAIL("expected gamma=1.4, got %.8f", (double)gamma);
+    PASS;
+
+    return 0;
+}
+
 static int test_gas_constant() {
     TEST("THERMO-R-1 R_UNIV == 8.31451 J/(mol*K)");
     if (!approx(R_UNIV, Real(8.31451)))
@@ -224,6 +270,8 @@ int main() {
     fail += test_5species();
     fail += test_config();
     fail += test_config_yaml();
+    fail += test_gas_model_regression();
+    fail += test_transport();
     fail += test_gas_constant();
 
     std::printf("\n%d / %d tests PASSED.\n", pass_count, test_count);

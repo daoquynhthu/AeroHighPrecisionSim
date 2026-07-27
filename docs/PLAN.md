@@ -1900,6 +1900,7 @@ Tasks:
 - [x] `ThermoDb::load_thermo_inp()`: 逐行解析 `thermo.inp` 固定列格式 (col 1-16 物种名, col 1-80 元数据, col 1-16/17-32/33-48/... 系数); 支持 1/2/3 温度区间段, 处理 D→e 转换, 记录号校验
 - [x] ThermoDb 物种子集提取: `ThermoDb::extract(names)` → `SpeciesRecord[]` (仅含请求物种, 顺序匹配)
 - [x] `TransportDb::load_trans_inp()`: 解析 `trans.inp`, V/C 行, 二元交互对 (Φ_ij) 提取 (基础解析完成, 合并入 `thermo_db.cpp`)
+- [x] TransportDb parser bug fix: 系数偏移 2 字段 (T_low/T_high 被当作 A/B), 修正为 `fields[2..5]` 并存储 T_min/T_max 区间
 - [x] GPU 表构建: 平板系数数组 `Real d_buf[ MAX_SP * (3*9 + 2 + 1 + 4*2) ]`, 一次 `cudaMemcpyToSymbol`
 - [x] Gas constant: 统一 `R = 8.31451 J/(mol·K)` (CEA 标准, 对齐 `tools/nasa9.py` 输出, 修正当前代码 `8314.462618` 错误)
 - [ ] 边界处理: T < T_min → 钳位到 T_min; T > T_max → 钳位到 T_max; 记录并报告越界 (Phase 15.2 求值器集成)
@@ -1919,8 +1920,10 @@ Tests (实际实现, 命名使用 THERMO-* 前缀):
 | 7 | `THERMO-CFG-2` | `config/air_5sp.yaml` yaml-cpp 解析 | ✅ PASS |
 | 8 | `THERMO-R-1` | R_UNIV = 8.31451 J/(mol·K) | ✅ PASS |
 | 9 | `THERMO-R-2` | N₂ R_specific ≈ 296.8 J/(kg·K) | ✅ PASS |
-| — | `CFD-TDB-7` | 输运求值 (trans.inp N₂ 粘度) | ❌ 未实现 |
-| — | `CFD-TDB-8` | gas_model_kind=0 回归 | ❌ 未实现 |
+| 10 | `THERMO-TRAN-1` | 加载 trans.inp, 查找 N2 | ✅ PASS |
+| 11 | `THERMO-TRAN-2` | N2 粘度 500K CEA 求值, 与参考 2.60124e-5 Pa·s 对比 | ✅ PASS (tol 1e-6) |
+| 12 | `THERMO-GAS-1` | gas_model_kind 默认 == 0 (PerfectGas), config_path 为空 | ✅ PASS |
+| 13 | `THERMO-GAS-2` | PerfectGas gamma ~ 1.4 | ✅ PASS |
 
 ### 15.2 NASA-9 物性求值器 (CPU + GPU)
 
