@@ -1,12 +1,8 @@
 cmake_minimum_required(VERSION 3.18)
 project(AeroHighPrecisionSim LANGUAGES CXX)
 
-# Suppress warnings from Eigen's bundled Find*.cmake modules
-cmake_policy(SET CMP0135 NEW)
-set(CMAKE_SUPPRESS_DEVELOPER_WARNINGS ON)
-
-set(CMAKE_CXX_STANDARD 17)
-set(CMAKE_CXX_STANDARD_REQUIRED ON)
+list(APPEND CMAKE_MODULE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/cmake")
+include(compiler_flags)
 
 option(AEROSIM_USE_CUDA "Enable CUDA GPU support" ON)
 option(AEROSIM_REAL_DOUBLE "Use double precision for Real type" OFF)
@@ -16,41 +12,6 @@ endif()
 
 option(AEROSIM_USE_CGNS "Enable CGNS mesh import" OFF)
 
-option(AEROSIM_COVERAGE "Enable code coverage flags (gcov, GCC/Clang only)" OFF)
-if(AEROSIM_COVERAGE)
-    if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
-        add_compile_options(--coverage -fprofile-arcs -ftest-coverage)
-        add_link_options(--coverage)
-        message(STATUS "Coverage instrumentation enabled")
-    else()
-        message(WARNING "AEROSIM_COVERAGE requires GCC or Clang — MSVC not supported")
-    endif()
-endif()
-
-option(AEROSIM_SANITIZE "Enable address+undefined behavior sanitizers (GCC/Clang only)" OFF)
-if(AEROSIM_SANITIZE)
-    include(CheckCXXSourceCompiles)
-    set(CMAKE_REQUIRED_FLAGS "-fsanitize=address,undefined -fno-omit-frame-pointer")
-    check_cxx_source_compiles("int main(){return 0;}" SANITIZE_WORKS)
-    if(SANITIZE_WORKS)
-        add_compile_options(-fsanitize=address,undefined -fno-omit-frame-pointer)
-        add_link_options(-fsanitize=address,undefined)
-        add_compile_options(-fno-sanitize-recover=all)
-        message(STATUS "ASAN+UBSAN instrumentation enabled")
-    else()
-        message(WARNING "AEROSIM_SANITIZE=ON but -fsanitize not supported by this toolchain — disabling")
-    endif()
-endif()
-
-option(AEROSIM_USE_CCACHE "Use ccache to accelerate rebuilds" ON)
-if(AEROSIM_USE_CCACHE)
-    find_program(CCACHE_PROGRAM ccache)
-    if(CCACHE_PROGRAM)
-        set(CMAKE_CXX_COMPILER_LAUNCHER "${CCACHE_PROGRAM}")
-        message(STATUS "ccache found: ${CCACHE_PROGRAM}")
-    endif()
-endif()
-
 # ─── CUDA (optional) ─────────────────────────────────────────────
 if(AEROSIM_USE_CUDA)
     enable_language(CUDA)
@@ -58,7 +19,6 @@ if(AEROSIM_USE_CUDA)
     set(CMAKE_CUDA_STANDARD_REQUIRED ON)
     set(CMAKE_CUDA_RUNTIME_LIBRARY "Hybrid")
 
-    # GPU architecture detection
     set(CMAKE_CUDA_ARCHITECTURES "75;80;89;90;100" CACHE STRING
         "CUDA architectures to build for" FORCE)
     message(STATUS "CUDA architectures: ${CMAKE_CUDA_ARCHITECTURES}")
@@ -71,15 +31,10 @@ if(AEROSIM_USE_CUDA)
     endif()
 endif()
 
-set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>DLL")
-
 option(BUILD_TESTING "Build test executables" ON)
-set(EIGEN_BUILD_TESTING OFF CACHE BOOL "Disable Eigen test suite" FORCE)
 set(CMAKE_Fortran_COMPILER "FALSE" CACHE INTERNAL "Fortran compiler (disabled)" FORCE)
-include(FetchContent)
-FetchContent_Declare(eigen
-    URL https://gitlab.com/libeigen/eigen/-/archive/3.4.0/eigen-3.4.0.zip)
-FetchContent_MakeAvailable(eigen)
+
+include(fetch_eigen)
 
 # CPU-only static library (no CUDA device code; no device link needed for consumers)
 # Subdirectories add .cpp sources via target_sources(missile_cpu PRIVATE ...)

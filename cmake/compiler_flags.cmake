@@ -1,0 +1,45 @@
+# Suppress warnings from Eigen's bundled Find*.cmake modules
+cmake_policy(SET CMP0135 NEW)
+set(CMAKE_SUPPRESS_DEVELOPER_WARNINGS ON)
+
+set(CMAKE_CXX_STANDARD 17)
+set(CMAKE_CXX_STANDARD_REQUIRED ON)
+
+set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>DLL")
+
+option(AEROSIM_COVERAGE "Enable code coverage flags (gcov, GCC/Clang only)" OFF)
+if(AEROSIM_COVERAGE)
+    if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
+        add_compile_options(--coverage -fprofile-arcs -ftest-coverage)
+        add_link_options(--coverage)
+        message(STATUS "Coverage instrumentation enabled")
+    else()
+        message(WARNING "AEROSIM_COVERAGE requires GCC or Clang — MSVC not supported")
+    endif()
+endif()
+
+option(AEROSIM_SANITIZE "Enable address+undefined behavior sanitizers (GCC/Clang only)" OFF)
+if(AEROSIM_SANITIZE)
+    include(CheckCXXSourceCompiles)
+    set(CMAKE_REQUIRED_FLAGS "-fsanitize=address,undefined -fno-omit-frame-pointer")
+    check_cxx_source_compiles("int main(){return 0;}" SANITIZE_WORKS)
+    if(SANITIZE_WORKS)
+        add_compile_options(-fsanitize=address,undefined -fno-omit-frame-pointer)
+        add_link_options(-fsanitize=address,undefined)
+        add_compile_options(-fno-sanitize-recover=all)
+        message(STATUS "ASAN+UBSAN instrumentation enabled")
+    else()
+        message(WARNING "AEROSIM_SANITIZE=ON but -fsanitize not supported by this toolchain — disabling")
+    endif()
+endif()
+
+option(AEROSIM_USE_CCACHE "Use ccache to accelerate rebuilds" ON)
+if(AEROSIM_USE_CCACHE)
+    find_program(CCACHE_PROGRAM ccache)
+    if(CCACHE_PROGRAM)
+        set(CMAKE_CXX_COMPILER_LAUNCHER "${CCACHE_PROGRAM}")
+        message(STATUS "ccache found: ${CCACHE_PROGRAM}")
+    endif()
+endif()
+
+
