@@ -171,6 +171,28 @@ static int test_config() {
     return 0;
 }
 
+static int test_config_yaml() {
+    TEST("THERMO-CFG-2 parse air_5sp.yaml");
+    SpeciesConfig cfg;
+    std::string err;
+    if (!cfg.load_yaml("data/config/air_5sp.yaml", &err))
+        FAIL("load_yaml failed: %s", err.c_str());
+
+    if (cfg.species_list.size() != 5)
+        FAIL("expected 5 species, got %zu", cfg.species_list.size());
+    if (cfg.species_list[0] != "N2") FAIL("species[0] not N2");
+    if (cfg.species_list[1] != "O2") FAIL("species[1] not O2");
+    if (cfg.species_list[2] != "NO") FAIL("species[2] not NO");
+    if (cfg.species_list[3] != "N")  FAIL("species[3] not N");
+    if (cfg.species_list[4] != "O")  FAIL("species[4] not O");
+    if (cfg.chemistry_model != "frozen") FAIL("chemistry not frozen");
+    if (cfg.transport_model != "cea_log") FAIL("transport not cea_log");
+    if (cfg.thermo_db_path != "data/thermo/thermo.inp") FAIL("thermo_db_path wrong");
+    PASS;
+
+    return 0;
+}
+
 static int test_gas_constant() {
     TEST("THERMO-R-1 R_UNIV == 8.31451 J/(mol*K)");
     if (!approx(R_UNIV, Real(8.31451)))
@@ -201,6 +223,7 @@ int main() {
     fail += test_o2_parse();
     fail += test_5species();
     fail += test_config();
+    fail += test_config_yaml();
     fail += test_gas_constant();
 
     std::printf("\n%d / %d tests PASSED.\n", pass_count, test_count);

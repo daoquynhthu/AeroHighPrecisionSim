@@ -206,6 +206,13 @@ macro(add_cpu_executable NAME)
     target_copy_nrlmsise_dll(${NAME})
 endmacro()
 
+# yaml-cpp (config file parsing)
+if(EXISTS "${CMAKE_SOURCE_DIR}/third-party/yaml-cpp/CMakeLists.txt")
+    add_subdirectory(third-party/yaml-cpp third-party/yaml-cpp EXCLUDE_FROM_ALL)
+    target_link_libraries(missile_cpu PRIVATE yaml-cpp)
+    target_compile_definitions(missile_cpu PRIVATE AEROSP_HAS_YAML_CPP=1)
+endif()
+
 # Library subdirectories (add sources to missile_lib via target_sources)
 add_subdirectory(src/infra)
 add_subdirectory(src/sim)
@@ -226,6 +233,9 @@ if(AEROSIM_USE_CUDA)
     set(_MISSILE_TARGETS missile_cpu missile_lib)
 else()
     set(_MISSILE_TARGETS missile_cpu)
+endif()
+if(TARGET yaml-cpp)
+    list(APPEND _MISSILE_TARGETS yaml-cpp)
 endif()
 install(TARGETS ${_MISSILE_TARGETS}
     EXPORT AeroSimTargets

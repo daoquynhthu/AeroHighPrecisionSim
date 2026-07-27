@@ -8,6 +8,10 @@
 #include <string>
 #include <vector>
 
+#ifdef AEROSP_HAS_YAML_CPP
+#  include <yaml-cpp/yaml.h>
+#endif
+
 namespace aerosp {
 namespace aero {
 namespace cfd {
@@ -400,6 +404,40 @@ bool SpeciesConfig::load(const std::string& config_path, std::string* error) {
 
     std::fclose(fp);
     return !species_list.empty() || !thermo_db_path.empty();
+}
+
+bool SpeciesConfig::load_yaml(const std::string& config_path, std::string* error) {
+#ifdef AEROSP_HAS_YAML_CPP
+    try {
+        YAML::Node root = YAML::LoadFile(config_path);
+
+        if (root["thermo_db"])
+            thermo_db_path = root["thermo_db"].as<std::string>();
+
+        if (root["trans_db"])
+            trans_db_path = root["trans_db"].as<std::string>();
+
+        if (root["species"] && root["species"].IsSequence()) {
+            for (const auto& s : root["species"])
+                species_list.push_back(s.as<std::string>());
+        }
+
+        if (root["chemistry"])
+            chemistry_model = root["chemistry"].as<std::string>();
+
+        if (root["transport"])
+            transport_model = root["transport"].as<std::string>();
+
+        return !species_list.empty() || !thermo_db_path.empty();
+    } catch (const std::exception& e) {
+        if (error) *error = e.what();
+        return false;
+    }
+#else
+    (void)config_path;
+    if (error) *error = "yaml-cpp not available (AEROSP_HAS_YAML_CPP=0)";
+    return false;
+#endif
 }
 
 } // namespace cfd

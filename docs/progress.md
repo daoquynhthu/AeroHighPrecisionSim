@@ -1381,3 +1381,4 @@
 - Fixed MSVC `value.erase(value.begin(), 1)` overload ambiguity → `value.erase(value.begin())`.
 - Confirmed fixed-column offsets (n_intervals at [0,2), M at [52,65), h_f at [65,80), T_low at [0,12), T_high at [12,22)) match Python reference.
 - 14/14 thermo tests PASS, parsing 2029 species from real thermo.inp.
+2026-07-27: yaml-cpp 0.8.0 integrated via add_subdirectory; SpeciesConfig::load_yaml() implemented; 15/15 tests PASS (new THERMO-CFG-2 YAML test); no startup crash after n_intervals fix.

@@ -86,6 +86,7 @@ struct SpeciesConfig {
     std::string trans_db_path;
 
     bool load(const std::string& config_path, std::string* error = nullptr);
+    bool load_yaml(const std::string& config_path, std::string* error = nullptr);
 };
 
 } // namespace cfd

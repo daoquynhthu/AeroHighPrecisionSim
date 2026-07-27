@@ -217,7 +217,7 @@ switch -Regex ($Action.ToLower()) {
             '}',
             '# 2. quick compilation check',
             'Write-Host "[pre-commit] compiling libraries ..."',
-            '& cmake --build (Join-Path $Root "build") --target missile_lib --config Release 2>&1 | Out-Null',
+            '& cmake --build (Join-Path $Root "build") --target missile_cpu --config Release 2>&1 | Out-Null',
             'if ($LASTEXITCODE -ne 0) {',
             '    Write-Host "[pre-commit] FAIL: library compilation error"',
             '    $failed = $true',
