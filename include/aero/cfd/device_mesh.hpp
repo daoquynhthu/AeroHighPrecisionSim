@@ -62,10 +62,6 @@ struct ConstDeviceCellData {
 
 class DeviceMesh {
 public:
-    static constexpr int NVAR = CFD_NVAR;
-    static constexpr int NGRAD = 18;
-    static constexpr int NPRIM = 6; // rho, u, v, w, p, nu_tilde
-    static constexpr int kMinmaxStride = 12;
     static constexpr int kMaxColors = 64;
 
     DeviceMesh() = default;
@@ -77,7 +73,13 @@ public:
     DeviceMesh(DeviceMesh&& other) noexcept;
     DeviceMesh& operator=(DeviceMesh&& other) noexcept;
 
-    bool upload_mesh(const CfdMesh& mesh, std::string* error = nullptr, bool skip_coloring = false);
+    bool upload_mesh(const CfdMesh& mesh, std::string* error = nullptr, bool skip_coloring = false, int nvar = CFD_NVAR);
+
+    int nvar() const { return nvar_; }
+    int nprim() const { return nvar_; }
+    int ngrad() const { return 3 * nvar_; }
+    int minmax_stride() const { return 2 * nvar_; }
+    int nvar_or_default() const { return nvar_ > 0 ? nvar_ : CFD_NVAR; }
     bool upload_state(const std::vector<ConservativeState>& q, std::string* error = nullptr);
     bool upload_gradients(const std::vector<PrimitiveGradient>& gradients, std::string* error = nullptr);
     bool upload_limiters(const std::vector<PrimitiveLimiter>& limiters, std::string* error = nullptr);
@@ -194,6 +196,8 @@ private:
     // Batched allocation base pointers (PERF-G7)
     char* d_face_buf_ = nullptr;
     char* d_cell_buf_ = nullptr;
+
+    int nvar_ = 0;
 };
 
 } // namespace cfd

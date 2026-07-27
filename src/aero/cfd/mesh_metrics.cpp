@@ -474,6 +474,47 @@ CfdMesh generate_flat_plate_mesh(Real length, Real width, Real height, Real firs
     return mesh;
 }
 
+CfdMesh generate_structured_cube_mesh_no_body(Real outer_scale, int n_per_dim) {
+    // Solid cube mesh without any body cavity — all hex cells are retained.
+    // Unlike generate_structured_cube_mesh, no cells are removed for a body
+    // at the origin, making this mesh suitable for freestream-preservation tests.
+    CfdMesh mesh;
+    int n = n_per_dim;
+    if (outer_scale <= 0.0f || n < 2) return mesh;
+    Real delta = 2.0f * outer_scale / static_cast<Real>(n - 1);
+    mesh.nodes.reserve(static_cast<std::size_t>(n) * n * n);
+    for (int k = 0; k < n; ++k) {
+        for (int j = 0; j < n; ++j) {
+            for (int i = 0; i < n; ++i) {
+                mesh.nodes.push_back({
+                    -outer_scale + i * delta,
+                    -outer_scale + j * delta,
+                    -outer_scale + k * delta
+                });
+            }
+        }
+    }
+    auto idx = [n](int i, int j, int k) { return i + j * n + k * n * n; };
+    int n_hex = n - 1;
+    for (int k = 0; k < n_hex; ++k) {
+        for (int j = 0; j < n_hex; ++j) {
+            for (int i = 0; i < n_hex; ++i) {
+                int p0 = idx(i,   j,   k);
+                int p1 = idx(i+1, j,   k);
+                int p2 = idx(i+1, j+1, k);
+                int p3 = idx(i,   j+1, k);
+                int p4 = idx(i,   j,   k+1);
+                int p5 = idx(i+1, j,   k+1);
+                int p6 = idx(i+1, j+1, k+1);
+                int p7 = idx(i,   j+1, k+1);
+                add_hex(mesh, p0, p1, p2, p3, p4, p5, p6, p7);
+            }
+        }
+    }
+    rebuild_faces(mesh);
+    return mesh;
+}
+
 CfdMesh generate_structured_hex_mesh(int n_per_dim) {
     CfdMesh mesh;
     int n = n_per_dim;

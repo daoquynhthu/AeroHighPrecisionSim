@@ -29,6 +29,42 @@ namespace cfd {
 
 namespace {
 
+// Temporary diagnostic kernel: find and print the first cell that fails
+// d_conservative_to_primitive, so we can understand why d_failed is set.
+__global__ void d_find_invalid_cell(const Real* d_q, int n_cells, int nvar, Real gamma,
+    Real* d_out_rho, Real* d_out_u, Real* d_out_v, Real* d_out_w, Real* d_out_p, int* d_out_cell) {
+    int cell = blockIdx.x * blockDim.x + threadIdx.x;
+    if (cell >= n_cells) return;
+    Real rho = d_q[cell * nvar + 0];
+    if (rho <= 0.0f || !real_isfinite(rho)) {
+        if (atomicExch(d_out_cell, cell) == -1) {
+            *d_out_rho = rho; *d_out_u = 0; *d_out_v = 0; *d_out_w = 0; *d_out_p = 0;
+        }
+        return;
+    }
+    Real inv_rho = 1.0f / rho;
+    Real u = d_q[cell * nvar + 1] * inv_rho;
+    Real v = d_q[cell * nvar + 2] * inv_rho;
+    Real w = d_q[cell * nvar + 3] * inv_rho;
+    Real kinetic = 0.5f * (u*u + v*v + w*w);
+    Real p = (gamma - 1.0f) * (d_q[cell * nvar + 4] - rho * kinetic);
+    Real nu_tilde = d_q[cell * nvar + 5] * inv_rho;
+    if (!real_isfinite(u) || !real_isfinite(v) || !real_isfinite(w) ||
+        !real_isfinite(p) || !real_isfinite(nu_tilde) || p <= 0.0f) {
+        if (atomicExch(d_out_cell, cell) == -1) {
+            *d_out_rho = rho; *d_out_u = u; *d_out_v = v; *d_out_w = w; *d_out_p = p;
+        }
+    }
+}
+
+__global__ void check_array_valid_kernel(const Real* d_arr, int n, int* d_failed) {
+    int idx = blockIdx.x * blockDim.x + threadIdx.x;
+    if (idx >= n) return;
+    if (!real_isfinite(d_arr[idx])) {
+        atomicExch(d_failed, 1);
+    }
+}
+
 __global__ void check_status_kernel(
     const int* d_failed,
     const Real* d_l2_sum,
@@ -74,6 +110,39 @@ __global__ void sst_l2_accumulate_kernel(
 
 } // namespace
 
+bool reallocate_implicit_buffers(
+    int nvar,
+    int old_n_cells,
+    int new_n_cells,
+    Real*& d_dq,
+    Real*& d_dt_cell,
+    Real*& d_neg_r,
+    Real*& d_r_saved,
+    Real*& d_q_backup,
+    Real*& d_scratch,
+    int*& d_newton_accepted,
+    std::string* error) {
+    auto safe_free = [](auto*& p) { cuda_free_safe(p); };
+    safe_free(d_dq);
+    safe_free(d_dt_cell);
+    safe_free(d_neg_r);
+    safe_free(d_r_saved);
+    safe_free(d_q_backup);
+    safe_free(d_scratch);
+    safe_free(d_newton_accepted);
+    if (new_n_cells <= 0) return true;
+    int new_nvar_cells = new_n_cells * nvar;
+    if (!cuda_check(cudaMalloc(&d_dq, new_nvar_cells * sizeof(Real)), "realloc d_dq", error)) return false;
+    if (!cuda_check(cudaMemset(d_dq, 0, new_nvar_cells * sizeof(Real)), "zero d_dq", error)) return false;
+    if (!cuda_check(cudaMalloc(&d_dt_cell, new_n_cells * sizeof(Real)), "realloc d_dt_cell", error)) return false;
+    if (!cuda_check(cudaMalloc(&d_neg_r, new_nvar_cells * sizeof(Real)), "realloc d_neg_r", error)) return false;
+    if (!cuda_check(cudaMalloc(&d_r_saved, new_nvar_cells * sizeof(Real)), "realloc d_r_saved", error)) return false;
+    if (!cuda_check(cudaMalloc(&d_q_backup, new_nvar_cells * sizeof(Real)), "realloc d_q_backup", error)) return false;
+    if (!cuda_check(cudaMalloc(&d_scratch, 4 * new_nvar_cells * sizeof(Real)), "realloc d_scratch", error)) return false;
+    if (!cuda_check(cudaMalloc(&d_newton_accepted, sizeof(int)), "realloc d_newton_accepted", error)) return false;
+    return true;
+}
+
 static void solve_gpu_free(int* d_failed, Real* d_min_dt, Real* d_l2_sum, Real* d_forces,
     Real* d_residual_history, Real* d_state_bounds_history, int* d_failure_cell, Real* d_failure_state) {
     cuda_free_safe(d_failed); cuda_free_safe(d_min_dt); cuda_free_safe(d_l2_sum); cuda_free_safe(d_forces);
@@ -96,7 +165,10 @@ static CfdSolveSummary solve_gpu_impl(
     bool owned_buffers,
     std::string* error,
     GpuCommunicator* comm = nullptr,
-    const GpuPartition* gpu_part = nullptr) {
+    const GpuPartition* gpu_part = nullptr,
+    CfdMesh* host_mesh = nullptr,
+    std::vector<ConservativeState>* host_state = nullptr,
+    AmrCycleCallback amr_callback = nullptr) {
     CfdSolveSummary summary;
     std::vector<Real> host_residual_history;
     int host_failed = 0;
@@ -111,10 +183,10 @@ static CfdSolveSummary solve_gpu_impl(
         Real mu_inf = config.mu_ref * t_ratio * real_sqrt(t_ratio) * (config.T_ref + config.sutherland_T) / (T_inf + config.sutherland_T);
         w_inf.nu_tilde = condition.nu_tilde_ratio * mu_inf / w_inf.rho;
     }
-    int nvar_ncells_flow = DeviceMesh::NVAR * static_cast<int>(d_mesh.cell_count());
+    int nvar_ncells_flow = d_mesh.nvar() * static_cast<int>(d_mesh.cell_count());
     int nvar_ncells = nvar_ncells_flow;
     int n_cells = static_cast<int>(d_mesh.cell_count());
-    int nvar = DeviceMesh::NVAR;
+    int nvar = d_mesh.nvar();
     int nvar_cells = n_cells * nvar;
 
     FgmresSolver* fgmres = nullptr;
@@ -199,6 +271,13 @@ static CfdSolveSummary solve_gpu_impl(
         goto fail;
     }
 
+    // DIAG: verify initial state right before entering solve_gpu_impl
+    { Real hq[6]; cudaMemcpy(hq, d_mesh.state_device(), 6*sizeof(Real), cudaMemcpyDeviceToHost);
+      std::fprintf(stderr, "DIAG_in_solve_gpu: cell0 rho=%.6g rhou=%.6g rhoE=%.6g\n", hq[0], hq[1], hq[4]);
+      int nc = static_cast<int>(d_mesh.cell_count()); int bad = -1;
+      for (int i = 0; i < std::min(nc,1000); ++i) { Real r; cudaMemcpy(&r, d_mesh.state_device()+i*6, sizeof(Real), cudaMemcpyDeviceToHost); if (r <= 0) { bad = i; break; } }
+      std::fprintf(stderr, "DIAG_in_solve_gpu: nc=%d first_bad=%d\n", nc, bad); }
+
     for (int iter = 0; iter < config.max_iter; ++iter) {
 #ifdef MPI_ENABLED
         if (comm && comm->size() > 1 && d_mesh.has_halo()) {
@@ -206,6 +285,68 @@ static CfdSolveSummary solve_gpu_impl(
             cudaStreamSynchronize(stream_comm);
         }
 #endif
+
+        // AMR trigger: at the top of each iteration (after iter 0),
+        // before gradient/residual computation. Caller provides the
+        // CPU-side AMR cycle via amr_callback; we handle GPU-side rebuild.
+        if (config.amr.enabled && iter > 0 && config.amr.interval > 0 &&
+                (iter % config.amr.interval) == 0 && host_mesh && host_state && amr_callback) {
+            std::size_t n_cells_host = host_mesh->cells.size();
+            host_state->resize(n_cells_host);
+            if (!d_mesh.download_state(*host_state, error))
+                goto fail;
+            if (!amr_callback(*host_mesh, *host_state, iter, config, error))
+                goto fail;
+            bool mesh_changed = (host_mesh->cells.size() != n_cells_host);
+            if (!mesh_changed) {
+                if (!d_mesh.upload_state(*host_state, error))
+                    goto fail;
+                n_cells = static_cast<int>(d_mesh.cell_count());
+                nvar_cells = n_cells * nvar;
+            } else {
+                if (!d_mesh.upload_mesh(*host_mesh, error))
+                    goto fail;
+                if (!d_mesh.upload_state(*host_state, error))
+                    goto fail;
+                int old_n_cells = n_cells;
+                n_cells = static_cast<int>(d_mesh.cell_count());
+                nvar_cells = n_cells * nvar;
+                if (config.viscous && !d_mesh.allocate_viscous()) {
+                    if (error) *error = "AMR re-allocate_viscous failed";
+                    goto fail;
+                }
+                if (config.turbulence_model == TurbulenceModel::SA_DDES &&
+                        !d_mesh.allocate_ddes()) {
+                    if (error) *error = "AMR re-allocate_ddes failed";
+                    goto fail;
+                }
+                if (config.turbulence_model == TurbulenceModel::SST) {
+                    if (!d_mesh.allocate_sst()) {
+                        if (error) *error = "AMR re-allocate_sst failed";
+                        goto fail;
+                    }
+                    if (!compute_sst_init_gpu(d_mesh, inf_k, inf_omega, error, stream_main))
+                        goto fail;
+                }
+                nvar_ncells = d_mesh.nvar() * n_cells;
+                if (config.turbulence_model == TurbulenceModel::SST && d_mesh.has_sst()) {
+                    nvar_ncells += 2 * n_cells;
+                }
+                if (config.implicit) {
+                    if (!lusgs->rebuild_coloring(d_mesh, error)) goto fail;
+                    if (!reallocate_implicit_buffers(nvar, old_n_cells, n_cells,
+                            d_dq, d_dt_cell, d_neg_r, d_r_saved, d_q_backup,
+                            d_scratch, d_newton_accepted, error))
+                        goto fail;
+                    delete fgmres;
+                    fgmres = new FgmresSolver(nvar_cells, config.fgmres_restart,
+                        config.fgmres_max_iter, config.fgmres_tol);
+                    if (!fgmres->allocate(error)) goto fail;
+                }
+            }
+            d_mesh.clear_residual(error);
+        }
+
         if (config.reconstruction_order == 2 || config.viscous || (config.turbulence_model != TurbulenceModel::LAMINAR)) {
             if (!compute_gradients_gpu(d_mesh, config.gamma, error, d_failed, stream_main)) goto fail;
             if (config.reconstruction_order == 2 || (config.turbulence_model != TurbulenceModel::LAMINAR)) {
@@ -226,6 +367,27 @@ static CfdSolveSummary solve_gpu_impl(
         if (!launch_euler_residual_kernel(d_mesh, w_inf, config.gamma, d_failed, nullptr, error,
                 config.reconstruction_order, stream_main)) {
             goto fail;
+        }
+        // DIAG: check d_failed right after Euler residual
+        { int df = 0; cudaDeviceSynchronize(); cudaMemcpy(&df, d_failed, sizeof(int), cudaMemcpyDeviceToHost);
+          if (df != 0) {
+            Real dr=0, du=0, dv=0, dw=0, dp=0; int dc = -1;
+            Real* d_diag_rho=nullptr, *d_diag_u=nullptr, *d_diag_v=nullptr, *d_diag_w=nullptr, *d_diag_p=nullptr; int* d_diag_cell=nullptr;
+            cudaMalloc(&d_diag_rho, sizeof(Real)); cudaMalloc(&d_diag_u, sizeof(Real)); cudaMalloc(&d_diag_v, sizeof(Real));
+            cudaMalloc(&d_diag_w, sizeof(Real)); cudaMalloc(&d_diag_p, sizeof(Real)); cudaMalloc(&d_diag_cell, sizeof(int));
+            cudaMemset(d_diag_cell, 0xFF, sizeof(int));
+            { int g = (n_cells+127)/128; d_find_invalid_cell<<<g,128>>>(d_mesh.state_device(), n_cells, nvar, config.gamma, d_diag_rho, d_diag_u, d_diag_v, d_diag_w, d_diag_p, d_diag_cell); cudaDeviceSynchronize(); }
+            cudaMemcpy(&dc, d_diag_cell, sizeof(int), cudaMemcpyDeviceToHost);
+            if (dc >= 0) {
+                cudaMemcpy(&dr, d_diag_rho, sizeof(Real), cudaMemcpyDeviceToHost);
+                cudaMemcpy(&du, d_diag_u, sizeof(Real), cudaMemcpyDeviceToHost);
+                cudaMemcpy(&dv, d_diag_v, sizeof(Real), cudaMemcpyDeviceToHost);
+                cudaMemcpy(&dw, d_diag_w, sizeof(Real), cudaMemcpyDeviceToHost);
+                cudaMemcpy(&dp, d_diag_p, sizeof(Real), cudaMemcpyDeviceToHost);
+                std::fprintf(stderr, "DIAG d_failed=1 after Euler residual (iter=%d) first bad cell=%d rho=%.6g u=%.6g v=%.6g w=%.6g p=%.6g\n", iter, dc, dr, du, dv, dw, dp);
+            }
+            cudaFree(d_diag_rho); cudaFree(d_diag_u); cudaFree(d_diag_v); cudaFree(d_diag_w); cudaFree(d_diag_p); cudaFree(d_diag_cell);
+          }
         }
 
 if (config.viscous) {
@@ -259,11 +421,15 @@ if (config.viscous) {
                     config.viscous, config.mu_ref, config.T_ref, config.sutherland_T, config.Re, error, stream_main)) {
                 goto fail;
             }
+            { int df = 0; cudaMemcpy(&df, d_failed, sizeof(int), cudaMemcpyDeviceToHost);
+              if (df != 0) std::fprintf(stderr, "DIAG d_failed=1 after local timestep (iter=%d)\n", iter); }
 
             if (!lusgs->compute_diagonal(d_mesh, d_dt_cell, config.gamma,
                     config.viscous, d_mesh.mu_device(), config.Re, error)) {
                 goto fail;
             }
+            { int df = 0; cudaMemcpy(&df, d_failed, sizeof(int), cudaMemcpyDeviceToHost);
+              if (df != 0) std::fprintf(stderr, "DIAG d_failed=1 after compute_diagonal (iter=%d)\n", iter); }
 
             if (!cuda_check(cudaMemcpy(d_r_saved, d_mesh.residual_device(),
                     nvar_cells * sizeof(Real), cudaMemcpyDeviceToDevice), "save raw R(Q^n)", error)) goto fail;
@@ -304,6 +470,7 @@ if (config.viscous) {
                         cudaMemcpyDeviceToHost), "read state_norm_sq", error)) goto fail;
                 Real state_rms = real_sqrt(state_norm_sq / static_cast<Real>(nvar_cells > 0 ? nvar_cells : 1));
                 eps_jfv *= real_fmax(Real(1.0), state_rms);
+                eps_jfv = real_fmin(eps_jfv, Real(0.01));
             }
 
             // Save pre-Newton state for CFL retry on Newton failure.
@@ -330,6 +497,8 @@ if (config.viscous) {
                     if (error) *error = "FGMRES solve failed in Newton iteration";
                     goto fail;
                 }
+                { int df = 0; cudaMemcpy(&df, d_failed, sizeof(int), cudaMemcpyDeviceToHost);
+                  if (df != 0) std::fprintf(stderr, "DIAG d_failed=1 after FGMRES solve (iter=%d newt=%d)\n", iter, newt); }
 
                 {
                     int btry = 0;
@@ -341,13 +510,22 @@ if (config.viscous) {
                                 goto fail;
                             }
                         } else {
+                            if (!dscal_gpu(0.5f, d_dq_full, nvar_cells, stream_main)) {
+                                if (error) *error = "Newton backtrack scale failed";
+                                goto fail;
+                            }
                             if (!dcopy_gpu(d_dq_full, d_dq, nvar_cells, stream_main)) {
                                 if (error) *error = "Newton restore dq_full failed";
                                 goto fail;
                             }
-                            if (!dscal_gpu(0.5f, d_dq, nvar_cells, stream_main)) {
-                                if (error) *error = "Newton backtrack scale failed";
-                                goto fail;
+                        }
+                        {   cudaMemsetAsync(d_failed, 0, sizeof(int), stream_main);
+                            int dq_g = (nvar_cells + 127) / 128;
+                            check_array_valid_kernel<<<dq_g, 128, 0, stream_main>>>(d_dq, nvar_cells, d_failed);
+                            int dq_invalid = 0; cudaMemcpy(&dq_invalid, d_failed, sizeof(int), cudaMemcpyDeviceToHost);
+                            if (dq_invalid) {
+                                cudaMemsetAsync(d_dq, 0, nvar_cells * sizeof(Real), stream_main);
+                                cudaMemsetAsync(d_failed, 0, sizeof(int), stream_main);
                             }
                         }
                         if (!daxpy_gpu(1, d_dq, d_mesh.state_device(), nvar_cells, stream_main)) {
@@ -359,6 +537,8 @@ if (config.viscous) {
                                 nullptr, error, config.reconstruction_order, stream_main)) {
                             goto fail;
                         }
+                        { int df = 0; cudaMemcpy(&df, d_failed, sizeof(int), cudaMemcpyDeviceToHost);
+                          if (df != 0) std::fprintf(stderr, "DIAG d_failed=1 after Newton Euler residual (iter=%d newt=%d btry=%d)\n", iter, newt, btry); }
                         if (config.viscous) {
                             if (!compute_viscous_flux_gpu(d_mesh, config.gamma, config.prandtl,
                                     config.mu_ref, config.T_ref, config.sutherland_T,
@@ -410,6 +590,8 @@ newton_accepted:
                 // reduce CFL for the next outer iteration. The pre-Newton residual is
                 // already in d_r_saved, so the L2 check below will show no progress
                 // (but also no divergence). Future iterations try again at lower CFL.
+                { int df = 0; cudaMemcpy(&df, d_failed, sizeof(int), cudaMemcpyDeviceToHost);
+                  if (df != 0) std::fprintf(stderr, "DIAG d_failed=1 after Newton failed (iter=%d)\n", iter); }
                 if (!dcopy_gpu(d_q_before_newton, d_mesh.state_device(), nvar_cells, stream_main)) {
                     if (error) *error = "Newton restore Q failed"; goto fail;
                 }
@@ -444,6 +626,11 @@ newton_accepted:
             }
         }
 
+        { int df = 0; Real l2 = 0;
+          cudaMemcpy(&df, d_failed, sizeof(int), cudaMemcpyDeviceToHost);
+          cudaMemcpy(&l2, d_l2_sum, sizeof(Real), cudaMemcpyDeviceToHost);
+          if (df != 0 || !real_isfinite(l2))
+              std::fprintf(stderr, "DIAG before check_status: d_failed=%d l2=%.6e (iter=%d)\n", df, l2, iter); }
         check_status_kernel<<<1, 1, 0, stream_main>>>(
             d_failed, d_l2_sum, nvar_ncells,
             config.convergence_tol, d_residual_history + iter);
@@ -601,7 +788,10 @@ CfdSolveSummary solve_gpu(
     DeviceMesh& d_mesh,
     const FreestreamCondition& condition,
     const CfdConfig& config,
-    std::string* error) {
+    std::string* error,
+    CfdMesh* host_mesh,
+    std::vector<ConservativeState>* host_state,
+    AmrCycleCallback amr_callback) {
     if (d_mesh.cell_count() == 0 || d_mesh.face_count() == 0) {
         CfdSolveSummary s;
         if (error) *error = "DeviceMesh is empty";
@@ -633,7 +823,8 @@ CfdSolveSummary solve_gpu(
     }
 
     return solve_gpu_impl(d_mesh, condition, config, d_failed, d_min_dt, d_l2_sum, d_forces,
-        d_residual_history, d_state_bounds_history, d_failure_cell, d_failure_state, true, error);
+        d_residual_history, d_state_bounds_history, d_failure_cell, d_failure_state, true, error,
+        nullptr, nullptr, host_mesh, host_state, amr_callback);
 }
 
 CfdSolveSummary solve_gpu(
@@ -644,7 +835,10 @@ CfdSolveSummary solve_gpu(
     Real* d_min_dt,
     Real* d_l2_sum,
     Real* d_forces,
-    std::string* error) {
+    std::string* error,
+    CfdMesh* host_mesh,
+    std::vector<ConservativeState>* host_state,
+    AmrCycleCallback amr_callback) {
     if (d_mesh.cell_count() == 0 || d_mesh.face_count() == 0) {
         CfdSolveSummary s;
         if (error) *error = "DeviceMesh is empty";
@@ -668,7 +862,8 @@ CfdSolveSummary solve_gpu(
     }
 
     CfdSolveSummary result = solve_gpu_impl(d_mesh, condition, config, d_failed, d_min_dt, d_l2_sum, d_forces,
-        d_residual_history, d_state_bounds_history, d_failure_cell, d_failure_state, false, error);
+        d_residual_history, d_state_bounds_history, d_failure_cell, d_failure_state, false, error,
+        nullptr, nullptr, host_mesh, host_state, amr_callback);
     cuda_free_safe(d_residual_history);
     cuda_free_safe(d_state_bounds_history);
     cuda_free_safe(d_failure_cell);

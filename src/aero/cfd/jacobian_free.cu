@@ -56,7 +56,7 @@ bool compute_jfv_product(DeviceMesh& mesh, const Real* d_v, Real* d_result,
     std::string* error, cudaStream_t stream,
     const Real* d_v_sst, Real* d_result_sst) {
     int n = static_cast<int>(mesh.cell_count());
-    int nvar = DeviceMesh::NVAR;
+    int nvar = mesh.nvar();
     int nvar_cells = n * nvar;
 
     bool sst_active = (d_v_sst != nullptr && d_result_sst != nullptr
@@ -126,6 +126,16 @@ bool compute_jfv_product(DeviceMesh& mesh, const Real* d_v, Real* d_result,
         }
         mesh.set_state_device(d_q_orig);
         return false;
+    }
+    {   int jfv_fail = 0;
+        cudaMemcpy(&jfv_fail, d_failed, sizeof(int), cudaMemcpyDeviceToHost);
+        if (jfv_fail) {
+            // Perturbed state had invalid cells; this Krylov direction is unusable.
+            // Zero the result (w = 0) so FGMRES can continue with other directions.
+            cudaMemsetAsync(d_result, 0, nvar_cells * sizeof(Real), stream);
+            mesh.set_state_device(d_q_orig);
+            return true;
+        }
     }
 
     if (config.viscous) {

@@ -16,6 +16,7 @@ constexpr int CFD_NVAR = 6;
 struct MmsSolutionEulerBC;
 
 struct CfdConfig {
+    int nvar = CFD_NVAR;
     Real cfl = 0.5f;
     int max_iter = 1000;
     Real convergence_tol = 1e-8f;

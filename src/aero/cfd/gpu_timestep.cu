@@ -137,7 +137,7 @@ bool compute_local_timestep_gpu(DeviceMesh& mesh, Real gamma, Real cfl, Real* d_
     int grid = (nc + block - 1) / block;
     DeviceCellData cd = mesh.cell_data();
     local_timestep_kernel<<<grid, block, 0, stream>>>(
-        mesh.state_device(), nc, DeviceMesh::NVAR, gamma, cfl,
+        mesh.state_device(), nc, mesh.nvar(), gamma, cfl,
         cd.volume, cd.h_min, d_dt_cell,
         viscous, mu_ref, T_ref, sutherland_T, Re);
     if (!cuda_check(cudaGetLastError(), "local timestep kernel launch", error)) return false;
@@ -159,7 +159,7 @@ bool compute_timestep_gpu(DeviceMesh& mesh, Real gamma, Real cfl, Real* d_min_dt
     DeviceCellData cd = mesh.cell_data();
 
     timestep_kernel<<<grid, kTimeStepBlockSize, 0, stream>>>(
-        mesh.state_device(), nc, DeviceMesh::NVAR, gamma, cfl,
+        mesh.state_device(), nc, mesh.nvar(), gamma, cfl,
         cd.volume, cd.h_min, d_partial_buf,
         viscous, mu_ref, T_ref, sutherland_T, Re);
     if (!cuda_check(cudaGetLastError(), "timestep kernel launch")) return false;

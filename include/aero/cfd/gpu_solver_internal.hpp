@@ -103,6 +103,24 @@ bool compute_jfv_product(DeviceMesh& mesh, const Real* d_v, Real* d_result,
     std::string* error = nullptr, cudaStream_t stream = nullptr,
     const Real* d_v_sst = nullptr, Real* d_result_sst = nullptr);
 
+// Reallocate implicit solver buffers after mesh cell-count change (AMR).
+// Pass old/new cell counts and nvar (= DeviceMesh::NVAR).
+// d_dt_cell is sized for n_cells; all others sized for nvar*n_cells (except d_newton_accepted = 1 int).
+// On success all new buffers are allocated (d_dq zeroed, others uninitialized).
+// On failure all buffers are freed and pointers set to nullptr.
+bool reallocate_implicit_buffers(
+    int nvar,
+    int old_n_cells,
+    int new_n_cells,
+    Real*& d_dq,
+    Real*& d_dt_cell,
+    Real*& d_neg_r,
+    Real*& d_r_saved,
+    Real*& d_q_backup,
+    Real*& d_scratch,
+    int*& d_newton_accepted,
+    std::string* error);
+
 // Multi-GPU halo exchange
 bool exchange_halo_gpu(DeviceMesh& mesh, const GpuPartition& gpu_part,
     GpuCommunicator& comm, cudaStream_t stream);

@@ -338,7 +338,7 @@ bool launch_euler_residual_kernel(
                 fd.nx, fd.ny, fd.nz, fd.area,
                 fd.left_cell, fd.right_cell, fd.boundary,
                 mesh.state_device(),
-                start, end, DeviceMesh::NVAR, nc,
+                start, end, CFD_NVAR, nc,
                 gamma,
                 freestream.rho, freestream.p,
                 freestream.u, freestream.v, freestream.w, a_inf, freestream.nu_tilde,
@@ -356,7 +356,7 @@ bool launch_euler_residual_kernel(
             fd.nx, fd.ny, fd.nz, fd.area,
             fd.left_cell, fd.right_cell, fd.boundary,
             mesh.state_device(),
-            0, nf, DeviceMesh::NVAR, nc,
+            0, nf, CFD_NVAR, nc,
             gamma,
             freestream.rho, freestream.p,
             freestream.u, freestream.v, freestream.w, a_inf, freestream.nu_tilde,
@@ -482,9 +482,9 @@ std::size_t estimate_euler_residual_gpu_bytes(const CfdMesh& mesh) {
     std::size_t face_topology = mesh.faces.size() * 8 * sizeof(int);
     std::size_t state_reads = 0;
     for (const auto& face : mesh.faces) {
-        state_reads += DeviceMesh::NVAR * sizeof(Real);
+        state_reads += CFD_NVAR * sizeof(Real);
         if (face.boundary == BoundaryKind::Interior) {
-            state_reads += DeviceMesh::NVAR * sizeof(Real);
+            state_reads += CFD_NVAR * sizeof(Real);
         }
     }
     std::size_t residual_writes = state_reads;

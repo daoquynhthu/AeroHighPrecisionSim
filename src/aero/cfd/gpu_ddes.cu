@@ -111,7 +111,7 @@ bool compute_ddes_length_scale_gpu(DeviceMesh& mesh, Real gamma, Real Re,
         cd.wall_distance,
         cd.volume,
         mesh.delta_ddes_device(),
-        nc, DeviceMesh::NVAR, gamma, Re,
+        nc, mesh.nvar(), gamma, Re,
         mu_ref, T_ref, sutherland_T,
         d_failed);
     if (!cuda_check(cudaGetLastError(), "ddes_length_scale_kernel launch")) return false;

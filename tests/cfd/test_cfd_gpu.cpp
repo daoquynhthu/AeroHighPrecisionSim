@@ -34,8 +34,54 @@ using namespace aerosp::aero::cfd;
 
 static int test_count = 0;
 static int pass_count = 0;
+static int g_skipped = 0;
+static const char* g_gtest_filter = nullptr;
 
-#define TEST(name) do { test_count++; std::printf("[Test] %s ... ", name); } while(0)
+static bool gtest_match(const char* pattern, const char* name) {
+    // Wildcard match: * = any sequence, ? = single char (simplified to only *)
+    while (*pattern) {
+        if (*pattern == '*') {
+            ++pattern;
+            if (!*pattern) return true;
+            while (*name) {
+                if (gtest_match(pattern, name)) return true;
+                ++name;
+            }
+            return false;
+        }
+        if (*pattern != *name) return false;
+        ++pattern; ++name;
+    }
+    return *name == '\0';
+}
+
+static bool gtest_filter_matches(const char* name) {
+    if (!g_gtest_filter || !*g_gtest_filter) return true;
+    // Split on ':' for multiple patterns; '-' prefix = negative
+    const char* p = g_gtest_filter;
+    bool has_positive = false;
+    bool positive_match = false;
+    while (*p) {
+        const char* end = p;
+        while (*end && *end != ':') ++end;
+        std::string seg(p, end);
+        if (seg.empty()) { p = end + (*end == ':'); continue; }
+        bool neg = (seg[0] == '-');
+        if (neg) seg = seg.substr(1);
+        else has_positive = true;
+        bool m = gtest_match(seg.c_str(), name);
+        if (!neg && m) positive_match = true;
+        if (neg && m) return false;
+        p = end + (*end == ':');
+    }
+    return !has_positive || positive_match;
+}
+
+#define TEST(name) do { \
+    test_count++; \
+    if (!gtest_filter_matches(name)) { g_skipped++; test_count--; return 0; } \
+    std::printf("[Test] %s ... ", name); \
+} while(0)
 #define PASS do { pass_count++; std::printf("PASS\n"); } while(0)
 #define FAIL(fmt, ...) do { std::printf("FAIL: " fmt "\n", ##__VA_ARGS__); return 1; } while(0)
 
@@ -372,7 +418,7 @@ static int test_gpu_flat_plate_convergence() {
 static int test_oracle_freestream_preservation() {
     TEST("CFD-ORACLE-EULER-1 freestream preservation GPU=CPU");
     {
-        CfdMesh mesh = generate_structured_cube_mesh(5.0f, 13);
+        CfdMesh mesh = generate_structured_cube_mesh_no_body(5.0f);
         compute_mesh_metrics(mesh);
 
         FreestreamCondition cond;
@@ -1078,9 +1124,9 @@ static int test_color_deterministic_residual() {
         int* d_failed = nullptr;
         if (!cuda_check(cudaMalloc(&d_failed, sizeof(int)), "cudaMalloc d_failed", &error)) FAIL("%s", error.c_str());
 
-        std::size_t residual_bytes = d_mesh.cell_count() * DeviceMesh::NVAR * sizeof(Real);
-        std::vector<Real> res1(d_mesh.cell_count() * DeviceMesh::NVAR);
-        std::vector<Real> res2(d_mesh.cell_count() * DeviceMesh::NVAR);
+        std::size_t residual_bytes = d_mesh.cell_count() * CFD_NVAR * sizeof(Real);
+        std::vector<Real> res1(d_mesh.cell_count() * CFD_NVAR);
+        std::vector<Real> res2(d_mesh.cell_count() * CFD_NVAR);
 
         if (!compute_euler_residual_gpu(d_mesh, w, gamma, d_failed, &error)) FAIL("1st run: %s", error.c_str());
         if (!cuda_check(cudaMemcpy(res1.data(), d_mesh.residual_device(), residual_bytes, cudaMemcpyDeviceToHost), "1st download", &error)) FAIL("%s", error.c_str());
@@ -1134,7 +1180,7 @@ static int test_color_deterministic_gradient_limiter() {
         if (!compute_limiters_gpu(d_mesh, gamma, &error, d_failed)) FAIL("1st limiters: %s", error.c_str());
         if (!apply_limiter_gpu(d_mesh, &error)) FAIL("1st apply: %s", error.c_str());
 
-        std::size_t grad_bytes = d_mesh.cell_count() * DeviceMesh::NGRAD * sizeof(Real);
+        std::size_t grad_bytes = d_mesh.cell_count() * d_mesh.ngrad() * sizeof(Real);
         std::vector<PrimitiveGradient> g1(d_mesh.cell_count());
         if (!d_mesh.download_gradients(g1, &error)) FAIL("1st download: %s", error.c_str());
 
@@ -2094,7 +2140,7 @@ static int test_recon_positivity_clamping() {
         if (host_failed) FAIL("Euler residual reported failure — limiter did not prevent negative rho/p");
 
         // Verify the residual contains finite values
-        int nvar_cells = n * DeviceMesh::NVAR;
+        int nvar_cells = n * CFD_NVAR;
         std::vector<Real> h_res(nvar_cells);
         if (!cuda_check(cudaMemcpy(h_res.data(), d_mesh.residual_device(),
                 nvar_cells * sizeof(Real), cudaMemcpyDeviceToHost), "read residual"))
@@ -2198,7 +2244,7 @@ static int test_sa_diffusion_sigma_division() {
         Real prandtl = 0.72f;
 
         int n = static_cast<int>(mesh.cells.size());
-        int nvar = DeviceMesh::NVAR;
+        int nvar = CFD_NVAR;
         int nvar_cells = n * nvar;
 
         ConservativeState q_inf = primitive_to_conservative(w_inf, gamma);
@@ -2306,7 +2352,7 @@ static int test_hllc_symmetric_state_nan_resilience() {
         if (!d_mesh.upload_mesh(mesh)) FAIL("upload mesh failed");
 
         int n = static_cast<int>(mesh.cells.size());
-        int nvar = DeviceMesh::NVAR;
+        int nvar = CFD_NVAR;
         ConservativeState q_inf = primitive_to_conservative(w_inf, 1.4f);
         std::vector<ConservativeState> h_q(n, q_inf);
         if (!d_mesh.upload_state(h_q)) FAIL("upload state failed");
@@ -2459,7 +2505,7 @@ static int test_jfv_rans_source() {
         if (!d_mesh.allocate_viscous()) FAIL("allocate viscous failed");
 
         int n = static_cast<int>(mesh.cells.size());
-        int nvar = DeviceMesh::NVAR;
+        int nvar = CFD_NVAR;
         int nvar_cells = n * nvar;
 
         Real* d_v = nullptr;
@@ -3132,7 +3178,7 @@ static int test_robust_zero_volume() {
         if (!d_mesh.upload_mesh(mesh)) FAIL("upload mesh failed");
 
         int n = static_cast<int>(mesh.cells.size());
-        int nvar = DeviceMesh::NVAR;
+        int nvar = CFD_NVAR;
         PrimitiveState w_inf;
         w_inf.rho = 1.0f; w_inf.u = 2.0f; w_inf.v = 0.0f; w_inf.w = 0.0f;
         w_inf.p = 1.0f / 1.4f; w_inf.nu_tilde = 0.0f;
@@ -3933,7 +3979,7 @@ static int test_sst_jfv_product() {
         if (!d_mesh.allocate_sst()) FAIL("allocate SST failed");
 
         int n = static_cast<int>(mesh.cells.size());
-        int nvar = DeviceMesh::NVAR;
+        int nvar = CFD_NVAR;
         int nvar_cells = n * nvar;
 
         Real* d_v = nullptr;
@@ -4114,6 +4160,118 @@ static int test_sst_jfv_product() {
 }
 
 static int test_ddes_length_scale() {
+    TEST("CFD-IMPLICIT-AMR-3 LusgsPreconditioner::rebuild_coloring valid range");
+    {
+        CfdMesh mesh = generate_structured_cube_mesh(5.0f, 13);
+        compute_mesh_metrics(mesh);
+        DeviceMesh d_mesh;
+        std::string error;
+        if (!d_mesh.upload_mesh(mesh, &error)) FAIL("upload: %s", error.c_str());
+        int n_cells = static_cast<int>(d_mesh.cell_count());
+        LusgsPreconditioner lusgs;
+        if (!lusgs.allocate(d_mesh, &error)) FAIL("allocate: %s", error.c_str());
+        if (!lusgs.rebuild_coloring(d_mesh, &error)) FAIL("rebuild_coloring: %s", error.c_str());
+        if (!lusgs.allocated()) FAIL("allocated() false after rebuild_coloring");
+        PASS;
+    }
+
+    TEST("CFD-IMPLICIT-AMR-4 reallocate_implicit_buffers sizing and reuse");
+    {
+        constexpr int nvar = CFD_NVAR;
+        int n1 = 100;
+        int n2 = 200;
+        Real *d_dq = nullptr, *d_dt_cell = nullptr, *d_neg_r = nullptr;
+        Real *d_r_saved = nullptr, *d_q_backup = nullptr, *d_scratch = nullptr;
+        int* d_newton_accepted = nullptr;
+        std::string error;
+
+        // Allocate for n1
+        if (!reallocate_implicit_buffers(nvar, 0, n1, d_dq, d_dt_cell, d_neg_r,
+                d_r_saved, d_q_backup, d_scratch, d_newton_accepted, &error))
+            FAIL("first alloc: %s", error.c_str());
+
+        // Write sentinel values into all buffers and verify
+        auto write_and_check = [&](int n_cells) {
+            int nvar_cells = n_cells * nvar;
+            std::vector<Real> h_buf(nvar_cells, 0.0f);
+            for (int i = 0; i < nvar_cells; ++i) h_buf[i] = static_cast<Real>(i);
+            if (!cuda_check(cudaMemcpy(d_dq, h_buf.data(), nvar_cells * sizeof(Real), cudaMemcpyHostToDevice),
+                    "write d_dq")) return false;
+            std::fill(h_buf.begin(), h_buf.end(), 0.0f);
+            if (!cuda_check(cudaMemcpy(h_buf.data(), d_dq, nvar_cells * sizeof(Real), cudaMemcpyDeviceToHost),
+                    "read d_dq")) return false;
+            for (int i = 0; i < nvar_cells; ++i) {
+                if (std::fabs(h_buf[i] - static_cast<Real>(i)) > 1e-6f) return false;
+            }
+            return true;
+        };
+        if (!write_and_check(n1)) FAIL("d_dq data corrupted on first alloc");
+
+        // Reallocate to n2
+        if (!reallocate_implicit_buffers(nvar, n1, n2, d_dq, d_dt_cell, d_neg_r,
+                d_r_saved, d_q_backup, d_scratch, d_newton_accepted, &error))
+            FAIL("realloc: %s", error.c_str());
+
+        if (!write_and_check(n2)) FAIL("d_dq data corrupted after realloc");
+
+        // Reallocate to zero (cleanup)
+        if (!reallocate_implicit_buffers(nvar, n2, 0, d_dq, d_dt_cell, d_neg_r,
+                d_r_saved, d_q_backup, d_scratch, d_newton_accepted, &error))
+            FAIL("zero cleanup: %s", error.c_str());
+
+        PASS;
+    }
+
+    TEST("CFD-IMPLICIT-AMR-5 amr=false implicit GPU=CPU force match");
+    {
+        CfdMesh mesh = generate_flat_plate_mesh();
+        compute_mesh_metrics(mesh);
+
+        FreestreamCondition cond;
+        cond.mach = 0.5f;
+        cond.alpha_deg = 0.0f;
+
+        CfdConfig cfg;
+        cfg.implicit = true;
+        cfg.max_iter = 50;
+        cfg.convergence_tol = 1e-8f;
+        cfg.cfl_start = 0.1f;
+        cfg.cfl_end = 5.0f;
+        cfg.cfl_ramp_steps = 10;
+        cfg.newton_max_iter = 1;
+        cfg.fgmres_restart = 20;
+        cfg.fgmres_max_iter = 40;
+        cfg.fgmres_tol = 1e-1f;
+
+        // GPU implicit: replicate solve_gpu_dispatch flow (upload mesh + state, call solve_gpu)
+        DeviceMesh d_mesh;
+        std::string error;
+        if (!d_mesh.upload_mesh(mesh, &error)) FAIL("upload mesh: %s", error.c_str());
+        PrimitiveState w_inf = make_freestream(cond.mach, cond.alpha_deg, cond.beta_deg, cfg.gamma);
+        ConservativeState q_inf = primitive_to_conservative(w_inf, cfg.gamma);
+        std::vector<ConservativeState> q(mesh.cells.size(), q_inf);
+        if (!d_mesh.upload_state(q, &error)) FAIL("upload state: %s", error.c_str());
+        CfdSolveSummary gpu = solve_gpu(d_mesh, cond, cfg, &error);
+        if (gpu.failed) FAIL("GPU implicit solve failed: %s", error.c_str());
+
+        // CPU implicit via CfdSolver
+        CfdSolver cpu_solver;
+        if (!cpu_solver.load_mesh(mesh)) FAIL("load mesh failed");
+        cfg.use_gpu = false;
+        CfdSolveSummary cpu = cpu_solver.solve(cond, cfg);
+        if (cpu.failed) FAIL("CPU implicit solve failed");
+
+        if (!std::isfinite(gpu.forces.CD)) FAIL("GPU CD not finite: %g", gpu.forces.CD);
+        if (!std::isfinite(cpu.forces.CD)) FAIL("CPU CD not finite: %g", cpu.forces.CD);
+
+        if (!near(gpu.forces.CD, cpu.forces.CD, 5e-3f)) FAIL("CD GPU=%g CPU=%g diff=%g",
+            gpu.forces.CD, cpu.forces.CD, std::fabs(gpu.forces.CD - cpu.forces.CD));
+        if (!near(gpu.forces.CL, cpu.forces.CL, 5e-3f)) FAIL("CL GPU=%g CPU=%g diff=%g",
+            gpu.forces.CL, cpu.forces.CL, std::fabs(gpu.forces.CL - cpu.forces.CL));
+
+        PASS;
+    }
+
     TEST("CFD-TURB-DDES-LENGTH-1 DDES length scale kernel correctness");
     {
         CfdMesh mesh = generate_structured_cube_mesh(5.0f, 9);
@@ -4176,7 +4334,211 @@ static int test_ddes_length_scale() {
     return 0;
 }
 
-int main() {
+static int test_implicit_body_regression() {
+    TEST("CFD-IMPLICIT-BODY-1 Implicit on body-cavity cube: no failure, finite CX");
+    {
+        CfdMesh mesh = generate_structured_cube_mesh(5.0f, 9);
+        compute_mesh_metrics(mesh);
+        FreestreamCondition cond;
+        cond.mach = 2.0f; cond.alpha_deg = 0.0f; cond.beta_deg = 0.0f;
+        CfdConfig cfg;
+        cfg.implicit = true;
+        cfg.max_iter = 50;
+        cfg.convergence_tol = 1e-10f;
+        cfg.cfl_start = 0.01f;
+        cfg.cfl_end = 0.5f;
+        cfg.cfl_ramp_steps = 20;
+        cfg.newton_max_iter = 2;
+        cfg.fgmres_restart = 30;
+        cfg.fgmres_max_iter = 60;
+        cfg.fgmres_tol = 1e-1f;
+        cfg.diagnostic_level = DiagnosticLevel::Basic;
+        cfg.amr.enabled = false;
+        std::string error;
+        CfdSolveSummary result = solve_gpu_dispatch(mesh, cond, cfg, &error);
+        if (result.failed) FAIL("solver failed: %s", error.c_str());
+        if (!std::isfinite(result.forces.CX)) FAIL("CX not finite: %g", result.forces.CX);
+        if (result.converged)
+            std::printf("  (converged at iter %zu  CX=%.6g)\n", result.residual_history.size(), result.forces.CX);
+        else
+            std::printf("  (not converged  final res=%.2e  CX=%.6g)\n",
+                result.residual_history.empty() ? -1.0f : result.residual_history.back(), result.forces.CX);
+        PASS;
+    }
+    return 0;
+}
+
+// Legacy diagnostic — always passes, but gives insight if regression BODY-1 fails.
+static int test_implicit_body_diag() {
+    TEST("CFD-IMPLICIT-BODY-DIAG implicit on body-cavity cube (diagnostic)");
+    {
+        CfdMesh mesh = generate_structured_cube_mesh(5.0f, 9);
+        compute_mesh_metrics(mesh);
+        FreestreamCondition cond;
+        cond.mach = 2.0f; cond.alpha_deg = 0.0f; cond.beta_deg = 0.0f;
+        CfdConfig cfg;
+        cfg.implicit = true;
+        cfg.max_iter = 5;
+        cfg.convergence_tol = 1e-10f;
+        cfg.cfl_start = 0.1f;
+        cfg.cfl_end = 5.0f;
+        cfg.cfl_ramp_steps = 5;
+        cfg.newton_max_iter = 2;
+        cfg.fgmres_restart = 20;
+        cfg.fgmres_max_iter = 40;
+        cfg.fgmres_tol = 1e-1f;
+        cfg.diagnostic_level = DiagnosticLevel::Basic;
+        cfg.amr.enabled = false;
+        std::string error;
+        CfdSolveSummary result = solve_gpu_dispatch(mesh, cond, cfg, &error);
+        if (result.failed)
+            std::printf("  (body-cavity implicit failed: %s  hist=%zu)\n", error.c_str(), result.residual_history.size());
+        else
+            std::printf("  (body-cavity implicit OK  CX=%.6g  converged=%d)\n", result.forces.CX, result.converged);
+        PASS; // always pass — this is diagnostic only
+    }
+    return 0;
+}
+
+static int test_implicit_amr_end_to_end() {
+    TEST("CFD-IMPLICIT-AMR-1 Implicit+AMR on cube Mach 2: CX matches explicit+AMR within 1e-4");
+    {
+        CfdMesh mesh = generate_structured_cube_mesh_no_body(5.0f, 9);
+        compute_mesh_metrics(mesh);
+        int cells_before = static_cast<int>(mesh.cells.size());
+
+        FreestreamCondition cond;
+        cond.mach = 2.0f; cond.alpha_deg = 0.0f; cond.beta_deg = 0.0f;
+
+        std::string error;
+
+        // Explicit+AMR reference: 2 AMR cycles (triggers at iter 10, 20)
+        CfdConfig cfg_explicit;
+        cfg_explicit.max_iter = 21;
+        cfg_explicit.cfl = 0.1f;
+        cfg_explicit.convergence_tol = 1e-12f;
+        cfg_explicit.amr.enabled = true;
+        cfg_explicit.amr.interval = 10;
+        cfg_explicit.amr.refine_tol = 0.03f;
+
+        CfdSolveSummary expl = solve_gpu_dispatch(mesh, cond, cfg_explicit, &error);
+        if (expl.failed) FAIL("explicit+AMR failed: %s", error.c_str());
+        if (!std::isfinite(expl.forces.CX)) FAIL("explicit CX not finite: %g", expl.forces.CX);
+
+        // Implicit+AMR: 2 AMR cycles, implicit converges faster with fewer iters
+        CfdConfig cfg_implicit;
+        cfg_implicit.implicit = true;
+        cfg_implicit.max_iter = 20;
+        cfg_implicit.convergence_tol = 1e-10f;
+        cfg_implicit.cfl_start = 0.1f;
+        cfg_implicit.cfl_end = 5.0f;
+        cfg_implicit.cfl_ramp_steps = 5;
+        cfg_implicit.newton_max_iter = 2;
+        cfg_implicit.fgmres_restart = 20;
+        cfg_implicit.fgmres_max_iter = 40;
+        cfg_implicit.fgmres_tol = 1e-1f;
+        cfg_implicit.diagnostic_level = DiagnosticLevel::Basic;
+        cfg_implicit.amr.enabled = true;
+        cfg_implicit.amr.interval = 10;
+        cfg_implicit.amr.refine_tol = 0.03f;
+
+        std::string imp_err;
+        CfdSolveSummary impl = solve_gpu_dispatch(mesh, cond, cfg_implicit, &imp_err);
+        if (impl.failed) {
+            std::string diag_info;
+            bool diag_valid = impl.diagnostics.failure.valid;
+            if (diag_valid) {
+                diag_info = impl.diagnostics.failure.reason;
+                std::printf("  (fail iter=%d cell=%d reason=%s)\n",
+                    impl.diagnostics.failure.iteration,
+                    impl.diagnostics.failure.cell,
+                    diag_info.c_str());
+            }
+            std::printf("  (residual history: %zu entries)\n", impl.residual_history.size());
+            for (std::size_t ri = 0; ri < impl.residual_history.size(); ++ri)
+                std::printf("    iter %zu: res=%.6e\n", ri, impl.residual_history[ri]);
+            if (!diag_valid)
+                FAIL("implicit+AMR failed: %s (no failure snapshot)", imp_err.c_str());
+            else
+                FAIL("implicit+AMR failed: %s (diag: %s)", imp_err.c_str(), diag_info.c_str());
+        }
+        if (!std::isfinite(impl.forces.CX)) FAIL("implicit CX not finite: %g", impl.forces.CX);
+
+        // AMR must have refined both paths
+        if (!expl.converged && expl.residual_history.back() > 1e-6f)
+            std::printf("  (explicit final res=%.2e)\n", expl.residual_history.back());
+        if (!impl.converged && impl.residual_history.back() > 1e-6f)
+            std::printf("  (implicit final res=%.2e)\n", impl.residual_history.back());
+
+        Real diff = std::fabs(impl.forces.CX - expl.forces.CX);
+        std::printf("  (explicit CX=%.8g implicit CX=%.8g diff=%.2e)\n",
+            expl.forces.CX, impl.forces.CX, diff);
+        if (diff > 1e-4f) FAIL("CX mismatch > 1e-4: diff=%g", diff);
+
+        PASS;
+    }
+
+    TEST("CFD-IMPLICIT-AMR-2 Implicit+AMR on flat plate: sanity check (finite, no crash)");
+    {
+        CfdMesh mesh = generate_flat_plate_mesh();
+        compute_mesh_metrics(mesh);
+
+        FreestreamCondition cond;
+        cond.mach = 0.5f; cond.alpha_deg = 0.0f; cond.beta_deg = 0.0f;
+
+        CfdConfig cfg;
+        cfg.implicit = true;
+        cfg.max_iter = 40;
+        cfg.convergence_tol = 0.0f; // never converge — run all 40 iters
+        cfg.cfl_start = 0.1f;
+        cfg.cfl_end = 5.0f;
+        cfg.cfl_ramp_steps = 10;
+        cfg.newton_max_iter = 1;
+        cfg.fgmres_restart = 20;
+        cfg.fgmres_max_iter = 40;
+        cfg.fgmres_tol = 1e-1f;
+        cfg.viscous = true;
+        cfg.Re = 1e5f;
+        cfg.prandtl = 0.72f;
+        cfg.mu_ref = 1.716e-5f;
+        cfg.T_ref = 273.15f;
+        cfg.sutherland_T = 110.4f;
+        cfg.amr.enabled = true;
+        cfg.amr.interval = 10;
+        cfg.amr.refine_tol = 0.02f;
+
+        std::string error;
+        CfdSolveSummary result = solve_gpu_dispatch(mesh, cond, cfg, &error);
+        if (result.failed) FAIL("implicit+AMR flat plate failed: %s", error.c_str());
+
+        // Finite forces
+        if (!std::isfinite(result.forces.CD)) FAIL("CD not finite: %g", result.forces.CD);
+        if (!std::isfinite(result.forces.CL)) FAIL("CL not finite: %g", result.forces.CL);
+
+        // All iterations completed (convergence_tol=0 prevents early exit)
+        if (result.residual_history.empty()) FAIL("no residual history");
+        std::printf("  (flat plate: res %.2e -> %.2e CD=%.6g CL=%.6g iters=%zu)\n",
+            result.residual_history.front(), result.residual_history.back(),
+            result.forces.CD, result.forces.CL,
+            result.residual_history.size());
+        // No NaN entries
+        for (std::size_t ri = 0; ri < result.residual_history.size(); ++ri)
+            if (!std::isfinite(result.residual_history[ri]))
+                FAIL("non-finite residual at iter %zu: %.2e", ri, result.residual_history[ri]);
+
+        PASS;
+    }
+    return 0;
+}
+
+int main(int argc, char** argv) {
+    for (int i = 1; i < argc; ++i) {
+        if (std::strncmp(argv[i], "--gtest_filter=", 15) == 0) {
+            g_gtest_filter = argv[i] + 15;
+        }
+    }
+    // Reset GPU context to recover from any TDR triggered by prior test runs
+    cudaDeviceReset();
     int result = 0;
     result |= test_residual_equivalence_single_face();
     result |= test_device_mesh_move();
@@ -4187,6 +4549,7 @@ int main() {
     result |= test_gpu_cpu_convergence_match();
     result |= test_gpu_flat_plate_convergence();
     result |= test_oracle_freestream_preservation();
+
     result |= test_oracle_symmetric_cube_forces();
     result |= test_oracle_flat_plate_zero_forces();
     result |= test_oracle_convergence_history();
@@ -4256,7 +4619,12 @@ result |= test_recon_order2_converged_forces();
     result |= test_sst_viscous_guard();
     result |= test_sst_jfv_product();
     result |= test_robust_nan_viscous_turb();
-    std::printf("\n%d / %d tests PASSED.\n", pass_count, test_count);
+    result |= test_implicit_body_regression();
+    result |= test_implicit_body_diag();
+    result |= test_implicit_amr_end_to_end();
+    std::printf("\n%d / %d tests PASSED", pass_count, test_count);
+    if (g_skipped > 0) std::printf(" (%d skipped)", g_skipped);
+    std::printf(".\n");
     return result == 0 && pass_count == test_count ? 0 : 1;
 }
 

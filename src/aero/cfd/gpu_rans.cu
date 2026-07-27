@@ -220,7 +220,7 @@ bool apply_rans_implicit_gpu(DeviceMesh& mesh, Real Re,
     apply_rans_implicit_kernel<<<grid, block, 0, stream>>>(
         mesh.state_device(), mesh.residual_device(), cd.volume,
         cd.wall_distance, d_min_dt,
-        nc, DeviceMesh::NVAR, Re);
+        nc, mesh.nvar(), Re);
     if (!cuda_check(cudaGetLastError(), "apply_rans_implicit_kernel launch", error)) return false;
     return true;
 }
@@ -236,7 +236,7 @@ bool apply_rans_implicit_per_cell_gpu(DeviceMesh& mesh, Real Re,
     apply_rans_implicit_per_cell_kernel<<<grid, block, 0, stream>>>(
         mesh.state_device(), mesh.residual_device(), cd.volume,
         cd.wall_distance, d_dt_cell,
-        nc, DeviceMesh::NVAR, Re);
+        nc, mesh.nvar(), Re);
     if (!cuda_check(cudaGetLastError(), "apply_rans_implicit_per_cell_kernel launch", error)) return false;
     return true;
 }
@@ -259,7 +259,7 @@ bool compute_rans_source_gpu(DeviceMesh& mesh, Real gamma, Real Re, Real mu_ref,
         mesh.gradients_device(),
         cd.volume, cd.wall_distance,
         d_delta_ddes,
-        nc, DeviceMesh::NVAR, gamma, Re,
+        nc, mesh.nvar(), gamma, Re,
         mu_ref, T_ref, sutherland_T,
         d_failed);
     if (!cuda_check(cudaGetLastError(), "rans_source_kernel launch")) return false;

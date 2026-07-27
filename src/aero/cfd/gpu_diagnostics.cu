@@ -147,7 +147,7 @@ bool compute_state_bounds_gpu(DeviceMesh& mesh, Real gamma, Real* d_bounds_slot,
     int grid = (nc + block - 1) / block;
 
     state_bounds_kernel<<<grid, block, 0, stream>>>(
-        mesh.state_device(), nc, DeviceMesh::NVAR, gamma,
+        mesh.state_device(), nc, mesh.nvar(), gamma,
         d_bounds_slot + 0, d_bounds_slot + 1,
         d_bounds_slot + 2, d_bounds_slot + 3,
         d_bounds_slot + 4, d_bounds_slot + 5);
@@ -164,7 +164,7 @@ bool compute_failure_snapshot_gpu(DeviceMesh& mesh, Real gamma,
     int grid = (nc + block - 1) / block;
 
     failure_snapshot_kernel<<<grid, block, 0, stream>>>(
-        mesh.state_device(), nc, DeviceMesh::NVAR, gamma,
+        mesh.state_device(), nc, mesh.nvar(), gamma,
         d_failure_cell, d_failure_state);
     if (!cuda_check(cudaGetLastError(), "failure_snapshot_kernel launch")) return false;
 

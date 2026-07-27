@@ -71,7 +71,7 @@ __global__ void __launch_bounds__(128) viscous_flux_kernel_atomic(
     Real inv_rho_L2 = inv_rho_L * inv_rho_L;
     Real T_L = p_L * inv_rho_L;
 
-    int gL = left * DeviceMesh::NGRAD;
+    int gL = left * nvar * 3;
     Real du_dx_L = d_gradients[gL + 3];
     Real du_dy_L = d_gradients[gL + 4];
     Real du_dz_L = d_gradients[gL + 5];
@@ -107,7 +107,7 @@ __global__ void __launch_bounds__(128) viscous_flux_kernel_atomic(
         Real inv_rho_R2 = inv_rho_R * inv_rho_R;
         Real T_R = p_R * inv_rho_R;
 
-        int gR = right * DeviceMesh::NGRAD;
+        int gR = right * nvar * 3;
         Real drho_dx_R = d_gradients[gR + 0];
         Real drho_dy_R = d_gradients[gR + 1];
         Real drho_dz_R = d_gradients[gR + 2];
@@ -299,7 +299,7 @@ __global__ void __launch_bounds__(128) viscous_flux_kernel_atomic(
         Real nu_tilde_R = d_q[right * nvar + 5] / rho_R;
         if (!real_isfinite(nu_tilde_R)) return;
 
-        int gR = right * DeviceMesh::NGRAD;
+        int gR = right * nvar * 3;
         Real dnu_dx_R = d_gradients[gR + 15];
         Real dnu_dy_R = d_gradients[gR + 16];
         Real dnu_dz_R = d_gradients[gR + 17];
@@ -398,7 +398,7 @@ __global__ void __launch_bounds__(128) viscous_flux_kernel_colored(
     Real inv_rho_L2 = inv_rho_L * inv_rho_L;
     Real T_L = p_L * inv_rho_L;
 
-    int gL = left * DeviceMesh::NGRAD;
+    int gL = left * nvar * 3;
     Real du_dx_L = d_gradients[gL + 3];
     Real du_dy_L = d_gradients[gL + 4];
     Real du_dz_L = d_gradients[gL + 5];
@@ -434,7 +434,7 @@ __global__ void __launch_bounds__(128) viscous_flux_kernel_colored(
         Real inv_rho_R2 = inv_rho_R * inv_rho_R;
         Real T_R = p_R * inv_rho_R;
 
-        int gR = right * DeviceMesh::NGRAD;
+        int gR = right * nvar * 3;
         Real drho_dx_R = d_gradients[gR + 0];
         Real drho_dy_R = d_gradients[gR + 1];
         Real drho_dz_R = d_gradients[gR + 2];
@@ -626,7 +626,7 @@ __global__ void __launch_bounds__(128) viscous_flux_kernel_colored(
         Real nu_tilde_R = d_q[right * nvar + 5] / rho_R;
         if (!real_isfinite(nu_tilde_R)) return;
 
-        int gR = right * DeviceMesh::NGRAD;
+        int gR = right * nvar * 3;
         Real dnu_dx_R = d_gradients[gR + 15];
         Real dnu_dy_R = d_gradients[gR + 16];
         Real dnu_dz_R = d_gradients[gR + 17];
@@ -721,7 +721,7 @@ bool compute_viscous_flux_gpu(DeviceMesh& mesh, Real gamma, Real prandtl,
             int nf_c  = end - start;
             int grid_c = (nf_c + block - 1) / block;
             viscous_flux_kernel_colored<<<grid_c, block, 0, stream>>>(
-                mesh.state_device(), DeviceMesh::NVAR, gamma,
+                mesh.state_device(), mesh.nvar(), gamma,
                 fd.nx, fd.ny, fd.nz, fd.area,
                 fd.left_cell, fd.right_cell, fd.boundary,
                 cd.cx, cd.cy, cd.cz,
@@ -739,7 +739,7 @@ bool compute_viscous_flux_gpu(DeviceMesh& mesh, Real gamma, Real prandtl,
         }
     } else {
         viscous_flux_kernel_atomic<<<grid, block, 0, stream>>>(
-            mesh.state_device(), DeviceMesh::NVAR, gamma,
+            mesh.state_device(), mesh.nvar(), gamma,
             fd.nx, fd.ny, fd.nz, fd.area,
             fd.left_cell, fd.right_cell, fd.boundary,
             cd.cx, cd.cy, cd.cz,

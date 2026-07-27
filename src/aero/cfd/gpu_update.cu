@@ -144,7 +144,7 @@ bool compute_update_gpu(DeviceMesh& mesh, const Real* d_min_dt, Real gamma,
 
     update_and_l2_kernel<<<grid, block, block * sizeof(Real), stream>>>(
         mesh.state_device(), mesh.residual_device(), cd.volume,
-        nc, DeviceMesh::NVAR, d_min_dt, gamma,
+        nc, mesh.nvar(), d_min_dt, gamma,
         d_l2_sum, d_failed,
         d_failure_cell, d_failure_state,
         d_partial_buf);

@@ -15,6 +15,8 @@ struct ConservativeState {
     Real rho_w = 0.0f;
     Real rho_E = 0.0f;
     Real rho_nu_tilde = 0.0f;
+    static constexpr int MAX_NVAR = 16;
+    Real extra[MAX_NVAR - 6] = {0};
 };
 
 struct PrimitiveState {
@@ -24,6 +26,8 @@ struct PrimitiveState {
     Real w = 0.0f;
     Real p = 0.0f;
     Real nu_tilde = 0.0f;
+    static constexpr int MAX_NVAR = 16;
+    Real extra[MAX_NVAR - 6] = {0};
 };
 
 struct EulerFlux {

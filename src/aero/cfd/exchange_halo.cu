@@ -43,7 +43,7 @@ bool exchange_halo_gpu(DeviceMesh& mesh, const GpuPartition& gpu_part,
     if (!mesh.has_halo()) return true;
     if (comm.size() <= 1) return true;
 
-    int nvar = DeviceMesh::NVAR;
+    int nvar = mesh.nvar();
     int n_ghost = gpu_part.n_ghost;
 
     if (n_ghost <= 0) return true;

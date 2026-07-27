@@ -242,7 +242,7 @@ __global__ void __launch_bounds__(128) sst_advection_kernel_colored(
     const Real* d_q,
     const Real* d_q_k, const Real* d_q_omega,
     Real* d_residual_k, Real* d_residual_omega,
-    int n_cells,
+    int n_cells, int nvar,
     const int* d_left_cell, const int* d_right_cell, const int* d_boundary,
     const Real* d_nx, const Real* d_ny, const Real* d_nz, const Real* d_area,
     int face_start, int face_end,
@@ -258,17 +258,17 @@ __global__ void __launch_bounds__(128) sst_advection_kernel_colored(
     Real nx = __ldg(d_nx + idx), ny = __ldg(d_ny + idx), nz = __ldg(d_nz + idx);
     Real area = __ldg(d_area + idx);
 
-    Real rhoL = __ldg(d_q + left * 6 + 0);
+    Real rhoL = __ldg(d_q + left * nvar + 0);
     Real kL = __ldg(d_q_k + left);
     Real wL = __ldg(d_q_omega + left);
-    Real vnL = d_face_vn(d_q, left, 6, nx, ny, nz);
+    Real vnL = d_face_vn(d_q, left, nvar, nx, ny, nz);
 
     Real rhoF, kF, wF, vnF;
 
     if (bnd == static_cast<int>(BoundaryKind::Interior)) {
         int right = __ldg(d_right_cell + idx);
         if (right < 0 || right >= n_cells) { if (d_failed) atomicExch(d_failed, 1); return; }
-        Real rhoR = __ldg(d_q + right * 6 + 0);
+        Real rhoR = __ldg(d_q + right * nvar + 0);
         Real kR = __ldg(d_q_k + right);
         Real wR = __ldg(d_q_omega + right);
         Real vnR = d_face_vn(d_q, right, 6, nx, ny, nz);
@@ -875,7 +875,7 @@ bool compute_sst_advection_gpu(DeviceMesh& mesh,
                 mesh.state_device(),
                 mesh.q_k_device(), mesh.q_omega_device(),
                 mesh.residual_k_device(), mesh.residual_omega_device(),
-                nc,
+                nc, mesh.nvar(),
                 fd.left_cell, fd.right_cell, fd.boundary,
                 fd.nx, fd.ny, fd.nz, fd.area,
                 start, end,
@@ -889,7 +889,7 @@ bool compute_sst_advection_gpu(DeviceMesh& mesh,
             mesh.state_device(),
             mesh.q_k_device(), mesh.q_omega_device(),
             mesh.residual_k_device(), mesh.residual_omega_device(),
-            nc, nf, DeviceMesh::NVAR,
+            nc, nf, mesh.nvar(),
             fd.left_cell, fd.right_cell, fd.boundary,
             fd.nx, fd.ny, fd.nz, fd.area,
             inf_k, inf_omega, inf_rho,
@@ -927,7 +927,7 @@ bool compute_sst_source_gpu(DeviceMesh& mesh, Real gamma,
         mesh.gradients_device(),
         cd.wall_distance, cd.volume,
         mesh.sst_f1_device(),
-        nc, DeviceMesh::NVAR, DeviceMesh::NGRAD,
+        nc, mesh.nvar(), mesh.ngrad(),
         gamma, mu_ref, T_ref, sutherland_T,
         d_failed);
     if (!cuda_check(cudaGetLastError(), "sst_source_kernel launch", error)) return false;
@@ -969,7 +969,7 @@ bool compute_sst_diffusion_gpu(DeviceMesh& mesh, Real gamma,
                 mesh.grad_k_device(), mesh.grad_omega_device(),
                 cd.wall_distance,
                 mesh.sst_f1_device(),
-                nc, DeviceMesh::NVAR,
+                nc, mesh.nvar(),
                 fd.left_cell, fd.right_cell, fd.boundary,
                 fd.nx, fd.ny, fd.nz, fd.area,
                 start, end,
@@ -986,7 +986,7 @@ bool compute_sst_diffusion_gpu(DeviceMesh& mesh, Real gamma,
             mesh.grad_k_device(), mesh.grad_omega_device(),
             cd.wall_distance,
             mesh.sst_f1_device(),
-            nc, nf, DeviceMesh::NVAR,
+            nc, nf, mesh.nvar(),
             fd.left_cell, fd.right_cell, fd.boundary,
             fd.nx, fd.ny, fd.nz, fd.area,
             gamma, mu_ref, T_ref, sutherland_T,
@@ -1082,7 +1082,7 @@ bool compute_sst_diag_gpu(DeviceMesh& mesh, Real gamma, Real mu_ref, Real T_ref,
         cd.wall_distance, cd.volume,
         d_diag_f1, d_diag_f2, d_diag_cdkw,
         d_diag_smag, d_diag_src_k, d_diag_src_w,
-        nc, DeviceMesh::NVAR, DeviceMesh::NGRAD,
+        nc, mesh.nvar(), mesh.ngrad(),
         gamma, mu_ref, T_ref, sutherland_T);
     if (!cuda_check(cudaGetLastError(), "sst_diag_kernel launch", error)) return false;
     return true;

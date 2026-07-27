@@ -338,7 +338,7 @@ LusgsPreconditioner::~LusgsPreconditioner() { release(); }
 
 bool LusgsPreconditioner::allocate(DeviceMesh& mesh, std::string* error) {
     n_cells_ = static_cast<int>(mesh.cell_count());
-    nvar_ = DeviceMesh::NVAR;
+    nvar_ = mesh.nvar();
     if (n_cells_ <= 0) { if (error) *error = "LusgsPreconditioner: empty mesh"; return false; }
 
     if (!cuda_check(cudaMalloc(&d_D_, n_cells_ * sizeof(Real)), "cudaMalloc d_D", error)) return false;

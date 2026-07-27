@@ -94,6 +94,10 @@ struct MeshQualityReport {
 
 CfdMesh generate_structured_cube_mesh(Real outer_scale = 5.0f, int n_nodes_per_dim = 13);
 
+// Solid cube (no body cavity) — all hex cells retained. Suitable for
+// freestream-preservation and symmetry tests where a solid domain is needed.
+CfdMesh generate_structured_cube_mesh_no_body(Real outer_scale = 5.0f, int n_per_dim = 13);
+
 CfdMesh generate_flat_plate_mesh(
     Real length = 0.5f,
     Real width = 0.05f,
