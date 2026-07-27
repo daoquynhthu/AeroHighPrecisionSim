@@ -1898,15 +1898,15 @@ Files:
 
 Tasks:
 
-- [ ] yaml-cpp 解析器: 读 `config/air_5sp.yaml` → `std::vector<std::string> species_names`, `chemistry_model`, `transport_model`
-- [ ] `ThermoDb::load_thermo_inp()`: 逐行解析 `thermo.inp` 固定列格式 (col 1-16 物种名, col 1-80 元数据, col 1-16/17-32/33-48/... 系数); 支持 1/2/3 温度区间段, 处理 D→e 转换, 记录号校验
-- [ ] ThermoDb 物种子集提取: `ThermoDb::extract(names)` → `SpeciesRecord[]` (仅含请求物种, 顺序匹配)
-- [ ] `TransportDb::load_trans_inp()`: 解析 `trans.inp`, V/C 行, 二元交互对 (Φ_ij) 提取
-- [ ] GPU 表构建: 平板系数数组 `Real d_buf[ MAX_SP * (3*9 + 2 + 1 + 4*2) ]`, 一次 `cudaMemcpyToSymbol`
-- [ ] Gas constant: 统一 `R = 8.31451 J/(mol·K)` (CEA 标准, 对齐 `tools/nasa9.py` 输出, 修正当前代码 `8314.462618` 错误)
-- [ ] 边界处理: T < T_min → 钳位到 T_min; T > T_max → 钳位到 T_max; 记录并报告越界
-- [ ] `GasModelKind` 枚举精简: `PERFECT_GAS (0)`, `FROZEN (1)`, `EQUILIBRIUM_AIR (2)`, `CHEM_NON_EQ (3)` — 删除旧的 `GasModelKind`/`SpeciesIdx` 枚举 (`include/aero/cfd/thermo.hpp` 中的定义标为 DEPRECATED)
-- [ ] 旧文件 `include/aero/cfd/thermo.hpp` / `src/aero/cfd/thermo.cpp` 标记 DEPRECATED, 保留至 Phase 15.3 完成后删除
+- [ ] yaml-cpp 解析器: 读 `config/air_5sp.yaml` → `std::vector<std::string> species_names`, `chemistry_model`, `transport_model` (需要先集成 yaml-cpp 到构建系统)
+- [x] `ThermoDb::load_thermo_inp()`: 逐行解析 `thermo.inp` 固定列格式 (col 1-16 物种名, col 1-80 元数据, col 1-16/17-32/33-48/... 系数); 支持 1/2/3 温度区间段, 处理 D→e 转换, 记录号校验
+- [x] ThermoDb 物种子集提取: `ThermoDb::extract(names)` → `SpeciesRecord[]` (仅含请求物种, 顺序匹配)
+- [x] `TransportDb::load_trans_inp()`: 解析 `trans.inp`, V/C 行, 二元交互对 (Φ_ij) 提取 (基础解析完成)
+- [x] GPU 表构建: 平板系数数组 `Real d_buf[ MAX_SP * (3*9 + 2 + 1 + 4*2) ]`, 一次 `cudaMemcpyToSymbol`
+- [x] Gas constant: 统一 `R = 8.31451 J/(mol·K)` (CEA 标准, 对齐 `tools/nasa9.py` 输出, 修正当前代码 `8314.462618` 错误)
+- [ ] 边界处理: T < T_min → 钳位到 T_min; T > T_max → 钳位到 T_max; 记录并报告越界 (Phase 15.2 求值器集成)
+- [ ] `GasModelKind` 枚举精简: `PERFECT_GAS (0)`, `FROZEN (1)`, `EQUILIBRIUM_AIR (2)`, `CHEM_NON_EQ (3)` (Phase 15.3)
+- [ ] 旧文件 `include/aero/cfd/thermo.hpp` / `src/aero/cfd/thermo.cpp` 标记 DEPRECATED (Phase 15.3)
 
 Tests:
 

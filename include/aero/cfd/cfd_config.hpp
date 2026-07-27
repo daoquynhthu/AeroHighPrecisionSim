@@ -51,8 +51,9 @@ struct CfdConfig {
     // AMR (h-refinement)
     AmrConfig amr;
 
-    // Thermochemistry (Phase 15+) — GasModelKind defined in thermo.hpp
-    int gas_model_kind = 0;
+    // Thermochemistry (Phase 15+)
+    int gas_model_kind = 0;         // 0=PerfectGas, 1=Frozen, 2=EquilibriumAir, 3=ChemNonEq
+    std::string config_path;        // path to YAML config (empty = PerfectGas default)
 
     // Implicit solver
     bool implicit = false;

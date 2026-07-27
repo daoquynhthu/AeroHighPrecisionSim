@@ -17,6 +17,8 @@ target_sources(missile_cpu PRIVATE
     cfd/rans.cpp
     cfd/reconstruction.cpp
     cfd/thermo.cpp
+    cfd/thermo_db.cpp
+    cfd/gpu_thermo_table.cpp
     cfd/viscous.cpp
 )
 
@@ -34,6 +36,7 @@ if(AEROSIM_USE_CUDA)
     target_sources(missile_lib PRIVATE
         panel/aero_solver.cu
         cfd/cfd_residual_gpu.cu
+        cfd/gpu_thermo_table.cu
         cfd/exchange_halo.cu
         cfd/fgmres_gpu.cu
         cfd/jacobian_free.cu

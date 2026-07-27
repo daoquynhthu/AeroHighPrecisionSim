@@ -1365,3 +1365,19 @@
 - Architecture: __constant__ coefficient tables via cudaMemcpyToSymbol, zero runtime H2D copy
 - Tools: tools/nasa9.py = offline validation only (no Python in runtime); yaml-cpp for config parsing
 - Backward compatibility mandated: each sub-phase must keep 85/85 test PASS
+
+2026-07-27
+- Phase 15.1: ThermoDb runtime database implementation
+  - thermo_db.hpp/cpp: NASA-9 fixed-column parser (Fortran D→E, 1/2/3 intervals, column offsets verified against Python reference)
+  - TransportDb: CEA V/C format parser
+  - SpeciesConfig: key=value config parser (air_5sp.conf for 5-species air)
+  - gpu_thermo_table.hpp/.cu/.cpp: __constant__ GPU table with cudaMemcpyToSymbol upload (CUDA) / stub (CPU)
+  - cfd_config.hpp: added config_path field
+  - R_UNIV = 8.31451 J/(mol·K) (CEA standard)
+   - All 14/14 ThermoDb tests PASS; existing regression 111+/111+ (Euler 15/15, State 36/36, Recon 21/21, Diag 4/4, Rans 16/16, Visc 11/11, Mms 10/10) preserved
+
+2026-07-27
+- Fixed parse crash: `NaCN(II)` has n_intervals=6 in thermo.inp, exceeding `NASA9_NINTV=3`. The unchecked for-loop wrote past `rec.coeffs[2][9]`, corrupting the stack and causing access-violation (0xC0000005) at the `trimmed == "thermo"` comparison line (subsequent stack corruption). Added `if (n_intervals > NASA9_NINTV) n_intervals = NASA9_NINTV` clamp.
+- Fixed MSVC `value.erase(value.begin(), 1)` overload ambiguity → `value.erase(value.begin())`.
+- Confirmed fixed-column offsets (n_intervals at [0,2), M at [52,65), h_f at [65,80), T_low at [0,12), T_high at [12,22)) match Python reference.
+- 14/14 thermo tests PASS, parsing 2029 species from real thermo.inp.

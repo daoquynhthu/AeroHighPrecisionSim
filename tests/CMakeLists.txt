@@ -23,6 +23,8 @@ add_cpu_executable(TestCfdState cfd/test_cfd_state.cpp)
 add_cpu_executable(TestCfdRans cfd/test_cfd_rans.cpp)
 add_cpu_executable(TestMms cfd/test_mms.cpp)
 
+add_cpu_executable(TestThermoDb cfd/test_thermo_db.cpp)
+
 # These test targets need symbols from .cu files (GPU-only implementations).
 # Skip them in CPU-only builds. Link missile_lib for AeroSolver / GPU CFD.
 if(AEROSIM_USE_CUDA)
@@ -51,6 +53,8 @@ add_test_with_cwd(CfdViscousTest TestCfdViscous)
 add_test_with_cwd(CfdStateTest TestCfdState)
 add_test_with_cwd(CfdRansTest TestCfdRans)
 add_test_with_cwd(MmsTest TestMms)
+
+add_test_with_cwd(ThermoDbTest TestThermoDb)
 
 if(AEROSIM_USE_CUDA)
     add_test_with_cwd(AeroTest TestAero)
@@ -91,3 +95,5 @@ set_target_properties(test_oracle_fp64 PROPERTIES
     LANGUAGE CXX
     RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin"
 )
+
+
