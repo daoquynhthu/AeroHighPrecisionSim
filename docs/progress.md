@@ -1385,3 +1385,4 @@
 2026-07-27: commit w/ pre-commit fix: pre-commit now builds missile_cpu (works with CUDA=OFF) and skips third-party/ whitespace check.
 2026-07-27: cmake/ subdir created: compiler_flags.cmake + fetch_eigen.cmake extracted from root CMakeLists.txt. Pre-commit hook passes.
 2026-07-27: CUDA boundary fixes: guarded aero_skin_friction.hpp CUDA include, renamed device_mesh.cu+api -> .cpp, deleted gpu_buffers.cu, fixed double registration, guarded fgmres/krylov_ops. 15/15 tests PASS.
+2026-07-27: Cleaned hardcoded paths: test_gravity.cu (e:/missile -> relative), clean_aero_table.py (accepts argv), examples/dart (removed e:/missile fallback), ci.ps1 (MinGW path in single var). Deleted orphan test STLs. Fixed trailing whitespace in multiple files.
