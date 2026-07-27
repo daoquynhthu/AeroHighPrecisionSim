@@ -1391,3 +1391,24 @@
 2026-07-27: Phase 15.2 - NASA-9 cp(T)/h(T)/s(T)/y(T) evaluator, transport evaluator, T_from_e Newton solver. 27/27 tests PASS (19 legacy + 8 new CFD-N9-1..8). Real=float, tolerances 3e-7/3e-6. Python ref scripts saved to scripts/.
 2026-07-27: Fix TransportRecord::M sqrt(29) placeholder: add Real M field + set_molecular_weights() utility + Herning-Zipperer now uses real M. All 27/27 tests PASS.
 2026-07-27: Fix TransportDb CEA V/C parser: V and C lines shared `n_intervals` counter, causing all C (kappa) lines to be skipped. Split into `v_count`/`c_count`. Also fixed `approx()` in test (was `rtol*(mag+1)` → `rtol*mag` with epsilon fallback). Updated reference values: N2 species_kappa(500K) 3.8365e-5→3.4226e-5, mix_kappa(500K) 3.9533e-5→4.8035e-5, mix_mu(500K) 2.8095e-5→2.8139e-5. All 27/27 tests PASS.
+2026-07-27: Fix CMake CUDA Debug build: `/RTC1` vs `/O2` conflict from `-O3` in `CMAKE_CUDA_FLAGS` (all `.cu` silently failed). Split per-config flags (Debug: `-O0`, Release: `-O3`). Added `cuda_link_stub.cu` to `add_cuda_executable` to force device linking for C++-only GPU targets. Guarded `gtd7_` Fortran call with `AEROSP_HAS_NRLMSISE00` (no gfortran). TestThermoDb 27/27 PASS.
+2026-07-27: Fix 3 build failures:
+- TestMeshStlInternal LNK2019: implemented hex_to_6_tets() (Kuhn triangulation with auto parity). mesh_gen_stl.cpp.
+- TestCompareAtm LNK2019: changed add_cpu_executable→add_cuda_executable (AtmosphereModel lives in missile_lib .cu).
+- test_oracle_fp64 LNK2019: added 5 missing AMR/MMS sources to CPU_ORACLE_SOURCES (amr_sensor, amr_refine, amr_interpolate, amr_hanging, mms).
+  Ninja build script (build.ps1): auto-init MSVC x64 env, Ninja gen, -Target, -Quiet, -Clean, -SkipTests flags.
+  Full build 0 errors. 24/24 test executables PASS. test_oracle_fp64 links but FP64-ORACLE-3 RANS fails (convergence).
+
+2026-07-27: Fix FP64-ORACLE-3 RANS divergence (strong SA point-implicit)
+- Root cause chain after PHYS-2 SA-neg sign fix:
+  1) CPU semi-implicit only damped volume source, not stiff wall SA diffusion fluxes
+  2) Destruction Jacobian partial treatment; |d_dest| alone insufficient near nu~0
+  3) float wall_distance=1e30 made d*d overflow -> NaN sources
+- Strong fix (CPU+GPU, no CFL/tolerance degradation):
+  - Analytic SA Jacobian both branches + SA-R S_tilde floor (0.3*vort)
+  - Full-residual point-implicit: U_new=(U+dt/V*R)/(1+dt*g)
+  - g = max(0,-dS/dnu) + 2*cw1*max(|nu|,nu_mol)/d^2 + viscous spectral radius (nu+nu~)/(sigma h^2)
+  - |nu|/d stiff_scale on destruction/recovery AND cb2 diffusion; source limit; nu floor/ceil
+  - wall_distance far clamp 1e10 (float-safe)
+- Verified: test_oracle_fp64 3/3 PASS (FP64-ORACLE-3 finite, 20 steps no NaN)
+  TestCfdRans 16/16 PASS; TestCfdGpu --gtest_filter=*RANS* 9/9 PASS

@@ -32,7 +32,7 @@ if(AEROSIM_USE_CUDA)
     add_cuda_executable(TestGuidance test_guidance.cpp)
     add_cuda_executable(TestLaunch test_launch.cpp)
     add_cuda_executable(TestAeroTableGen test_aero_table_gen.cpp)
-    add_cpu_executable(TestCompareAtm compare_atm.cpp)
+    add_cuda_executable(TestCompareAtm compare_atm.cpp)
 endif()
 
 function(add_test_with_cwd name target)
@@ -79,6 +79,11 @@ set(CPU_ORACLE_SOURCES
     ${CMAKE_SOURCE_DIR}/src/aero/cfd/diagnostics.cpp
     ${CMAKE_SOURCE_DIR}/src/aero/cfd/mesh_metrics.cpp
     ${CMAKE_SOURCE_DIR}/src/aero/cfd/mesh_validator.cpp
+    ${CMAKE_SOURCE_DIR}/src/aero/cfd/amr_sensor.cpp
+    ${CMAKE_SOURCE_DIR}/src/aero/cfd/amr_refine.cpp
+    ${CMAKE_SOURCE_DIR}/src/aero/cfd/amr_interpolate.cpp
+    ${CMAKE_SOURCE_DIR}/src/aero/cfd/amr_hanging.cpp
+    ${CMAKE_SOURCE_DIR}/src/aero/cfd/mms.cpp
 )
 add_executable(test_oracle_fp64
     cfd/test_oracle_fp64.cpp

@@ -129,7 +129,23 @@ static int test_fp64_rans_flat_plate() {
         CfdSolver solver;
         if (!solver.load_mesh(mesh)) FAIL("load mesh failed");
         CfdSolveSummary result = solver.solve(cond, cfg);
-        if (result.failed) FAIL("solver failed");
+
+        std::printf("  residual history (%zu):", result.residual_history.size());
+        for (std::size_t i = 0; i < result.residual_history.size(); ++i) {
+            std::printf(" [%zu]=%.6e", i, result.residual_history[i]);
+        }
+        std::printf("\n");
+        if (result.diagnostics.failure.valid) {
+            std::printf("  failure: iter=%d cell=%d reason=%s\n",
+                result.diagnostics.failure.iteration,
+                result.diagnostics.failure.cell,
+                result.diagnostics.failure.reason.c_str());
+        }
+
+        if (result.failed) FAIL("solver failed: %s",
+            result.diagnostics.failure.valid
+                ? result.diagnostics.failure.reason.c_str()
+                : "unknown");
 
         if (!std::isfinite(result.forces.CD)) FAIL("CD not finite: %g", result.forces.CD);
         if (!std::isfinite(result.forces.CL)) FAIL("CL not finite: %g", result.forces.CL);

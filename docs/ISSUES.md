@@ -3083,3 +3083,10 @@ Host-side CUDA wrapper (`cuda_check`, `CUDA_KERNEL_CHECK`) sits in `aero/cfd/` b
 `src/config/CMakeLists.txt`
 Added to both `missile_cpu` and (conditionally) `missile_lib`. Works but compiles twice.
 
+
+**PHYS-22** [FIXED 2026-07-27] FP64-ORACLE-3 SA RANS divergence after PHYS-2
+`src/aero/cfd/rans.cpp`, `cfd_solver.cpp`, `gpu_rans.cu`
+- Symptom: flat plate SA M=0.5 Re=1e5 CFL=0.2 residual explosion to NaN by ~step 10-11
+- Cause: SA-neg recovery sign fix exposed incomplete point-implicit (source-only Jacobian, missing diffusion spectral radius, f amplification edge cases; float d^2 overflow at wd=1e30)
+- Fix: full-residual point-implicit + complete damping rate (Jacobian + dest floor + viscous radius) + SA-R + stiff_scale on dest/diffusion + nu clamp + float-safe wall distance
+- Gate: `test_oracle_fp64` FP64-ORACLE-3 PASS; TestCfdRans 16/16; GPU *RANS* 9/9

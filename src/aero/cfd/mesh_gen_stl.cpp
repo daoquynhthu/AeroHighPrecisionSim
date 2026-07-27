@@ -1007,6 +1007,34 @@ struct WallTri {
     int i0, i1, i2;
 };
 
+void hex_to_6_tets(Vec3 hex_v[8], Vec3 tet_v[6][4]) {
+    // Same corner ordering as hex_to_6_tets_parity: 0(000) 1(100) 2(110) 3(010)
+    // 4(001) 5(101) 6(111) 7(011)
+    static const int t0[6][4] = {
+        {0, 1, 2, 6}, {0, 2, 3, 6}, {0, 3, 7, 6},
+        {0, 7, 4, 6}, {0, 4, 5, 6}, {0, 5, 1, 6}
+    };
+    static const int t1[6][4] = {
+        {1, 2, 3, 7}, {1, 3, 0, 7}, {1, 0, 4, 7},
+        {1, 4, 5, 7}, {1, 5, 6, 7}, {1, 6, 2, 7}
+    };
+    // Try parity 0 first; if any tet volume <= 0, use parity 1
+    const int (*tb)[4] = t0;
+    Real v0 = 0;
+    for (int t = 0; t < 6; ++t) {
+        int c0 = tb[t][0], c1 = tb[t][1], c2 = tb[t][2], c3 = tb[t][3];
+        Real v = volume_tet_signed(hex_v[c0], hex_v[c1], hex_v[c2], hex_v[c3]);
+        if (v <= 0) { tb = t1; break; }
+        v0 += v;
+    }
+    if (tb == t0 && v0 <= 0) tb = t1;
+    for (int t = 0; t < 6; ++t) {
+        for (int n = 0; n < 4; ++n) {
+            tet_v[t][n] = hex_v[tb[t][n]];
+        }
+    }
+}
+
 } // namespace stl_internal
 using namespace stl_internal;
 

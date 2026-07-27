@@ -65,46 +65,57 @@ if(AEROSIM_USE_CUDA)
     target_link_libraries(missile_lib PUBLIC missile_cpu)
 endif()
 
-# NRLMSISE-00 Fortran compilation
-find_program(GFORTRAN gfortran)
-if(GFORTRAN)
-    set(NRLMSISE00_DEF "${CMAKE_BINARY_DIR}/nrlmsise00.def")
-    set(NRLMSISE00_LIB "${CMAKE_BINARY_DIR}/nrlmsise00.lib")
-    set(NRLMSISE00_DLL "${CMAKE_BINARY_DIR}/nrlmsise00.dll")
-    add_custom_command(OUTPUT "${NRLMSISE00_DLL}" "${NRLMSISE00_DEF}"
-        COMMAND ${GFORTRAN} -shared -o "${NRLMSISE00_DLL}"
-            "${CMAKE_SOURCE_DIR}/src/sim/atmosphere/nrlmsise00.f"
-            -Wl,--output-def,"${NRLMSISE00_DEF}"
-            -static -std=legacy -Wno-unused-variable
-        DEPENDS "${CMAKE_SOURCE_DIR}/src/sim/atmosphere/nrlmsise00.f"
-        COMMENT "Compiling NRLMSISE-00 (Fortran)...")
-    if(MSVC)
-        add_custom_command(OUTPUT "${NRLMSISE00_LIB}"
-            COMMAND ${CMAKE_AR} /def:"${NRLMSISE00_DEF}" /out:"${NRLMSISE00_LIB}" /machine:x64
-            DEPENDS "${NRLMSISE00_DEF}"
-            COMMENT "Generating MSVC NRLMSISE-00 import library...")
-    else()
-        find_program(DLLTOOL dlltool)
-        if(DLLTOOL)
-            add_custom_command(OUTPUT "${NRLMSISE00_LIB}"
-                COMMAND ${DLLTOOL} --def "${NRLMSISE00_DEF}" --dllname "nrlmsise00.dll" --output-lib "${NRLMSISE00_LIB}"
-                DEPENDS "${NRLMSISE00_DEF}"
-                COMMENT "Generating MinGW NRLMSISE-00 import library...")
-        else()
-            set(NRLMSISE00_LIB "${NRLMSISE00_DLL}")
-            message(WARNING "dlltool not found — linking NRLMSISE-00 DLL directly")
-        endif()
-    endif()
+# NRLMSISE-00 stable location (outside volatile build directory)
+set(NRLMSISE00_DIR "${CMAKE_SOURCE_DIR}/data/NRLMSISE-00")
+set(NRLMSISE00_DEF "${NRLMSISE00_DIR}/nrlmsise00.def")
+set(NRLMSISE00_LIB "${NRLMSISE00_DIR}/nrlmsise00.lib")
+set(NRLMSISE00_DLL "${NRLMSISE00_DIR}/nrlmsise00.dll")
+
+# If pre-built files already exist, skip Fortran compilation
+if(EXISTS "${NRLMSISE00_LIB}" AND EXISTS "${NRLMSISE00_DLL}")
+    message(STATUS "NRLMSISE-00: using pre-built library from ${NRLMSISE00_DIR}")
     add_custom_target(nrlmsise00 DEPENDS "${NRLMSISE00_LIB}" "${NRLMSISE00_DLL}")
-    add_dependencies(missile_cpu nrlmsise00)
-    if(AEROSIM_USE_CUDA)
-        add_dependencies(missile_lib nrlmsise00)
-    endif()
     target_link_libraries(missile_cpu PUBLIC "${NRLMSISE00_LIB}")
     target_compile_definitions(missile_cpu PRIVATE AEROSP_HAS_NRLMSISE00=1)
 else()
-    message(WARNING "gfortran not found — NRLMSISE-00 disabled")
-    target_compile_definitions(missile_cpu PRIVATE AEROSP_HAS_NRLMSISE00=0)
+    find_program(GFORTRAN gfortran)
+    if(GFORTRAN)
+        message(STATUS "NRLMSISE-00: building from Fortran source")
+        add_custom_command(OUTPUT "${NRLMSISE00_DLL}" "${NRLMSISE00_DEF}"
+            COMMAND ${GFORTRAN} -shared -o "${NRLMSISE00_DLL}"
+                "${CMAKE_SOURCE_DIR}/src/sim/atmosphere/nrlmsise00.f"
+                -Wl,--output-def,"${NRLMSISE00_DEF}"
+                -static -std=legacy -Wno-unused-variable
+            DEPENDS "${CMAKE_SOURCE_DIR}/src/sim/atmosphere/nrlmsise00.f"
+            COMMENT "Compiling NRLMSISE-00 (Fortran)...")
+        if(MSVC)
+            add_custom_command(OUTPUT "${NRLMSISE00_LIB}"
+                COMMAND ${CMAKE_AR} /def:"${NRLMSISE00_DEF}" /out:"${NRLMSISE00_LIB}" /machine:x64
+                DEPENDS "${NRLMSISE00_DEF}"
+                COMMENT "Generating MSVC NRLMSISE-00 import library...")
+        else()
+            find_program(DLLTOOL dlltool)
+            if(DLLTOOL)
+                add_custom_command(OUTPUT "${NRLMSISE00_LIB}"
+                    COMMAND ${DLLTOOL} --def "${NRLMSISE00_DEF}" --dllname "nrlmsise00.dll" --output-lib "${NRLMSISE00_LIB}"
+                    DEPENDS "${NRLMSISE00_DEF}"
+                    COMMENT "Generating MinGW NRLMSISE-00 import library...")
+            else()
+                set(NRLMSISE00_LIB "${NRLMSISE00_DLL}")
+                message(WARNING "dlltool not found — linking NRLMSISE-00 DLL directly")
+            endif()
+        endif()
+        add_custom_target(nrlmsise00 DEPENDS "${NRLMSISE00_LIB}" "${NRLMSISE00_DLL}")
+        add_dependencies(missile_cpu nrlmsise00)
+        if(AEROSIM_USE_CUDA)
+            add_dependencies(missile_lib nrlmsise00)
+        endif()
+        target_link_libraries(missile_cpu PUBLIC "${NRLMSISE00_LIB}")
+        target_compile_definitions(missile_cpu PRIVATE AEROSP_HAS_NRLMSISE00=1)
+    else()
+        message(WARNING "gfortran not found — NRLMSISE-00 disabled")
+        target_compile_definitions(missile_cpu PRIVATE AEROSP_HAS_NRLMSISE00=0)
+    endif()
 endif()
 
 if(AEROSIM_USE_CUDA)
@@ -142,11 +153,11 @@ if(MSVC)
 endif()
 
 function(target_copy_nrlmsise_dll TARGET)
-    if(GFORTRAN)
+    if(TARGET nrlmsise00)
         add_dependencies(${TARGET} nrlmsise00)
         add_custom_command(TARGET ${TARGET} POST_BUILD
             COMMAND ${CMAKE_COMMAND} -E copy_if_different
-            "${CMAKE_BINARY_DIR}/nrlmsise00.dll"
+            "${NRLMSISE00_DLL}"
             $<TARGET_FILE_DIR:${TARGET}>)
     endif()
 endfunction()

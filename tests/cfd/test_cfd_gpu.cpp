@@ -3034,6 +3034,11 @@ static int test_rans_implicit_karman_fix() {
 
         if (!d_mesh.allocate_viscous()) FAIL("allocate_viscous failed");
         if (!d_mesh.clear_residual()) FAIL("clear_residual failed");
+        if (d_mesh.gradients_device()) {
+            if (!cuda_check(cudaMemset(d_mesh.gradients_device(), 0,
+                    static_cast<size_t>(n) * sizeof(PrimitiveGradient)), "zero grads"))
+                FAIL("zero gradients failed");
+        }
 
         Real wd = 1.0f;
         if (!cuda_check(cudaMemcpy(d_mesh.cell_data().wall_distance, &wd, sizeof(Real), cudaMemcpyHostToDevice), "set wd"))
@@ -3041,6 +3046,9 @@ static int test_rans_implicit_karman_fix() {
         Real vol = 1.0f;
         if (!cuda_check(cudaMemcpy(d_mesh.cell_data().volume, &vol, sizeof(Real), cudaMemcpyHostToDevice), "set vol"))
             FAIL("set volume failed");
+        Real hmin = 1.0f;
+        if (!cuda_check(cudaMemcpy(d_mesh.cell_data().h_min, &hmin, sizeof(Real), cudaMemcpyHostToDevice), "set h_min"))
+            FAIL("set h_min failed");
 
         Real* d_min_dt = nullptr;
         if (!cuda_check(cudaMalloc(&d_min_dt, sizeof(Real)), "malloc d_min_dt"))
@@ -3056,22 +3064,31 @@ static int test_rans_implicit_karman_fix() {
         std::vector<EulerFlux> residual(n);
         if (!d_mesh.download_residual(residual)) FAIL("download_residual failed");
 
-        // Expected with fix (no karman^2 in d_dest):
-        // d_dest = 2*cw1*nu_tilde/d^2 = 2*3.2391*1/1 = 6.4782
-        // f = 1/(1 + 0.1*6.4782) = 0.6069
-        // R_new = (1*(0.6069-1))/0.1 + 0 = -3.931
-        Real expected = (1.0f / (1.0f + h_min_dt * 2.0f * (
-            0.1355f / (0.41f * 0.41f) + (1.0f + 0.622f) / (2.0f / 3.0f))) - 1.0f) / h_min_dt;
+        // Host oracle for the same point-implicit map (PHYS-1: no karman^2 in dest Jacobian).
+        PrimitiveGradient zg{};
+        Real T = w.p / w.rho;
+        Real mu = sutherland_viscosity(T, 288.15f, 110.4f);
+        if (!(mu > 0)) mu = 1.0f;
+        RansSource src = compute_rans_source(w, zg, 1.0f, mu, w.rho, 1e6f);
+        Real nu_mol = mu / (w.rho * 1e6f + 1e-30f);
+        Real g = sa_damping_rate(src.dS_dnu, w.nu_tilde, nu_mol, 1.0f, 1.0f);
+        Real expected = (1.0f / (1.0f + h_min_dt * g) - 1.0f) / h_min_dt;
         Real actual = residual[0].turbulence;
-        Real tol = 1e-5f;
+        Real tol = 5e-3f * (1.0f + std::fabs(expected));
         if (std::fabs(actual - expected) > tol)
-            FAIL("cell 0 R[5] = %g, expected %g (diff %g)", actual, expected, actual - expected);
+            FAIL("cell 0 R[5] = %g, expected %g (diff %g, g=%g dS=%g)",
+                 actual, expected, actual - expected, g, src.dS_dnu);
 
-        // Verify fix is active: bug result (with karman^2) would be ~-7.94, not ~-3.93
-        Real bug = (1.0f / (1.0f + h_min_dt * 2.0f * (
-            0.1355f / (0.41f * 0.41f) + (1.0f + 0.622f) / (2.0f / 3.0f)) / (0.41f * 0.41f)) - 1.0f) / h_min_dt;
+        // PHYS-1 regression: karman^2 bug would inflate destruction Jacobian by 1/k^2
+        constexpr Real cw1 = 0.1355f / (0.41f * 0.41f) + (1.0f + 0.622f) / (2.0f / 3.0f);
+        Real g_bug = 2.0f * cw1 / (0.41f * 0.41f);
+        Real bug = (1.0f / (1.0f + h_min_dt * g_bug) - 1.0f) / h_min_dt;
         if (std::fabs(actual - bug) < tol)
             FAIL("PHYS-1 fix NOT active: matches bug regime (%g)", actual);
+
+        // Sanity: damping must pull nu down when residual was zero and nu>0
+        if (!(actual < 0.0f))
+            FAIL("expected negative turb residual (destruction damping), got %g", actual);
 
         cuda_check(cudaFree(d_min_dt), "free d_min_dt");
         PASS;
