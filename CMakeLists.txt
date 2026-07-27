@@ -24,7 +24,17 @@ if(AEROSIM_USE_CUDA)
     message(STATUS "CUDA architectures: ${CMAKE_CUDA_ARCHITECTURES}")
 
     find_package(CUDAToolkit REQUIRED)
-    set(CMAKE_CUDA_FLAGS "${CMAKE_CUDA_FLAGS} --expt-relaxed-constexpr -O3")
+    set(CMAKE_CUDA_FLAGS "${CMAKE_CUDA_FLAGS} --expt-relaxed-constexpr")
+    set(CMAKE_CUDA_FLAGS_DEBUG "${CMAKE_CUDA_FLAGS_DEBUG} -g -O0")
+    set(CMAKE_CUDA_FLAGS_RELEASE "${CMAKE_CUDA_FLAGS_RELEASE} -O3")
+    set(CMAKE_CUDA_FLAGS_RELWITHDEBINFO "${CMAKE_CUDA_FLAGS_RELWITHDEBINFO} -O3 -g")
+    set(CMAKE_CUDA_FLAGS_MINSIZEREL "${CMAKE_CUDA_FLAGS_MINSIZEREL} -O1")
+
+    # CUDA stub: ensures device linking is triggered for C++-only targets linking missile_lib
+    set(CUDA_LINK_STUB "${CMAKE_BINARY_DIR}/cuda_link_stub.cu")
+    file(WRITE "${CUDA_LINK_STUB}"
+        "// Auto-generated CUDA stub for device linking\n"
+        "__device__ int __cuda_link_stub = 0;\n")
 
     if(AEROSIM_USE_CCACHE AND CCACHE_PROGRAM)
         set(CMAKE_CUDA_COMPILER_LAUNCHER "${CCACHE_PROGRAM}")
@@ -91,8 +101,10 @@ if(GFORTRAN)
         add_dependencies(missile_lib nrlmsise00)
     endif()
     target_link_libraries(missile_cpu PUBLIC "${NRLMSISE00_LIB}")
+    target_compile_definitions(missile_cpu PRIVATE AEROSP_HAS_NRLMSISE00=1)
 else()
     message(WARNING "gfortran not found — NRLMSISE-00 disabled")
+    target_compile_definitions(missile_cpu PRIVATE AEROSP_HAS_NRLMSISE00=0)
 endif()
 
 if(AEROSIM_USE_CUDA)
@@ -141,7 +153,7 @@ endfunction()
 
 macro(add_cuda_executable NAME)
     if(AEROSIM_USE_CUDA)
-        add_executable(${NAME} ${ARGN})
+        add_executable(${NAME} ${ARGN} "${CUDA_LINK_STUB}")
         target_link_libraries(${NAME} PRIVATE missile_lib)
         set_target_properties(${NAME} PROPERTIES
             CUDA_SEPARABLE_COMPILATION ON
