@@ -1865,7 +1865,7 @@ Tasks:
 - [x] `gas_model` config: `PerfectGas` → gamma = constant; `EquilibriumAir` → cp(T) curve fit; `ChemNonEq` → chemistry activation
 - [x] GPU thermochemistry helpers: `d_gamma(T)`, `d_cp(T)`, `d_h_s(T)` — device functions using polynomial evaluation
 
-### 14.2 Park 5-species finite-rate chemistry
+### 15.2 Park 5-species finite-rate chemistry
 
 Files:
 
@@ -1899,7 +1899,7 @@ Tasks:
 > 4. 回归测试：Phase 15 中 chemistry 关闭时（`gas_model=PerfectGas`），NVAR=10 的 kernel 必须产生与 NVAR=6 时一致的解（仅前 5 个变量参与物理）。
 > 5. 临时策略：Phase 15.0 之前不允许激活 chemistry；Phase 15.0 实现后通过 feature gate 控制。
 
-### 14.3 Two-temperature model (Park 89)
+### 15.3 Two-temperature model (Park 89)
 
 Files:
 
@@ -1915,7 +1915,7 @@ Tasks:
 - [ ] Park rate-controlling temperature: `Ta = T^q * Tv^(1-q)` with `q = 0.5` (standard)
 - [ ] NVAR=11 for 5-species + two-temp (rho_e_vib added)
 
-### 14.4 Wall catalysis
+### 15.4 Wall catalysis
 
 Files:
 
