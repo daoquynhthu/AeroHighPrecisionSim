@@ -124,7 +124,8 @@ __global__ void __launch_bounds__(256) rans_source_kernel(
         Real s_floor = Real(0.3) * vort;
         if (omega_tilde < s_floor) omega_tilde = s_floor;
 
-        Real production = cb1 * omega_tilde * nu_tilde;
+        Real ft2 = ct3 * real_exp(-ct4 * chi * chi);
+        Real production = cb1 * (1.0f - ft2) * omega_tilde * nu_tilde;
 
         Real r = nu_tilde / (omega_tilde * karman * karman * dest_len_scale * dest_len_scale + 1e-30f);
         if (r < 0.0f) r = 0.0f;
@@ -134,10 +135,13 @@ __global__ void __launch_bounds__(256) rans_source_kernel(
         Real fw_num = 1.0f + cw3_6;
         Real fw_den = fw_g*fw_g*fw_g*fw_g*fw_g*fw_g + cw3_6 + 1e-30f;
         Real fw = fw_g * real_pow(fw_num / fw_den, Real(1.0 / 6.0));
-        Real destruction = cw1_val * fw * (nu_tilde / dest_len_scale) * (nu_tilde / dest_len_scale) * stiff_scale;
+        Real inv_k2 = 1.0f / (karman * karman);
+        Real dest_coeff = cw1_val * fw - inv_k2 * cb1 * ft2;
+        Real destruction = dest_coeff * (nu_tilde / dest_len_scale) * (nu_tilde / dest_len_scale) * stiff_scale;
 
         source = production - destruction + diffusion;
-        dS_dnu = cb1 * omega_tilde - 2.0f * cw1_val * fw * nu_tilde / d2 * stiff_scale;
+        dS_dnu = cb1 * (1.0f - ft2) * omega_tilde
+               - 2.0f * dest_coeff * nu_tilde / d2 * stiff_scale;
     } else {
         Real vort = d_sa_vorticity(*g);
         source = cb1 * (1.0f - ct3) * vort * nu_tilde
@@ -182,6 +186,7 @@ __device__ Real d_sa_damping_rate(
     constexpr Real cw3 = 2.0f;
     constexpr Real cv1 = 7.1f;
     constexpr Real ct3 = 1.2f;
+    constexpr Real ct4 = 0.5f;
     constexpr Real cv13 = cv1 * cv1 * cv1;
     constexpr Real cw1_val = cb1 / (karman * karman) + (1.0f + cb2) / sigma;
     constexpr Real cw3_6 = cw3 * cw3 * cw3 * cw3 * cw3 * cw3;
@@ -212,6 +217,8 @@ __device__ Real d_sa_damping_rate(
         Real omega_tilde = vort + nu_tilde * fv2 * inv_kd2;
         Real s_floor = Real(0.3) * vort;
         if (omega_tilde < s_floor) omega_tilde = s_floor;
+
+        Real ft2 = ct3 * real_exp(-ct4 * chi * chi);
         Real r = nu_tilde / (omega_tilde * karman * karman * d * d + 1e-30f);
         if (r < 0.0f) r = 0.0f;
         if (r > 10.0f) r = 10.0f;
@@ -220,7 +227,10 @@ __device__ Real d_sa_damping_rate(
         Real fw_num = 1.0f + cw3_6;
         Real fw_den = fw_g*fw_g*fw_g*fw_g*fw_g*fw_g + cw3_6 + 1e-30f;
         Real fw = fw_g * real_pow(fw_num / fw_den, Real(1.0 / 6.0));
-        dS_dnu = cb1 * omega_tilde - 2.0f * cw1_val * fw * nu_tilde / d2 * stiff_scale;
+        Real inv_k2 = 1.0f / (karman * karman);
+        Real dest_coeff = cw1_val * fw - inv_k2 * cb1 * ft2;
+        dS_dnu = cb1 * (1.0f - ft2) * omega_tilde
+               - 2.0f * dest_coeff * nu_tilde / d2 * stiff_scale;
     } else {
         Real vort = d_sa_vorticity(g);
         dS_dnu = cb1 * (1.0f - ct3) * vort + 2.0f * cw1_val * nu_tilde / d2 * stiff_scale;

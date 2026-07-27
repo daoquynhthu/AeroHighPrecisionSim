@@ -278,10 +278,8 @@ __global__ void __launch_bounds__(128) viscous_flux_kernel_atomic(
 
     if (!turbulence || turbulence == 3) return;
 
-    // SA conservative diffusion: (1/sigma) * div((mu/Re + rho*nu_tilde*fv1) * grad(nu_tilde))
+    // SA working-variable diffusion (NASA TM form): (1/σ) ∇·((ν + ν̃·fn) ∇ν̃)
     constexpr Real sigma_sa = 2.0f / 3.0f;
-    constexpr Real cv1 = 7.1f;
-    constexpr Real cv13 = cv1 * cv1 * cv1;
 
     Real nu_tilde_L = d_q[left * nvar + 5] / rho_L;
     if (!real_isfinite(nu_tilde_L)) return;
@@ -348,10 +346,13 @@ __global__ void __launch_bounds__(128) viscous_flux_kernel_atomic(
     Real dnu_dn = grad_dnu_dx*nx + grad_dnu_dy*ny + grad_dnu_dz*nz;
 
     Real chi_face = Re * face_rho * face_nu_tilde / (mu_face + 1e-30f);
-    Real chi3 = chi_face * chi_face * chi_face;
-    Real fv1_face = chi3 / (chi3 + cv13 + 1e-30f);
-    Real mu_tilde = face_rho * face_nu_tilde * fv1_face / sigma_sa;
-    Real mu_total = (mu_face * inv_Re) / sigma_sa + mu_tilde;
+    constexpr Real cn1 = 16.0f;
+    Real fn = Real(1);
+    if (chi_face < 0) {
+        Real chi3 = chi_face * chi_face * chi_face;
+        fn = (cn1 + chi3) / (cn1 - chi3 + 1e-30f);
+    }
+    Real mu_total = (mu_face * inv_Re + face_rho * face_nu_tilde * fn) / sigma_sa;
     Real visc_nu = mu_total * dnu_dn * area;
 
     real_atomic_add(&d_residual[left * nvar + 5], visc_nu);
@@ -605,10 +606,8 @@ __global__ void __launch_bounds__(128) viscous_flux_kernel_colored(
 
     if (!turbulence || turbulence == 3) return;
 
-    // SA conservative diffusion: (1/sigma) * div((mu/Re + rho*nu_tilde*fv1) * grad(nu_tilde))
+    // SA working-variable diffusion (NASA TM form): (1/σ) ∇·((ν + ν̃·fn) ∇ν̃)
     constexpr Real sigma_sa = 2.0f / 3.0f;
-    constexpr Real cv1 = 7.1f;
-    constexpr Real cv13 = cv1 * cv1 * cv1;
 
     Real nu_tilde_L = d_q[left * nvar + 5] / rho_L;
     if (!real_isfinite(nu_tilde_L)) return;
@@ -675,10 +674,13 @@ __global__ void __launch_bounds__(128) viscous_flux_kernel_colored(
     Real dnu_dn = grad_dnu_dx*nx + grad_dnu_dy*ny + grad_dnu_dz*nz;
 
     Real chi_face = Re * face_rho * face_nu_tilde / (mu_face + 1e-30f);
-    Real chi3 = chi_face * chi_face * chi_face;
-    Real fv1_face = chi3 / (chi3 + cv13 + 1e-30f);
-    Real mu_tilde = face_rho * face_nu_tilde * fv1_face / sigma_sa;
-    Real mu_total = (mu_face * inv_Re) / sigma_sa + mu_tilde;
+    constexpr Real cn1 = 16.0f;
+    Real fn = Real(1);
+    if (chi_face < 0) {
+        Real chi3 = chi_face * chi_face * chi_face;
+        fn = (cn1 + chi3) / (cn1 - chi3 + 1e-30f);
+    }
+    Real mu_total = (mu_face * inv_Re + face_rho * face_nu_tilde * fn) / sigma_sa;
     Real visc_nu = mu_total * dnu_dn * area;
 
     d_residual[left * nvar + 5] += visc_nu;

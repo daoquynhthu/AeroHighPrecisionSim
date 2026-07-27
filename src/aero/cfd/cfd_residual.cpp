@@ -434,7 +434,10 @@ bool compute_viscous_flux_cpu(
 
         if (!turbulence || turbulence == 3) continue;
 
-        // SA conservative diffusion: (1/sigma) * div((mu/Re + rho*nu_tilde*fv1) * grad(nu_tilde))
+        // SA working-variable diffusion (NASA TM form):
+        //   (1/σ) ∇·((ν + ν̃·fn) ∇ν̃)  → residual of ρν̃ uses
+        //   (1/σ)(μ/Re + ρ ν̃ fn) ∇ν̃·n  with fn=1 (χ≥0) or SA-neg fn (χ<0).
+        // fv1 is ONLY for mean-flow eddy viscosity, not SA diffusion.
         Real nu_tilde_L = q[face.left_cell].rho_nu_tilde / wL.rho;
         if (!std::isfinite(nu_tilde_L)) continue;
 
@@ -495,10 +498,13 @@ bool compute_viscous_flux_cpu(
 
         dnu_dn = grad_dnu_dx*nx + grad_dnu_dy*ny + grad_dnu_dz*nz;
         Real chi_face = Re * face_rho * face_nu_tilde / (mu_face + 1e-30f);
-        Real chi3 = chi_face * chi_face * chi_face;
-        Real fv1_face = chi3 / (chi3 + cv13 + 1e-30f);
-        Real mu_tilde = face_rho * face_nu_tilde * fv1_face / sigma_sa;
-        Real mu_total = (mu_face * inv_Re) / sigma_sa + mu_tilde;
+        Real fn = Real(1);
+        if (chi_face < 0) {
+            constexpr Real cn1 = 16.0f;
+            Real chi3 = chi_face * chi_face * chi_face;
+            fn = (cn1 + chi3) / (cn1 - chi3 + 1e-30f);
+        }
+        Real mu_total = (mu_face * inv_Re + face_rho * face_nu_tilde * fn) / sigma_sa;
         Real visc_nu = mu_total * dnu_dn * area;
 
         residual[face.left_cell].turbulence += visc_nu;

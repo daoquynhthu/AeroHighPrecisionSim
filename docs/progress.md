@@ -1450,3 +1450,10 @@
   - cfd_strong_defaults=true: LTS + CFL ramp + SA when viscous
 - aero_table_gen: single generate_volume_mesh path; strong CFD config when enabled
 - Tests: TestCfdMeshStl 11/11; TestAeroTableGen 10/10 (TABLE-STL-1/2/3 + CFD table on watertight)
+
+2026-07-28
+- SA ft2 trip term + fn diffusion 修正 (CPU+GPU)：
+  - CPU: rans.hpp/cfd_residual.cpp/rans.cpp — ft2、fn、fv1=chi³/(chi³+cv1³)
+  - GPU: gpu_rans.cu ft2+fn对齐CPU; gpu_viscous.cu fn对齐
+  - 门禁收紧：SA测试容差~10x (RANS-1: 1e-6→2e-7/5e-7, RANS-2: 1e-5→1e-6, RANS-4: 5e-7→1e-7, RANS-6: 1e-5→1e-6, ORDER2-RANS/VISC-TURB: 1e-4/1e-3→1e-5/1e-4)
+  - 验证: TestCfdRans 17/17, TestMms 10/10, SA GPU测试全部PASS

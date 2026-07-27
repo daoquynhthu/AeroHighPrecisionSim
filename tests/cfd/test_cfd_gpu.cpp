@@ -1404,11 +1404,11 @@ static int test_rans_false_regression() {
             Real d = std::fabs(gpu.residual_history[i] - cpu.residual_history[i]);
             if (d > max_diff) max_diff = d;
         }
-        if (max_diff > 1e-6f) FAIL("turbulence=false GPU/CPU max diff=%g", max_diff);
+        if (max_diff > 2e-7f) FAIL("turbulence=false GPU/CPU max diff=%g", max_diff);
 
         // Force coefficient match
         std::string force_error;
-        if (!assert_oracle_equivalent(gpu, cpu, 1e-6f, 1e-6f, &force_error))
+        if (!assert_oracle_equivalent(gpu, cpu, 2e-7f, 5e-7f, &force_error))
             FAIL("Force mismatch: %s", force_error.c_str());
 
         PASS;
@@ -1453,7 +1453,7 @@ static int test_rans_zero_nu_tilde() {
             Real d = std::fabs(laminar.residual_history[i] - turb_zero.residual_history[i]);
             if (d > max_diff) max_diff = d;
         }
-        if (max_diff > 1e-5f) FAIL("zero nu_tilde max diff=%g from laminar", max_diff);
+        if (max_diff > 1e-6f) FAIL("zero nu_tilde max diff=%g from laminar", max_diff);
         PASS;
     }
     return 0;
@@ -1717,7 +1717,7 @@ static int test_rans_cpu_gpu_source_match() {
             if (d / base > max_diff) max_diff = d / base;
         }
 
-        if (max_diff > 5e-7f)
+        if (max_diff > 1e-7f)
             FAIL("CPU/GPU SA volume source max rel diff=%g", max_diff);
 
         PASS;
@@ -2036,7 +2036,7 @@ static int test_rans_second_order_gpu_cpu_match() {
         // while CPU correctly limits near the sharp gradient.
         Real max_nu_diff = 0.0f;
         int bad_count = 0;
-        Real tol = 1e-5f;
+        Real tol = 1e-6f;
         for (int i = 0; i < n; ++i) {
             Real d = std::fabs(gpu_limiters[i].nu_tilde - cpu_limiters[i].nu_tilde);
             if (d > max_nu_diff) max_nu_diff = d;
@@ -2968,7 +2968,7 @@ static int test_cpu_viscous_order2_equivalence() {
         if (cpu.failed) FAIL("CPU viscous+order2 solve failed");
 
         std::string err;
-        if (!assert_oracle_equivalent(gpu, cpu, 1e-4f, 1e-3f, &err))
+        if (!assert_oracle_equivalent(gpu, cpu, 1e-5f, 1e-4f, &err))
             FAIL("viscous+order2 GPU=CPU: %s", err.c_str());
         PASS;
     }
@@ -3009,7 +3009,7 @@ static int test_cpu_viscous_turb_equivalence() {
         if (cpu.failed) FAIL("CPU viscous+turb solve failed");
 
         std::string err;
-        if (!assert_oracle_equivalent(gpu, cpu, 1e-4f, 1e-3f, &err))
+        if (!assert_oracle_equivalent(gpu, cpu, 1e-5f, 1e-4f, &err))
             FAIL("viscous+turb GPU=CPU: %s", err.c_str());
         PASS;
     }
