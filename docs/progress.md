@@ -1384,3 +1384,4 @@
 2026-07-27: yaml-cpp 0.8.0 integrated via add_subdirectory; SpeciesConfig::load_yaml() implemented; 15/15 tests PASS (new THERMO-CFG-2 YAML test); no startup crash after n_intervals fix.
 2026-07-27: commit w/ pre-commit fix: pre-commit now builds missile_cpu (works with CUDA=OFF) and skips third-party/ whitespace check.
 2026-07-27: cmake/ subdir created: compiler_flags.cmake + fetch_eigen.cmake extracted from root CMakeLists.txt. Pre-commit hook passes.
+2026-07-27: CUDA boundary fixes: guarded aero_skin_friction.hpp CUDA include, renamed device_mesh.cu+api -> .cpp, deleted gpu_buffers.cu, fixed double registration, guarded fgmres/krylov_ops. 15/15 tests PASS.
