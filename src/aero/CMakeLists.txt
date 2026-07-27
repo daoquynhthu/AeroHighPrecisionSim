@@ -19,6 +19,9 @@ target_sources(missile_cpu PRIVATE
     cfd/thermo.cpp
     cfd/thermo_db.cpp
     cfd/gpu_thermo_table.cpp
+    cfd/nasa9_eval.cpp
+    cfd/transport_eval.cpp
+    cfd/t_from_e.cpp
     cfd/viscous.cpp
 )
 
