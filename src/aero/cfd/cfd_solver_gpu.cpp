@@ -9,6 +9,7 @@
 #include "aero/cfd/amr_interpolate.hpp"
 #include "aero/cfd/reconstruction.hpp"
 #include "aero/cfd/diagnostics.hpp"
+#include "aero/cfd/rans.hpp"
 
 #include <algorithm>
 #include <cmath>
@@ -98,7 +99,7 @@ CfdSolveSummary solve_gpu_dispatch(
         Real T_inf = w_inf.p / w_inf.rho;
         Real t_ratio = T_inf / config.T_ref;
         Real mu_inf = config.mu_ref * t_ratio * std::sqrt(t_ratio) * (config.T_ref + config.sutherland_T) / (T_inf + config.sutherland_T);
-        w_inf.nu_tilde = condition.nu_tilde_ratio * mu_inf / w_inf.rho;
+        w_inf.nu_tilde = sa_freestream_nu_tilde(condition.nu_tilde_ratio, mu_inf, w_inf.rho, config.Re);
     }
     ConservativeState q_inf = primitive_to_conservative(w_inf, config.gamma);
     std::vector<ConservativeState> q(mesh.cells.size(), q_inf);

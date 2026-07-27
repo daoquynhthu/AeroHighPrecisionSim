@@ -181,7 +181,9 @@ static CfdSolveSummary solve_gpu_impl(
         Real T_inf = w_inf.p / w_inf.rho;
         Real t_ratio = T_inf / config.T_ref;
         Real mu_inf = config.mu_ref * t_ratio * real_sqrt(t_ratio) * (config.T_ref + config.sutherland_T) / (T_inf + config.sutherland_T);
-        w_inf.nu_tilde = condition.nu_tilde_ratio * mu_inf / w_inf.rho;
+        // chi_inf = ratio: nu_tilde = ratio * mu/(rho*Re)
+        w_inf.nu_tilde = condition.nu_tilde_ratio * mu_inf
+                       / (w_inf.rho * config.Re + Real(1e-30));
     }
     int nvar_ncells_flow = d_mesh.nvar() * static_cast<int>(d_mesh.cell_count());
     int nvar_ncells = nvar_ncells_flow;
@@ -208,11 +210,13 @@ static CfdSolveSummary solve_gpu_impl(
     cudaEventCreate(&event_update_done);
     cudaEventRecord(event_update_done, stream_main); // signaled for first iter
 
+    if (config.implicit || config.local_time_stepping) {
+        if (!cuda_check(cudaMalloc(&d_dt_cell, n_cells * sizeof(Real)), "cudaMalloc d_dt_cell", error)) goto fail;
+    }
     if (config.implicit) {
-        d_dq = nullptr; d_dt_cell = nullptr; d_r_saved = nullptr; d_q_backup = nullptr;
+        d_dq = nullptr; d_r_saved = nullptr; d_q_backup = nullptr;
         if (!cuda_check(cudaMalloc(&d_dq, nvar_cells * sizeof(Real)), "cudaMalloc d_dq", error)) goto fail;
         if (!cuda_check(cudaMemset(d_dq, 0, nvar_cells * sizeof(Real)), "zero d_dq", error)) goto fail;
-        if (!cuda_check(cudaMalloc(&d_dt_cell, n_cells * sizeof(Real)), "cudaMalloc d_dt_cell", error)) goto fail;
         if (!cuda_check(cudaMalloc(&d_neg_r, nvar_cells * sizeof(Real)), "cudaMalloc d_neg_r", error)) goto fail;
         if (!cuda_check(cudaMalloc(&d_r_saved, nvar_cells * sizeof(Real)), "cudaMalloc d_r_saved", error)) goto fail;
         if (!cuda_check(cudaMalloc(&d_q_backup, nvar_cells * sizeof(Real)), "cudaMalloc d_q_backup", error)) goto fail;
@@ -356,10 +360,26 @@ static CfdSolveSummary solve_gpu_impl(
         }
 
         cudaStreamWaitEvent(stream_pre, event_update_done, 0);
-        if (!compute_timestep_gpu(d_mesh, config.gamma, config.cfl, d_min_dt,
-                config.viscous, config.mu_ref, config.T_ref, config.sutherland_T, config.Re, stream_pre)) {
-            if (error) *error = "timestep kernel failed";
-            goto fail;
+        {
+            const bool sa_dt = (config.turbulence_model == TurbulenceModel::SA ||
+                               config.turbulence_model == TurbulenceModel::SA_DDES);
+            if (!compute_timestep_gpu(d_mesh, config.gamma, config.cfl, d_min_dt,
+                    config.viscous, config.mu_ref, config.T_ref, config.sutherland_T, config.Re,
+                    stream_pre, sa_dt)) {
+                if (error) *error = "timestep kernel failed";
+                goto fail;
+            }
+            if (config.local_time_stepping && d_dt_cell) {
+                if (!compute_local_timestep_gpu(d_mesh, config.gamma, config.cfl, d_dt_cell,
+                        config.viscous, config.mu_ref, config.T_ref, config.sutherland_T, config.Re,
+                        error, stream_pre, sa_dt)) {
+                    goto fail;
+                }
+                if (!cap_local_timestep_gpu(d_dt_cell, d_min_dt, config.lts_dt_ratio_max,
+                        n_cells, error, stream_pre)) {
+                    goto fail;
+                }
+            }
         }
         cudaEventRecord(event_timestep_done, stream_pre);
         cudaStreamWaitEvent(stream_main, event_timestep_done, 0);
@@ -405,7 +425,12 @@ if (config.viscous) {
         }
         if (config.turbulence_model != TurbulenceModel::LAMINAR &&
                 config.turbulence_model != TurbulenceModel::SST && !config.implicit) {
-            if (!apply_rans_implicit_gpu(d_mesh, config.Re, d_min_dt, error, stream_main)) {
+            if (config.local_time_stepping && d_dt_cell) {
+                if (!apply_rans_implicit_per_cell_gpu(d_mesh, config.Re, d_dt_cell, error, stream_main)) {
+                    if (error && error->empty()) *error = "RANS implicit per-cell kernel failed";
+                    goto fail;
+                }
+            } else if (!apply_rans_implicit_gpu(d_mesh, config.Re, d_min_dt, error, stream_main)) {
                 if (error && error->empty()) *error = "RANS implicit kernel failed";
                 goto fail;
             }
@@ -417,9 +442,14 @@ if (config.viscous) {
             cfl_ramp = real_fmin(cfl_ramp, config.cfl_end);
             cfl_ramp *= cfl_multiplier;
 
-            if (!compute_local_timestep_gpu(d_mesh, config.gamma, cfl_ramp, d_dt_cell,
-                    config.viscous, config.mu_ref, config.T_ref, config.sutherland_T, config.Re, error, stream_main)) {
-                goto fail;
+            {
+                const bool sa_dt = (config.turbulence_model == TurbulenceModel::SA ||
+                                   config.turbulence_model == TurbulenceModel::SA_DDES);
+                if (!compute_local_timestep_gpu(d_mesh, config.gamma, cfl_ramp, d_dt_cell,
+                        config.viscous, config.mu_ref, config.T_ref, config.sutherland_T, config.Re,
+                        error, stream_main, sa_dt)) {
+                    goto fail;
+                }
             }
             { int df = 0; cudaMemcpy(&df, d_failed, sizeof(int), cudaMemcpyDeviceToHost);
               if (df != 0) std::fprintf(stderr, "DIAG d_failed=1 after local timestep (iter=%d)\n", iter); }
@@ -602,8 +632,9 @@ newton_accepted:
                 if (error) *error = "final L2 norm failed"; goto fail;
             }
         } else {
+            const Real* dt_ptr = (config.local_time_stepping && d_dt_cell) ? d_dt_cell : nullptr;
             if (!compute_update_gpu(d_mesh, d_min_dt, config.gamma, d_l2_sum, d_failed,
-                    d_failure_cell, d_failure_state, stream_main)) {
+                    d_failure_cell, d_failure_state, stream_main, dt_ptr)) {
                 if (error) *error = "update kernel failed";
                 goto fail;
             }

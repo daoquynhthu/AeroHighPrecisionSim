@@ -587,7 +587,7 @@ CfdSolveSummary CfdSolver::solve(const FreestreamCondition& condition, const Cfd
         Real T_inf = w_inf.p / w_inf.rho;
         Real t_ratio = T_inf / config.T_ref;
         Real mu_inf = config.mu_ref * t_ratio * std::sqrt(t_ratio) * (config.T_ref + config.sutherland_T) / (T_inf + config.sutherland_T);
-        w_inf.nu_tilde = condition.nu_tilde_ratio * mu_inf / w_inf.rho;
+        w_inf.nu_tilde = sa_freestream_nu_tilde(condition.nu_tilde_ratio, mu_inf, w_inf.rho, config.Re);
     }
     ConservativeState q_inf = primitive_to_conservative(w_inf, config.gamma);
     std::vector<ConservativeState> q(mesh_.cells.size(), q_inf);
@@ -639,6 +639,11 @@ CfdSolveSummary CfdSolver::solve_from_state(
     std::vector<RefinementRecord> amr_records;
     bool diagnostics_enabled = config.diagnostic_level != DiagnosticLevel::Off;
 
+    std::vector<Real> dt_cell(mesh_.cells.size(), Real(0));
+    const bool use_lts = config.local_time_stepping;
+    const bool use_sa = (config.turbulence_model == TurbulenceModel::SA ||
+                         config.turbulence_model == TurbulenceModel::SA_DDES);
+
     for (int iter = 0; iter < config.max_iter; ++iter) {
         Real min_dt = std::numeric_limits<Real>::max();
         DtLimiterSnapshot dt_limiter;
@@ -665,18 +670,36 @@ CfdSolveSummary CfdSolver::solve_from_state(
             Real signal_speed = vmag + a;
             Real h_min_val = mesh_.cells[i].h_min;
             if (h_min_val <= 0.0f) h_min_val = 1e-10f;
-            Real dt = config.cfl * h_min_val / signal_speed;
+            Real dt = config.cfl * h_min_val / (signal_speed + Real(1e-30));
+            Real mu = Real(0);
+            Real nu_mol = Real(0);
             if (config.viscous) {
                 Real T = w[i].p / w[i].rho;
                 if (T > 0.0f) {
                     Real t_ratio = T / config.T_ref;
-                    Real mu = config.mu_ref * t_ratio * std::sqrt(t_ratio) * (config.T_ref + config.sutherland_T) / (T + config.sutherland_T);
+                    mu = config.mu_ref * t_ratio * std::sqrt(t_ratio) * (config.T_ref + config.sutherland_T) / (T + config.sutherland_T);
                     if (mu > 0.0f) {
-                        Real dt_visc = config.cfl * w[i].rho * h_min_val * h_min_val * config.Re / mu;
+                        nu_mol = mu / (w[i].rho * config.Re + 1e-30f);
+                        Real nu_t = Real(0);
+                        if (use_sa)
+                            nu_t = sa_eddy_viscosity(w[i].nu_tilde, w[i].rho, mu, config.Re);
+                        Real nu_eff = nu_mol + std::max(nu_t, Real(0));
+                        Real dt_visc = config.cfl * h_min_val * h_min_val / (nu_eff + 1e-30f);
                         if (dt_visc < dt) dt = dt_visc;
                     }
                 }
             }
+            if (use_sa && mu > 0) {
+                Real d_wall = mesh_.cells[i].wall_distance;
+                Real g_sa = sa_damping_rate(Real(0), w[i].nu_tilde, nu_mol, d_wall, h_min_val);
+                g_sa = std::max(g_sa, sa_diffusive_rate(w[i].nu_tilde, nu_mol, h_min_val));
+                if (g_sa > 0) {
+                    Real dt_sa = config.cfl / g_sa;
+                    if (dt_sa < dt) dt = dt_sa;
+                }
+            }
+            if (!(dt > 0) || !std::isfinite(dt)) dt = Real(1e-30);
+            dt_cell[i] = dt;
             if (dt < min_dt) {
                 min_dt = dt;
                 dt_limiter.cell = static_cast<int>(i);
@@ -693,6 +716,15 @@ CfdSolveSummary CfdSolver::solve_from_state(
                 if (mach < iter_bounds.min_mach) iter_bounds.min_mach = mach;
                 if (mach > iter_bounds.max_mach) iter_bounds.max_mach = mach;
             }
+        }
+        if (!(min_dt > 0) || !std::isfinite(min_dt)) min_dt = Real(1e-30);
+        if (use_lts && config.lts_dt_ratio_max > 1) {
+            Real dt_cap = min_dt * config.lts_dt_ratio_max;
+            for (std::size_t i = 0; i < dt_cell.size(); ++i)
+                if (dt_cell[i] > dt_cap) dt_cell[i] = dt_cap;
+        } else {
+            for (std::size_t i = 0; i < dt_cell.size(); ++i)
+                dt_cell[i] = min_dt;
         }
         if (diagnostics_enabled) {
             summary.diagnostics.dt_limiter_history.push_back(dt_limiter);
@@ -871,54 +903,77 @@ CfdSolveSummary CfdSolver::solve_from_state(
         }
 
         // SA full-residual point-implicit (sources + inviscid/viscous turb fluxes):
-        //   U = rho*nu_tilde,  U_new = (U + dt/V * R) / (1 + dt*g)
-        //   g = max(0,-∂S/∂nu) + destruction floor + viscous spectral radius
-        // Equivalent residual rewrite:
-        //   R_eff = R*f + U*(f-1)/(dt/V),  f = 1/(1+dt*g)
-        // Also limit |S| so |dt*S| cannot exceed C*max(|nu|, nu_mol).
-        // Skipped for SST and MMS (same reasons as before).
-        if (config.turbulence_model != TurbulenceModel::LAMINAR &&
-            config.turbulence_model != TurbulenceModel::SST &&
+        //   U_new = (U + dt_i/V * R) / (1 + dt_i*g)
+        // Sub-iters re-linearize volume source against frozen face fluxes (R_flux).
+        if (use_sa &&
             config.mms_source.empty() &&
             sources.size() == q.size()) {
+            std::vector<Real> R_flux(q.size(), Real(0));
             for (std::size_t i = 0; i < q.size(); ++i) {
-                Real rho = q[i].rho;
-                if (!(rho > 0) || !std::isfinite(rho)) continue;
-                Real nu_tilde = q[i].rho_nu_tilde / rho;
-                if (!std::isfinite(nu_tilde)) continue;
-
                 Real V = mesh_.cells[i].volume;
-                if (!(V > 0) || !std::isfinite(V)) continue;
-
                 Real R_src = sources[i].total_source * V;
-                if (!std::isfinite(R_src)) continue;
-
-                Real S = sources[i].total_source / rho;
-                Real T = w[i].p / std::max(w[i].rho, Real(1e-30));
-                Real mu = sutherland_viscosity(T, config.T_ref, config.sutherland_T);
-                if (!(mu > 0)) mu = config.mu_ref;
-                Real nu_mol = mu / (rho * config.Re + 1e-30f);
-                Real S_lim = sa_limit_source(S, nu_tilde, nu_mol, min_dt, Real(1));
-                if (S_lim != S) {
-                    Real R_src_lim = rho * S_lim * V;
-                    residual[i].turbulence += (R_src_lim - R_src);
-                    R_src = R_src_lim;
+                if (!std::isfinite(R_src)) R_src = 0;
+                R_flux[i] = residual[i].turbulence - R_src;
+            }
+            const int n_sa_pass = 1 + std::max(0, config.sa_sub_iters);
+            for (int sa_pass = 0; sa_pass < n_sa_pass; ++sa_pass) {
+                if (sa_pass > 0) {
+                    for (std::size_t i = 0; i < q.size(); ++i) {
+                        Real rho = q[i].rho;
+                        if (!(rho > 0) || !std::isfinite(rho)) continue;
+                        Real V = mesh_.cells[i].volume;
+                        if (!(V > 0)) continue;
+                        Real dt_i = dt_cell[i];
+                        Real U_prov = q[i].rho_nu_tilde + (dt_i / V) * residual[i].turbulence;
+                        PrimitiveState wp = w[i];
+                        wp.nu_tilde = U_prov / rho;
+                        Real T = w[i].p / std::max(w[i].rho, Real(1e-30));
+                        Real mu = sutherland_viscosity(T, config.T_ref, config.sutherland_T);
+                        if (!(mu > 0)) mu = config.mu_ref;
+                        const PrimitiveGradient& ggrad =
+                            (apply_limiting && limited.size() == q.size()) ? limited[i]
+                            : (grads.size() == q.size() ? grads[i] : PrimitiveGradient{});
+                        sources[i] = compute_rans_source(
+                            wp, ggrad, mesh_.cells[i].wall_distance, mu, rho, config.Re);
+                    }
                 }
+                for (std::size_t i = 0; i < q.size(); ++i) {
+                    Real rho = q[i].rho;
+                    if (!(rho > 0) || !std::isfinite(rho)) continue;
+                    Real nu_tilde = (sa_pass == 0)
+                        ? q[i].rho_nu_tilde / rho
+                        : (q[i].rho_nu_tilde + (dt_cell[i] / mesh_.cells[i].volume) * residual[i].turbulence) / rho;
+                    if (!std::isfinite(nu_tilde)) continue;
 
-                Real d = mesh_.cells[i].wall_distance;
-                Real g = sa_damping_rate(sources[i].dS_dnu, nu_tilde, nu_mol, d,
-                                         mesh_.cells[i].h_min);
-                Real f = 1.0f / (1.0f + min_dt * g + 1e-30f);
-                Real dtv = min_dt / V;
-                Real U = q[i].rho_nu_tilde;
-                Real R = residual[i].turbulence;
-                residual[i].turbulence = R * f + U * (f - 1.0f) / (dtv + 1e-30f);
+                    Real V = mesh_.cells[i].volume;
+                    if (!(V > 0) || !std::isfinite(V)) continue;
+                    Real dt_i = dt_cell[i];
+
+                    Real S = sources[i].total_source / rho;
+                    Real T = w[i].p / std::max(w[i].rho, Real(1e-30));
+                    Real mu = sutherland_viscosity(T, config.T_ref, config.sutherland_T);
+                    if (!(mu > 0)) mu = config.mu_ref;
+                    Real nu_mol = mu / (rho * config.Re + 1e-30f);
+                    Real S_lim = sa_limit_source(S, nu_tilde, nu_mol, dt_i, Real(1));
+                    Real R_src = rho * S_lim * V;
+                    sources[i].total_source = rho * S_lim;
+                    residual[i].turbulence = R_flux[i] + R_src;
+
+                    Real d = mesh_.cells[i].wall_distance;
+                    Real g = sa_damping_rate(sources[i].dS_dnu, nu_tilde, nu_mol, d,
+                                             mesh_.cells[i].h_min);
+                    Real f = 1.0f / (1.0f + dt_i * g + 1e-30f);
+                    Real dtv = dt_i / V;
+                    Real U = q[i].rho_nu_tilde;
+                    Real R = residual[i].turbulence;
+                    residual[i].turbulence = R * f + U * (f - 1.0f) / (dtv + 1e-30f);
+                }
             }
         }
 
         Real l2 = 0.0f;
         for (std::size_t i = 0; i < q.size(); ++i) {
-            Real scale = min_dt / mesh_.cells[i].volume;
+            Real scale = dt_cell[i] / mesh_.cells[i].volume;
             q_next[i] = add_scaled(q[i], residual[i], scale);
             // SA-neg floor + soft ceiling (prevents chi^3 overflow runaway)
             if (config.turbulence_model != TurbulenceModel::LAMINAR &&
@@ -958,7 +1013,7 @@ CfdSolveSummary CfdSolver::solve_from_state(
         // SST explicit update for k and omega
         if (config.turbulence_model == TurbulenceModel::SST) {
             for (std::size_t i = 0; i < mesh_.cells.size(); ++i) {
-                Real dt_over_V = min_dt / (mesh_.cells[i].volume + Real(1e-30));
+                Real dt_over_V = dt_cell[i] / (mesh_.cells[i].volume + Real(1e-30));
                 sst_k_[i] += dt_over_V * sst_residual_k_[i];
                 sst_omega_[i] += dt_over_V * sst_residual_omega_[i];
                 if (sst_k_[i] < Real(0)) sst_k_[i] = Real(0);

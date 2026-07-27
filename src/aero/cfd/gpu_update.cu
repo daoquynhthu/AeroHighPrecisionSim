@@ -44,7 +44,7 @@ __global__ void __launch_bounds__(256) update_and_l2_kernel(
     Real* d_q,
     const Real* d_residual,
     const Real* d_volume,
-    int n_cells, int nvar, const Real* d_min_dt, Real gamma,
+    int n_cells, int nvar, const Real* d_min_dt, const Real* d_dt_cell, Real gamma,
     Real* /* d_l2_sum -- written by reduce_sum_kernel */,
     int* d_failed,
     int* d_failure_cell, Real* d_failure_state,
@@ -54,7 +54,7 @@ __global__ void __launch_bounds__(256) update_and_l2_kernel(
     Real my_l2 = 0;
 
     if (idx < n_cells) {
-        Real min_dt = __ldg(d_min_dt);
+        Real dt = d_dt_cell ? d_dt_cell[idx] : __ldg(d_min_dt);
 
         Real old_rho = d_q[idx * nvar + 0];
         Real old_rhou = d_q[idx * nvar + 1];
@@ -63,7 +63,7 @@ __global__ void __launch_bounds__(256) update_and_l2_kernel(
         Real old_rhoE = d_q[idx * nvar + 4];
         Real old_rhont = d_q[idx * nvar + 5];
 
-        Real scale = min_dt / d_volume[idx];
+        Real scale = dt / d_volume[idx];
 
         Real new_rho = old_rho + scale * d_residual[idx * nvar + 0];
         Real new_rhou = old_rhou + scale * d_residual[idx * nvar + 1];
@@ -127,7 +127,7 @@ __global__ void __launch_bounds__(256) update_and_l2_kernel(
 bool compute_update_gpu(DeviceMesh& mesh, const Real* d_min_dt, Real gamma,
     Real* d_l2_sum, int* d_failed,
     int* d_failure_cell, Real* d_failure_state,
-    cudaStream_t stream) {
+    cudaStream_t stream, const Real* d_dt_cell) {
     init_update_zero_kernel<<<1, 1, 0, stream>>>(d_l2_sum, d_failed);
     if (!cuda_check(cudaGetLastError(), "init_update_zero kernel launch")) return false;
     if (d_failure_cell) {
@@ -144,7 +144,7 @@ bool compute_update_gpu(DeviceMesh& mesh, const Real* d_min_dt, Real gamma,
 
     update_and_l2_kernel<<<grid, block, block * sizeof(Real), stream>>>(
         mesh.state_device(), mesh.residual_device(), cd.volume,
-        nc, mesh.nvar(), d_min_dt, gamma,
+        nc, mesh.nvar(), d_min_dt, d_dt_cell, gamma,
         d_l2_sum, d_failed,
         d_failure_cell, d_failure_state,
         d_partial_buf);

@@ -150,11 +150,27 @@ static int test_fp64_rans_flat_plate() {
         if (!std::isfinite(result.forces.CD)) FAIL("CD not finite: %g", result.forces.CD);
         if (!std::isfinite(result.forces.CL)) FAIL("CL not finite: %g", result.forces.CL);
 
+        // Residual gate: coarse plate + 20 LTS steps must stay at physical
+        // residual levels (pre-fix residual peaked ~1e6 then NaN).
+        if (result.residual_history.size() < 5)
+            FAIL("too few residual samples: %zu", result.residual_history.size());
+        Real r0 = result.residual_history.front();
+        Real rN = result.residual_history.back();
+        Real r_peak = r0;
+        for (Real r : result.residual_history)
+            if (r > r_peak) r_peak = r;
+        if (!std::isfinite(rN) || !std::isfinite(r_peak))
+            FAIL("non-finite residual peak=%g final=%g", r_peak, rN);
+        if (r_peak > Real(1e-2))
+            FAIL("residual peak too large for coarse SA plate: %g", r_peak);
+        if (rN > Real(1e-3))
+            FAIL("final residual too large for coarse SA plate: %g", rN);
+
         std::printf("  forces: CD=%.15e CL=%.15e CX=%.15e CY=%.15e CZ=%.15e\n",
             result.forces.CD, result.forces.CL,
             result.forces.CX, result.forces.CY, result.forces.CZ);
-        std::printf("  iterations=%zu converged=%d\n",
-            result.residual_history.size(), result.converged);
+        std::printf("  iterations=%zu converged=%d r0=%.3e rN=%.3e peak=%.3e\n",
+            result.residual_history.size(), result.converged, r0, rN, r_peak);
 
         PASS;
     }

@@ -3090,3 +3090,10 @@ Added to both `missile_cpu` and (conditionally) `missile_lib`. Works but compile
 - Cause: SA-neg recovery sign fix exposed incomplete point-implicit (source-only Jacobian, missing diffusion spectral radius, f amplification edge cases; float d^2 overflow at wd=1e30)
 - Fix: full-residual point-implicit + complete damping rate (Jacobian + dest floor + viscous radius) + SA-R + stiff_scale on dest/diffusion + nu clamp + float-safe wall distance
 - Gate: `test_oracle_fp64` FP64-ORACLE-3 PASS; TestCfdRans 16/16; GPU *RANS* 9/9
+
+**PHYS-23** [FIXED 2026-07-27] SA coarse residual not dropping (freestream + wall_d + LTS)
+`rans.cpp/hpp`, `cfd_solver.cpp`, `mesh_metrics.cpp`, `gpu_timestep.cu`, `gpu_update.cu`, `gpu_solver.cu`
+- Symptom: after PHYS-22 stability fix, flat-plate SA residual still O(1e4–1e6) at 20 steps
+- Cause: chi_inf wrongly ratio*Re; wall_d only first layer; no LTS/SA CFL on explicit path
+- Fix: correct freestream, global wall distance, CPU/GPU LTS + SA spectral CFL + SA sub-iters
+- Gate: ORACLE-3 residual peak/final ~1e-6; RANS unit 17/17; GPU *RANS* 9/9

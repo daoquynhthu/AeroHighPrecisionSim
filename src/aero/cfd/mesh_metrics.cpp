@@ -728,19 +728,28 @@ MeshQualityReport compute_mesh_metrics(CfdMesh& mesh, bool recompute_cells) {
         }
     }
 
+    std::vector<int> wall_face_ids;
+    wall_face_ids.reserve(mesh.faces.size() / 8 + 8);
+    for (int fi = 0; fi < static_cast<int>(mesh.faces.size()); ++fi) {
+        const CfdFace& face = mesh.faces[fi];
+        if (face.boundary == BoundaryKind::SlipWall || face.boundary == BoundaryKind::NoSlipWall)
+            wall_face_ids.push_back(fi);
+    }
+
     for (int ci = 0; ci < static_cast<int>(mesh.cells.size()); ++ci) {
         auto& cell = mesh.cells[ci];
         cell.first_face = cell_faces[ci].empty() ? 0 : cell_faces[ci][0];
         cell.face_count = static_cast<int>(cell_faces[ci].size());
+        // Distance to EVERY wall face (not only cell-adjacent). Interior BL cells
+        // must see d>0 or SA destruction vanishes and residual cannot drop.
         Real min_wall = std::numeric_limits<Real>::max();
         Vec3 cc{cell.cx, cell.cy, cell.cz};
-        for (int fi : cell_faces[ci]) {
+        for (int fi : wall_face_ids) {
             const CfdFace& face = mesh.faces[fi];
-            if (face.boundary != BoundaryKind::SlipWall && face.boundary != BoundaryKind::NoSlipWall) continue;
             Vec3 fc{face.cx, face.cy, face.cz};
             Vec3 n{face.nx, face.ny, face.nz};
             Real distance = std::fabs(dot(cc - fc, n));
-            min_wall = std::min(min_wall, distance);
+            if (distance < min_wall) min_wall = distance;
         }
         if (min_wall < std::numeric_limits<Real>::max()) {
             cell.wall_distance = min_wall;

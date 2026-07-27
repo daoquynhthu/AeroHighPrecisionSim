@@ -63,6 +63,27 @@ Real sa_nu_tilde_ceil(Real nu_mol, Real nu_cap_factor, Real nu_cap_abs) {
     return cap;
 }
 
+Real sa_freestream_nu_tilde(Real ratio, Real mu, Real rho, Real Re) {
+    if (!(ratio > 0) || !(mu > 0) || !(rho > 0) || !(Re > 0)) return Real(0);
+    return ratio * mu / (rho * Re);
+}
+
+Real sa_eddy_viscosity(Real nu_tilde, Real rho, Real mu, Real Re) {
+    if (!(nu_tilde > 0) || !(rho > 0) || !(mu > 0) || !(Re > 0)) return Real(0);
+    Real chi = rho * Re * nu_tilde / (mu + 1e-30f);
+    if (chi > Real(1.0e6)) chi = Real(1.0e6);
+    Real chi3 = chi * chi * chi;
+    Real cv13 = kSaCv1 * kSaCv1 * kSaCv1;
+    Real fv1 = chi3 / (chi3 + cv13 + 1e-30f);
+    return nu_tilde * fv1;
+}
+
+Real sa_diffusive_rate(Real nu_tilde, Real nu_mol, Real h) {
+    if (!(h > 0) || !std::isfinite(h)) return Real(0);
+    Real nu_eff = std::max(nu_mol, Real(0)) + std::max(nu_tilde, Real(0));
+    return nu_eff / (kSaSigma * h * h + 1e-30f);
+}
+
 Real sa_limit_source(Real S, Real nu_tilde, Real nu_mol, Real dt, Real C) {
     if (!(dt > 0) || !std::isfinite(S)) return 0;
     Real nu_scale = std::max({std::fabs(nu_tilde), std::max(nu_mol, Real(0)), Real(1e-12)});

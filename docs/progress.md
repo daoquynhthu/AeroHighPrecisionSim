@@ -1412,3 +1412,18 @@
   - wall_distance far clamp 1e10 (float-safe)
 - Verified: test_oracle_fp64 3/3 PASS (FP64-ORACLE-3 finite, 20 steps no NaN)
   TestCfdRans 16/16 PASS; TestCfdGpu --gtest_filter=*RANS* 9/9 PASS
+
+2026-07-27: SA coarse-grid residual reduction (strong, no tech debt)
+- Root causes of residual floor ~1e4–1e6 on FP64-ORACLE-3 plate:
+  1) nu_tilde_ratio freestream bug: used ratio*mu/rho → chi_inf=ratio*Re (e.g. 3e5) instead of chi_inf=ratio
+  2) wall_distance only on wall-adjacent cells → interior BL saw d=∞, no destruction
+  3) CPU ignored local_time_stepping (always global min_dt); no SA spectral radius in CFL
+- Strong fixes (CPU+GPU aligned):
+  - sa_freestream_nu_tilde(ratio,mu,rho,Re)=ratio*mu/(rho*Re); chi_inf=ratio
+  - Global wall distance: every cell vs all wall faces
+  - Local time stepping on CPU + GPU explicit (d_dt_cell, update, SA PI per-cell)
+  - SA-aware CFL: mu_t in viscous dt + destruction/diffusion spectral radius
+  - SA source re-linearization sub-iters (sa_sub_iters=2 default)
+  - lts_dt_ratio_max cap for LTS coupling stability
+- Gate: FP64-ORACLE-3 residual peak/final ~1e-6 (was 1e6/NaN); peak<=1e-2, final<=1e-3
+- Tests: test_oracle_fp64 3/3; TestCfdRans 17/17 (+RANS-15 freestream chi); GPU *RANS* 9/9

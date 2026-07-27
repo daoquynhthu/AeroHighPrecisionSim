@@ -1377,6 +1377,7 @@ static int test_rans_false_regression() {
         cfg.max_iter = 20;
         cfg.convergence_tol = 1e-12f;
         cfg.viscous = false;
+        cfg.local_time_stepping = false; // global dt: bit-stable GPU/CPU Euler oracle
         cfg.turbulence_model = TurbulenceModel::LAMINAR;
 
         FreestreamCondition cond;

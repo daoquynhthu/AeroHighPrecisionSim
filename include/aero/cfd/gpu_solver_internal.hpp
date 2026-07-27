@@ -17,7 +17,7 @@ bool compute_timestep_gpu(DeviceMesh& mesh, Real gamma, Real cfl, Real* d_min_dt
     cudaStream_t stream = nullptr);
 bool compute_timestep_gpu(DeviceMesh& mesh, Real gamma, Real cfl, Real* d_min_dt,
     bool viscous, Real mu_ref, Real T_ref, Real sutherland_T, Real Re,
-    cudaStream_t stream = nullptr);
+    cudaStream_t stream = nullptr, bool sa = false);
 
 bool compute_gradients_gpu(DeviceMesh& mesh, Real gamma, std::string* error = nullptr,
     int* d_failed = nullptr, cudaStream_t stream = nullptr);
@@ -28,7 +28,7 @@ bool compute_limiters_gpu(DeviceMesh& mesh, Real gamma, std::string* error = nul
 bool compute_update_gpu(DeviceMesh& mesh, const Real* d_min_dt, Real gamma,
     Real* d_l2_sum, int* d_failed,
     int* d_failure_cell = nullptr, Real* d_failure_state = nullptr,
-    cudaStream_t stream = nullptr);
+    cudaStream_t stream = nullptr, const Real* d_dt_cell = nullptr);
 
 bool compute_wall_forces_gpu(DeviceMesh& mesh, Real gamma, Real* d_forces);
 bool compute_wall_forces_gpu(DeviceMesh& mesh, Real gamma, Real* d_forces,
@@ -93,7 +93,10 @@ bool apply_rans_implicit_per_cell_gpu(DeviceMesh& mesh, Real Re,
 
 bool compute_local_timestep_gpu(DeviceMesh& mesh, Real gamma, Real cfl, Real* d_dt_cell,
     bool viscous, Real mu_ref, Real T_ref, Real sutherland_T, Real Re, std::string* error = nullptr,
-    cudaStream_t stream = nullptr);
+    cudaStream_t stream = nullptr, bool sa = false);
+
+bool cap_local_timestep_gpu(Real* d_dt_cell, const Real* d_min_dt, Real ratio_max,
+    int n_cells, std::string* error = nullptr, cudaStream_t stream = nullptr);
 
 // Jacobian-free matrix-vector product for implicit solver
 struct PrimitiveState;

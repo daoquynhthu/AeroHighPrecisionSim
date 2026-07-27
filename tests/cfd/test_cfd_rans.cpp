@@ -242,6 +242,25 @@ static int test_rans_sources_mesh() {
     return 0;
 }
 
+static int test_sa_freestream_chi() {
+    TEST("CFD-RANS-15 freestream nu_tilde_ratio yields chi_inf = ratio");
+    {
+        Real ratio = 3.0f;
+        Real mu = 1.0f, rho = 1.0f, Re = 1e5f;
+        Real nu = sa_freestream_nu_tilde(ratio, mu, rho, Re);
+        Real chi = rho * Re * nu / mu;
+        if (std::fabs(chi - ratio) > 1e-5f * ratio)
+            FAIL("chi_inf=%g expected %g (nu=%g)", chi, ratio, nu);
+        // Bug form ratio*mu/rho would give chi = ratio*Re
+        Real nu_bug = ratio * mu / rho;
+        Real chi_bug = rho * Re * nu_bug / mu;
+        if (std::fabs(chi_bug - ratio * Re) > 1.0f)
+            FAIL("sanity bug-form chi=%g", chi_bug);
+        PASS;
+    }
+    return 0;
+}
+
 int main() {
     int result = 0;
     result |= test_sa_vorticity();
@@ -249,6 +268,7 @@ int main() {
     result |= test_rans_source_negative_chi();
     result |= test_rans_neg_destruction_sign();
     result |= test_rans_sources_mesh();
+    result |= test_sa_freestream_chi();
     std::printf("\n%d / %d tests PASSED.\n", pass_count, test_count);
     return result == 0 && pass_count == test_count ? 0 : 1;
 }

@@ -57,6 +57,17 @@ Real sa_nu_tilde_floor(Real nu_mol);
 // nu_tilde <= max(nu_cap_factor * nu_mol, nu_cap_abs)
 Real sa_nu_tilde_ceil(Real nu_mol, Real nu_cap_factor = 1.0e5f, Real nu_cap_abs = 1.0e3f);
 
+// Freestream working variable from ratio = nu_tilde_inf / nu_inf.
+// Nondim: nu_inf = mu/(rho*Re) → nu_tilde = ratio * mu/(rho*Re) → chi_inf = ratio.
+Real sa_freestream_nu_tilde(Real ratio, Real mu, Real rho, Real Re);
+
+// SA eddy viscosity nu_t = nu_tilde * fv1 (0 if nu_tilde <= 0). Nondim chi = rho*Re*nu/mu.
+Real sa_eddy_viscosity(Real nu_tilde, Real rho, Real mu, Real Re);
+
+// SA contribution to viscous spectral radius (1/time): (nu_mol + nu_t + |nu_tilde|)/ (sigma h^2)
+// used for local/global timestep restriction.
+Real sa_diffusive_rate(Real nu_tilde, Real nu_mol, Real h);
+
 } // namespace cfd
 } // namespace aero
 } // namespace aerosp

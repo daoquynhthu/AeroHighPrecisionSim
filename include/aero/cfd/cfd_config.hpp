@@ -66,6 +66,12 @@ struct CfdConfig {
     Real fgmres_tol = 1e-2f;
     int newton_max_iter = 3;
     Real newton_sufficient_decrease = 0.5f;
+
+    // SA: re-linearize point-implicit source after residual assembly (0 = off).
+    // Default 2 removes turb residual lag on coarse BL meshes without lowering CFL.
+    int sa_sub_iters = 2;
+    // Cap local/global dt ratio for LTS coupling stability (max_dt <= ratio * min_dt).
+    Real lts_dt_ratio_max = 1.0e4f;
 };
 
 struct FreestreamCondition {
