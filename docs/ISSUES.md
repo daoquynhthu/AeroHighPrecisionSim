@@ -3038,3 +3038,48 @@ Read from CGNS API but never referenced.
 **PERF-G10** [INFO] Try `cudaMallocAsync`/`cudaMemPool` — WONTFIX
 Future improvement: replace manual cudaMalloc/cudaFree with streaming memory pool.
 
+---
+
+## CUDA Boundary Audit (2026-07-27)
+
+**CUDA-BND-A1** [CRITICAL] `aero_skin_friction.hpp` includes `<cuda_runtime.h>` without guard — FIXED
+`include/aero/engineering/aero_skin_friction.hpp:5`
+Unguarded CUDA include leaks into CPU-only engineering module. Must use `#ifdef __CUDACC__` guard or remove include altogether (16 `__host__ __device__` functions in this file).
+Fix: Added `#ifdef __CUDACC__` guard; provides `float3` stub for non-CUDA compilation.
+
+**CUDA-BND-B1** [MEDIUM] `device_mesh.cu` has zero kernel code, should be `.cpp` — FIXED
+`src/aero/cfd/device_mesh.cu`
+Contains only host-side CUDA API calls (cudaMalloc/cudaMemcpy/cudaMemset). No `__device__` or `__global__` functions.
+
+**CUDA-BND-B2** [MEDIUM] `aero_solver_c_api.cu` has zero CUDA code, should be `.cpp` — FIXED
+`src/aero/panel/aero_solver_c_api.cu`
+Pure C API wrapper, no GPU code of any kind.
+
+**CUDA-BND-B3** [MEDIUM] `gpu_buffers.cu` is empty/deprecated — FIXED
+`src/aero/cfd/gpu_buffers.cu`
+File says "implementation moved to device_mesh.cu". Should be deleted.
+
+**CUDA-BND-B4** [MEDIUM] `test_aero_viscous.cu` has no GPU code, should be `.cpp` — BY-DESIGN
+`tests/test_aero_viscous.cu`
+Needs `missile_lib` for `AeroSolver::compute_coefficients()` in `test_gpu_skin_friction()`. Stays as `.cu`.
+
+**CUDA-BND-B5** [MEDIUM] `test_gravity.cu` has no GPU code, should be `.cpp` — BY-DESIGN
+`tests/test_gravity.cu`
+Calls `model.prepare_cuda()` and `calculate_acceleration_cuda()` from `missile_lib`. Stays as `.cu`.
+
+**CUDA-BND-B6** [MEDIUM] `coordinate_transform.cu` uses Eigen in `__host__ __device__` functions — PENDING
+`src/sim/coord/coordinate_transform.cu`
+Eigen is not safe in `__device__` code (exceptions, dynamic allocation). The `__host__ __device__` decoration on functions using `Eigen::Vector3d` is misleading — they can only run on host.
+
+**CUDA-BND-C1** [LOW] `fgmres.hpp` and `krylov_ops.hpp` include CUDA without guard — FIXED
+`include/aero/cfd/fgmres.hpp:4`, `include/aero/cfd/krylov_ops.hpp:4`
+`#include <cuda_runtime.h>` should be guarded by `#ifdef __CUDACC__` like `common.hpp` and `real.hpp`.
+
+**CUDA-BND-C2** [LOW] `cuda_utils.hpp` misplaced in `aero/cfd/` vs `infra/cuda/` — PENDING
+`include/aero/cfd/cuda_utils.hpp`
+Host-side CUDA wrapper (`cuda_check`, `CUDA_KERNEL_CHECK`) sits in `aero/cfd/` but `infra/cuda/cuda_utils.cuh` exists for device-compatible utilities. Should consolidate or move.
+
+**CUDA-BND-C3** [LOW] `missile_config.cpp` double-registered in CMake — FIXED
+`src/config/CMakeLists.txt`
+Added to both `missile_cpu` and (conditionally) `missile_lib`. Works but compiles twice.
+

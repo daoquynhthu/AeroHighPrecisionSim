@@ -2,7 +2,13 @@
 
 #include <cmath>
 #include <algorithm>
-#include <cuda_runtime.h>
+#ifdef __CUDACC__
+#  include <cuda_runtime.h>
+#else
+#  include <cstddef>
+struct float3 { float x, y, z; };
+static inline float3 make_float3(float x, float y, float z) { return {x, y, z}; }
+#endif
 
 namespace aerosp {
 namespace aero {

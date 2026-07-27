@@ -30,6 +30,7 @@ if(AEROSIM_USE_CUDA)
         cfd/gpu_topology.cpp
         cfd/partition.cpp
         cfd/cfd_solver_gpu.cpp
+        cfd/device_mesh.cpp
     )
 
     # GPU device code (compiled by nvcc, needs separable compilation)
@@ -41,8 +42,7 @@ if(AEROSIM_USE_CUDA)
         cfd/fgmres_gpu.cu
         cfd/jacobian_free.cu
         cfd/lusgs_gpu.cu
-        cfd/device_mesh.cu
-        cfd/gpu_buffers.cu
+        cfd/gpu_diagnostics.cu
         cfd/gpu_diagnostics.cu
         cfd/gpu_ddes.cu
         cfd/gpu_rans.cu

@@ -207,6 +207,7 @@ switch -Regex ($Action.ToLower()) {
             '    if (-not (Test-Path $path)) { continue }',
             '    $ext = [System.IO.Path]::GetExtension($f)',
             '    if ($ext -notin ''.cpp'',''.hpp'',''.cu'',''.h'',''.cuh'',''.py'',''.ps1'',''.cmake'') { continue }',
+            '    if ($f -match ''^third-party/'') { continue }',
             '    $lines = Get-Content $path',
             '    for ($i = 0; $i -lt $lines.Count; $i++) {',
             '        if ($lines[$i] -match ''[ \t]+$'') {',

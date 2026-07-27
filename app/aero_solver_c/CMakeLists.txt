@@ -1,4 +1,4 @@
-add_library(aero_solver_c SHARED ../../src/aero/panel/aero_solver_c_api.cu)
+add_library(aero_solver_c SHARED ../../src/aero/panel/aero_solver_c_api.cpp)
 target_compile_definitions(aero_solver_c PRIVATE AERO_SOLVER_EXPORTS)
 target_link_libraries(aero_solver_c PRIVATE missile_lib)
 target_include_directories(aero_solver_c PRIVATE

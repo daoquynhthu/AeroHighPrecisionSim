@@ -1,7 +1,9 @@
 #pragma once
 
 #include "aero/cfd/real_fwd.hpp"
-#include <cuda_runtime.h>
+#ifdef __CUDACC__
+#  include <cuda_runtime.h>
+#endif
 #include <functional>
 
 namespace aerosp {
