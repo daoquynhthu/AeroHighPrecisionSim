@@ -51,6 +51,9 @@ struct CfdConfig {
     // AMR (h-refinement)
     AmrConfig amr;
 
+    // Thermochemistry (Phase 15+) — GasModelKind defined in thermo.hpp
+    int gas_model_kind = 0;
+
     // Implicit solver
     bool implicit = false;
     Real cfl_start = 1.0f;

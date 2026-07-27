@@ -16,6 +16,7 @@ target_sources(missile_cpu PRIVATE
     cfd/mms.cpp
     cfd/rans.cpp
     cfd/reconstruction.cpp
+    cfd/thermo.cpp
     cfd/viscous.cpp
 )
 

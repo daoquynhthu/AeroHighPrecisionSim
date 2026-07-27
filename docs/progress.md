@@ -1340,3 +1340,14 @@
 - Added --gtest_filter support to test_cfd_gpu.cpp for targeted test debugging.
 - All 85/85 tests PASS (CFD-IMPLICIT-AMR-1 and CFD-IMPLICIT-AMR-2 now both PASS, removed from deferred list).
 - PLAN.md updated: AMR-1/AMR-2 checkboxes changed from [ ] (deferred) to [x].
+
+2026-07-27 — Phase 15.1: NASA McBride 7-coefficient gas model infrastructure
+- Created include/aero/cfd/thermo.hpp + src/aero/cfd/thermo.cpp:
+  - McBride7 struct, SpeciesThermo database for N2/O2/NO/N/O (NASA/TP-2002-211556)
+  - GasModel base / PerfectGasModel / EquilibriumAirModel class hierarchy
+  - Host-side cp(T), cv(T), gamma(T), h(T), e(T), T_from_e() for equilibrium air
+  - Device-side inline helpers: d_species_cp, d_species_h, d_mix_cp, d_mix_gamma, d_mix_h
+- cfd_config.hpp: added `int gas_model_kind` field (0=PerfectGas, 1=EquilibriumAir, 2=ChemNonEq)
+- CMakeLists.txt: registered thermo.cpp (missile_cpu)
+- Coefficients verified against Cantera gri30_highT.yaml and NASA Glenn Python library
+- All 85/85 CFD tests PASS (backward compatible, gas_model_kind defaults to 0)

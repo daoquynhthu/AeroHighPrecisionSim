@@ -1859,11 +1859,11 @@ Files:
 
 Tasks:
 
-- [ ] NASA McBride 7-coefficient struct (two temperature ranges, 14 coefs total + T_break)
-- [ ] Air polynomial: N₂, O₂, NO, N, O individual + mixture-averaged cp(T) by mass fraction
-- [ ] Chemical enthalpy: `h_s(T) = ∫cp_s(T) dT + h_f_s^298` (formation enthalpy)
-- [ ] `gas_model` config: `PerfectGas` → gamma = constant; `EquilibriumAir` → cp(T) curve fit; `ChemNonEq` → chemistry activation
-- [ ] GPU thermochemistry helpers: `d_gamma(T)`, `d_cp(T)`, `d_h_s(T)` — device functions using polynomial evaluation
+- [x] NASA McBride 7-coefficient struct (two temperature ranges, 14 coefs total + T_break)
+- [x] Air polynomial: N₂, O₂, NO, N, O individual + mixture-averaged cp(T) by mass fraction
+- [x] Chemical enthalpy: `h_s(T) = ∫cp_s(T) dT + h_f_s^298` (formation enthalpy)
+- [x] `gas_model` config: `PerfectGas` → gamma = constant; `EquilibriumAir` → cp(T) curve fit; `ChemNonEq` → chemistry activation
+- [x] GPU thermochemistry helpers: `d_gamma(T)`, `d_cp(T)`, `d_h_s(T)` — device functions using polynomial evaluation
 
 ### 14.2 Park 5-species finite-rate chemistry
 
