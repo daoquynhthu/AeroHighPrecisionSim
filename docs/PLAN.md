@@ -1847,110 +1847,348 @@ Tasks:
 - [x] Backward compatibility: `gas_model=PerfectGas` at nvar=6 produces identical results (85/85 tests PASS)
 - [x] Feature gate: chemistry not yet activatable (Phase 15.1+)
 
-### 15.1 Variable thermodynamic properties
+### 15.1 ThermoDb: 运行时热化学数据库
 
-Files:
+将 `thermo.inp` (NASA-9, 2000+ 物种) 和 `trans.inp` (CEA 输运, 66 物种) 在求解器初始化时加载到内存数据库中。YAML 配置文件指定物种子集和化学模型类型。数据库直连 GPU `__constant__` 内存表。
 
-| File | Action | Content |
-|------|--------|---------|
-| `include/aero/cfd/thermo.hpp` | NEW | `class GasModel`: `gamma(T)`, `cp(T)`, `cv(T)`, `h(T)`, `e(T)` for single-species; polynomial curve fits (NASA McBride 7-coefficient format) |
-| `src/aero/cfd/thermo.cpp` | NEW | 7-coeff polynomial evaluation: `cp/R = a₁ + a₂T + a₃T² + a₄T³ + a₅T⁴` for low T range; high T range poly for T > 1000K |
-| `include/aero/cfd/cfd_config.hpp` | MODIFY | Add: `GasModel gas_model = PerfectGas`; `std::string gas_model_file = ""` for loading McBride coefficients |
+数据流:
 
-Tasks:
-
-- [x] NASA McBride 7-coefficient struct (two temperature ranges, 14 coefs total + T_break)
-- [x] Air polynomial: N₂, O₂, NO, N, O individual + mixture-averaged cp(T) by mass fraction
-- [x] Chemical enthalpy: `h_s(T) = ∫cp_s(T) dT + h_f_s^298` (formation enthalpy)
-- [x] `gas_model` config: `PerfectGas` → gamma = constant; `EquilibriumAir` → cp(T) curve fit; `ChemNonEq` → chemistry activation
-- [x] GPU thermochemistry helpers: `d_gamma(T)`, `d_cp(T)`, `d_h_s(T)` — device functions using polynomial evaluation
-
-### 15.2 Park 5-species finite-rate chemistry
-
-Files:
-
-| File | Action | Content |
-|------|--------|---------|
-| `include/aero/cfd/chem_reactions.hpp` | NEW | Reaction set: N₂ + M ⇌ 2N + M (M = N₂, O₂, NO, N, O), O₂ + M ⇌ 2O + M, NO + M ⇌ N + O + M, N₂ + O ⇌ NO + N, NO + O ⇌ O₂ + N (5 reactions, 5 species) |
-| `src/aero/cfd/chem_source_gpu.cu` | NEW | `chem_source_kernel`: per-cell forward/reverse rates (Arrhenius k_f = C·T^η·exp(-θ/T)), species production rates ω̇_s, source term = Σ(ω̇_s·h_s) for energy |
-| `src/aero/cfd/cfd_state.hpp` | MODIFY | NVAR = 8 + 1 (rho, mu, mv, mw, rhoe, rho_Y1..rho_Y5) when `gas_model=ChemNonEq` |
-
-State for 5-species chemistry:
-
-```text
-Q = [rho, rho*u, rho*v, rho*w, rho*E, rho*Y_N2, rho*Y_O2, rho*Y_NO, rho*Y_N, rho*Y_O]
-W = [rho, u, v, w, T, Y_N2, Y_O2, Y_NO, Y_N, Y_O]
-NVAR = 10
+```
+                              ┌──────────────────────┐
+                              │  yaml-cpp            │
+  data/config/air_5sp.yaml  ──→  parse_species_conf()│
+                              │   → species_names[]  │
+                              │   → chemistry_model  │
+                              │   → transport_model  │
+                              └────────┬─────────────┘
+                                       ↓
+  data/thermo/thermo.inp     ──────→  ThermoDb::load()
+  (NASA-9 固定列格式)                   → 按名字提取系数
+                                       → SpeciesRecord[] (host)
+                                       ↓
+  data/thermo/trans.inp      ──────→  TransportDb::load()
+  (CEA V/C 格式)                        → 按名字提取输运系数
+                                       → TransportRecord[] (host)
+                                       ↓
+                               cudaMemcpyToSymbol
+                                       ↓
+                              ┌──────────────────────┐
+                              │ GPU __constant__ 表   │
+                              │ d_coeffs[MAX_SP][9]   │
+                              │ d_Tbreak[MAX_SP][2]   │
+                              │ d_M[MAX_SP]           │
+                              │ d_mu_coeffs + d_kappa │
+                              │ d_nspecies            │
+                              └──────────────────────┘
 ```
 
-Tasks:
-
-- [ ] Reaction rate data: 5 reversible reactions, Arrhenius coefficients (C, η, θ) from Park 1985
-- [ ] Forward rate `k_f = C·T^η·exp(-θ/T)`; equilibrium constant via Gibbs free energy curve-fit; reverse rate `k_r = k_f / K_eq`
-- [ ] Species production: `ω̇_s = Σ(ν"_si - ν'_si) * [k_f_i Π(ρ_j/M_j)^(ν'_ji) - k_r_i Π(ρ_j/M_j)^(ν"_ji)]`
-- [ ] Energy source: `Q_chem = -Σ ω̇_s · h_s(T)` (chemical energy released/absorbed)
-- [ ] GPU kernel: per-cell compute Arrhenius rates → species production → atomicAdd to residual[5..9]
-- [ ] `ConservedState` dynamic: `NVAR` becomes configurable at runtime (gas model initialization sets global `cfg.nvar`)
-
-> **NVAR 迁移策略说明**：Phase 7-13 使用 `constexpr CFD_NVAR=6`（固定结构体 `ConservativeState` 有名称字段）。Phase 15 是第一个需要 NVAR=10 的阶段。迁移方案：
-> 1. Phase 15.0（前序任务）：将 `ConservativeState` 改为变长数组（如 `Real q_[MAX_NVAR]` 或 `std::array<Real, MAX_NVAR>`），保留前6个字段的名称访问器（向后兼容）。`PrimitiveState` 同理。
-> 2. 所有 kernel 增加 `int nvar` 参数（默认值从 `DeviceMesh::NVAR` 取）。L2 归约 / 原子操作 / isfinite 检查全部使用 nvar 而非硬编码 6。
-> 3. `DeviceCellData` 的 `d_q` 分配大小变为 `nvar * n_cells * sizeof(Real)`，不再假定 6。
-> 4. 回归测试：Phase 15 中 chemistry 关闭时（`gas_model=PerfectGas`），NVAR=10 的 kernel 必须产生与 NVAR=6 时一致的解（仅前 5 个变量参与物理）。
-> 5. 临时策略：Phase 15.0 之前不允许激活 chemistry；Phase 15.0 实现后通过 feature gate 控制。
-
-### 15.3 Two-temperature model (Park 89)
-
 Files:
 
 | File | Action | Content |
 |------|--------|---------|
-| `include/aero/cfd/chem_two_temp.hpp` | NEW | Extended state: `Q = [...NVAR.., rho*e_vib]` — vibrational energy |
-| `src/aero/cfd/chem_source_gpu.cu` | MODIFY | Add: T-Tv energy exchange (Landau-Teller), vibrational energy source, chemical reactions with rate control using Tv or Ta = T^q * Tv^(1-q) |
+| `include/aero/cfd/thermo_db.hpp` | NEW | `class ThermoDb`: `load_thermo_inp(path)`, `get_species(name)`, `species_count()`; `SpeciesRecord` struct (name, M, T_break[3], coeffs[3][9]) |
+| `src/aero/cfd/thermo_db.cpp` | NEW | NASA-9 定列格式解析器 (Fortran D-记数法 → double, 行号校验, 区间段检测); 物种子集过滤器; `build_gpu_table()` → 平板系数数组 |
+| `include/aero/cfd/transport_db.hpp` | NEW | `class TransportDb`: `load_trans_inp()`, viscosity/conductivity 系数 + 二元交互参数 (Wilke Φ_ij) |
+| `src/aero/cfd/transport_db.cpp` | NEW | CEA V/C 格式解析器; 单元转换 (micropoise → Pa·s, µW/(cm·K) → W/(m·K)) |
+| `include/aero/cfd/species_config.hpp` | NEW | `struct SpeciesConfig`: `load_yaml(path)` → 物种名列表, chemistry_model, transport_model, 初始质量分数 |
+| `src/aero/cfd/species_config.cpp` | NEW | yaml-cpp 解析器: 读取 `data/config/*.yaml` |
+| `include/aero/cfd/gpu_thermo_table.hpp` | NEW | `__constant__` 表声明 + `upload_thermo_table()` 函数 |
+| `src/aero/cfd/gpu_thermo_table.cu` | NEW | `cudaMemcpyToSymbol` 上传入口 |
+| `include/aero/cfd/cfd_config.hpp` | MODIFY | `int gas_model_kind` → `std::string config_path` (YAML 路径), 保留 `int gas_model_kind` 作 fallback |
 
 Tasks:
 
-- [ ] Vibrational energy: `e_vib(Tv) = Σ_s Y_s * R_s * θ_vib_s / (exp(θ_vib_s/Tv) - 1)`
-- [ ] Landau-Teller: `Q_Tv = Σ_s ρ_s * (e_vib_s(T) - e_vib_s(Tv)) / τ_s` (translational-vibrational relaxation)
-- [ ] Park rate-controlling temperature: `Ta = T^q * Tv^(1-q)` with `q = 0.5` (standard)
-- [ ] NVAR=11 for 5-species + two-temp (rho_e_vib added)
-
-### 15.4 Wall catalysis
-
-Files:
-
-| File | Action | Content |
-|------|--------|---------|
-| `include/aero/cfd/wall_catalysis.hpp` | NEW | `enum CatalysisModel { NONCATALYTIC=0, SUPERCATALYTIC=1, FINITE_RATE=2 }` |
-| `src/aero/cfd/gpu_wall.cu` | MODIFY | `wall_force_kernel`: add catalysis BC: `Y_s_wall` from recombination model; surface heat flux from diffusion term |
-
-Tasks:
-
-- [ ] Non-catalytic: `∇Y_s · n = 0` (zero mass fraction gradient at wall)
-- [ ] Fully (super-)catalytic: `Y_s_wall = Y_s_freestream` (wall composition equals freestream)
-- [ ] Finite-rate: surface reaction mechanism (e.g., O + O → O₂, N + N → N₂ with reaction probability γ)
-- [ ] Heat flux catalytic contribution: `q_cat = Σ ω̇_s_wall · h_s(T_wall)`
-- [ ] Total wall heat flux: `q_total = q_Fourier + q_cat + q_diffusion`
+- [ ] yaml-cpp 解析器: 读 `config/air_5sp.yaml` → `std::vector<std::string> species_names`, `chemistry_model`, `transport_model`
+- [ ] `ThermoDb::load_thermo_inp()`: 逐行解析 `thermo.inp` 固定列格式 (col 1-16 物种名, col 1-80 元数据, col 1-16/17-32/33-48/... 系数); 支持 1/2/3 温度区间段, 处理 D→e 转换, 记录号校验
+- [ ] ThermoDb 物种子集提取: `ThermoDb::extract(names)` → `SpeciesRecord[]` (仅含请求物种, 顺序匹配)
+- [ ] `TransportDb::load_trans_inp()`: 解析 `trans.inp`, V/C 行, 二元交互对 (Φ_ij) 提取
+- [ ] GPU 表构建: 平板系数数组 `Real d_buf[ MAX_SP * (3*9 + 2 + 1 + 4*2) ]`, 一次 `cudaMemcpyToSymbol`
+- [ ] Gas constant: 统一 `R = 8.31451 J/(mol·K)` (CEA 标准, 对齐 `tools/nasa9.py` 输出, 修正当前代码 `8314.462618` 错误)
+- [ ] 边界处理: T < T_min → 钳位到 T_min; T > T_max → 钳位到 T_max; 记录并报告越界
+- [ ] `GasModelKind` 枚举精简: `PERFECT_GAS (0)`, `FROZEN (1)`, `EQUILIBRIUM_AIR (2)`, `CHEM_NON_EQ (3)` — 删除旧的 `GasModelKind`/`SpeciesIdx` 枚举 (`include/aero/cfd/thermo.hpp` 中的定义标为 DEPRECATED)
+- [ ] 旧文件 `include/aero/cfd/thermo.hpp` / `src/aero/cfd/thermo.cpp` 标记 DEPRECATED, 保留至 Phase 15.3 完成后删除
 
 Tests:
 
 | # | Test | What | Tolerance |
 |---|------|------|-----------|
-| 1 | `CFD-CHEM-1` | Variable gamma air: cp(T) from McBride matches NIST REFPROP from 200K to 2000K | 1% |
-| 2 | `CFD-CHEM-2` | Park 5-species normal shock (Mach 10, 30km): post-shock T and composition vs NASA CEA | 2% |
-| 3 | `CFD-CHEM-3` | Park 5-species normal shock (Mach 20, 50km): two-temperature Tv/T ratio | 5% |
-| 4 | `CFD-CHEM-4` | `gas_model=PerfectGas` regression to Phase 7 laminar results | 1e-6 |
-| 5 | `CFD-CHEM-5` | Stagnation point heating (Mach 15, 40km): Fay-Riddell correlation | 15% |
-| 6 | `CFD-CHEM-6` | Wall catalysis: non-catalytic q < finite-rate q < supercatalytic q | inequality |
-| 7 | `CFD-CHEM-7` | `gas_model=ChemNonEq` with `reactions=false` matches variable-gas without reactions | 1e-6 |
+| 1 | `CFD-TDB-1` | 解析 `thermo.inp`, 提取 O₂ 系数, 与 `tools/nasa9.py --eval O2 298.15` 对比 cp/R | 1e-12 |
+| 2 | `CFD-TDB-2` | 解析 `thermo.inp`, 提取 N₂ 系数, cp(4000K) 与 `nasa9.py` 对比 | 1e-12 |
+| 3 | `CFD-TDB-3` | 提取 5 物种 (N2,O2,NO,N,O), 与 `nasa9.py` 输出现有值一致 | 1e-12 |
+| 4 | `CFD-TDB-4` | 越界 T 钳位: T=100K → 钳位到 200K 不崩溃, T=25000K → 钳位到 20000K 不崩溃 | no NaN |
+| 5 | `CFD-TDB-5` | `config/air_5sp.yaml` → 正确解析 5 个物种名 + chemistry=frozen | exact |
+| 6 | `CFD-TDB-6` | GPU 表上传: `cudaMemcpyToSymbol` 后, device 端读取值与 host 一致 | 1e-14 |
+| 7 | `CFD-TDB-7` | 解析 `trans.inp` 中 N₂ 粘度系数, 与 `tools/transport.py --eval N2 500K` 对比 | 1e-10 |
+| 8 | `CFD-TDB-8` | gas_model_kind=0 (PerfectGas) 回归测试: 现有 85/85 测试全 PASS | exact |
+
+### 15.2 NASA-9 物性求值器 (CPU + GPU)
+
+在 Phase 15.1 的 constant memory 系数表上构建 cp(T)/h(T)/s(T)/γ(T) 求值器, 以及输运物性求值器。CPU 版本供非 GPU 路径和单元测试使用; GPU 版本为 `__device__ inline` 函数, 编译器全展开为寄存器代码。
+
+求值器格式 (NASA-9, Gordon & McBride 1994):
+
+```
+cp/R = a1*T⁻² + a2*T⁻¹ + a3 + a4*T + a5*T² + a6*T³ + a7*T⁴
+ h/RT = -a1*T⁻² + a2*lnT/T + a3 + a4*T/2 + a5*T²/3 + a6*T³/4 + a7*T⁴/5 + b1/T
+  s/R = -a1/(2T²) - a2/T + a3*lnT + a4*T + a5*T²/2 + a6*T³/3 + a7*T⁴/4 + b2
+```
+
+Files:
+
+| File | Action | Content |
+|------|--------|---------|
+| `include/aero/cfd/nasa9_eval.hpp` | NEW | GPU `__device__ inline` + CPU `inline`: `d_cp_R(T, coeffs)`, `d_h_RT(T, coeffs)`, `d_s_R(T, coeffs)` — 全 FMA 链, 温度区间谓词选择 |
+| `src/aero/cfd/nasa9_eval.cpp` | NEW | CPU 版求值 + 混合气体函数: `mix_cp(T, Y[])`, `mix_h(T, Y[])`, `mix_gamma(T, Y[])` |
+| `include/aero/cfd/transport_eval.hpp` | NEW | GPU `__device__ inline`: `d_mu(T, mu_coeffs)`, `d_kappa(T, kappa_coeffs)`; 4-参数 CEA 对数拟合: `ln(η) = A*lnT + B/T + C/T² + D` |
+| `src/aero/cfd/transport_eval.cpp` | NEW | CPU 版: `species_mu(T, sp)`, `species_kappa(T, sp)`; Wilke 混合律: `mix_mu(T, Y[])`, `mix_kappa(T, Y[])` |
+| `include/aero/cfd/t_from_e.hpp` | NEW | `Real T_from_e(Real e, Real* Y, int nsp, Real* gamma_guess)` — 牛顿法反求温度 |
+| `src/aero/cfd/t_from_e.cpp` | NEW | 牛顿迭代: `f(T) = mix_h(T, Y) - e - R_mix*T`; 雅可比 = mix_cp; 容差 1e-8; 回退二分法 |
+
+GPU 求值器设计:
+
+```cuda
+// __constant__ 内存中的系数表
+__constant__ Real d_Tbreak[MAX_NSP][2];
+__constant__ Real d_coeffs[MAX_NSP][3][9];  // [物种][区间段][a1..a7+b1+b2]
+__constant__ Real d_M[MAX_NSP];              // [kg/kmol]
+__constant__ Real d_mu_coeffs[MAX_NSP][3][4];
+__constant__ Real d_kappa_coeffs[MAX_NSP][3][4];
+__constant__ int d_nspecies;
+
+// 单物种 cp/R (无量纲)
+__device__ inline Real d_cp_R(int sp, Real T) {
+    int seg = (T > d_Tbreak[sp][0]) + (T > d_Tbreak[sp][1]);  // 0,1,2
+    Real T2 = T * T;
+    const Real* RESTRICT a = d_coeffs[sp][seg];
+    // a1*T⁻² + a2*T⁻¹ + a3 + a4*T + a5*T² + a6*T³ + a7*T⁴
+    return fma(a[6], T2*T, fma(a[5], T2,
+           fma(a[4], T,   fma(a[3], Real(1),
+           a[0]/T2 + a[1]/T))));
+}
+
+// 混合 cp = Σ Y_s * (R_univ / M_s) * d_cp_R(s, T)
+__device__ inline Real d_mix_cp(Real T, const Real* RESTRICT Y) {
+    Real cp = Real(0);
+    #pragma unroll
+    for (int s = 0; s < MAX_NSP; ++s)
+        cp += Y[s] * (R_UNIV / d_M[s]) * d_cp_R(s, T);
+    return cp;
+}
+```
+
+Tasks:
+
+- [ ] `d_cp_R()`, `d_h_RT()`, `d_s_R()`: NASA-9 全 FMA 展开, 温度区间谓词选择 (无分支 `if`, 用整数加法谓词)
+- [ ] `d_mix_cp()`, `d_mix_h()`, `d_mix_gamma()`: 混合气体, 固定 MAX_NSP=11 循环全展开
+- [ ] `d_mu()`, `d_kappa()`: CEA 4-参数对数拟合, `exp(A*lnT + B/T + C/T² + D)`; T-min 钳位防止 ln(0)
+- [ ] `d_mix_mu()`: 简版 Wilke 混合律 (忽略二元交互, 仅 Sutherland 类形式); 完整 Wilke 需二元参数, 按需添加
+- [ ] `T_from_e()`: 牛顿法, 初值 `γ_guess` (来自调用者或默认 1.4), `f(T) = mix_e(T, Y) - e_target`; 回退二分法 `[200, 20000]`
+- [ ] Host 端等价实现: `mixed_cp()`, `mixed_h()`, `mixed_gamma()`, `mixed_mu()` — 为非 GPU 路径和测试提供
+
+Tests:
+
+| # | Test | What | Tolerance |
+|---|------|------|-----------|
+| 1 | `CFD-N9-1` | O₂ cp(298.15K): 与 NIST REFPROP / `tools/nasa9.py` 输出对比 | 0.1% |
+| 2 | `CFD-N9-2` | N₂ cp(4000K): 与 CEA 参考值对比 (NASA/TP-2002-211556 Table 5) | 0.5% |
+| 3 | `CFD-N9-3` | H₂O h(298.15K) - h(200K): 与 JANAF 表对比 | 1% |
+| 4 | `CFD-N9-4` | 热力学恒等式验证: `h(T+δ) - h(T-δ)) / 2δ = cp(T)` 数值导数 | 1e-6 |
+| 5 | `CFD-N9-5` | 混合 cp: 空气 76.7% N₂ + 23.3% O₂ cp(1000K) 与 CEA 混合求值一致 | 0.1% |
+| 6 | `CFD-N9-6` | `T_from_e()`: 输入 `h(500K) - R_mix*500K` → 输出 T=500K 误差 | 1e-4 |
+| 7 | `CFD-N9-7` | N₂ 粘度 μ(500K): 与 Sutherland 参考值对比 | 2% |
+| 8 | `CFD-N9-8` | GPU constant memory 表跨 kernel launch 持久性: 两次求值结果一致 | 1e-14 |
+
+### 15.3 GasModel 层次结构 (替代当前 thermo.hpp/cpp)
+
+在 Phase 15.1 数据库 + Phase 15.2 求值器之上构建 GasModel 类族, 为上层 CFD 求解器提供统一接口。当前 `thermo.hpp`/`thermo.cpp` 被废弃。
+
+```
+GasModel (abstract interface)
+├── PerfectGasModel      ← gamma=const, cp=const, R=const
+├── FrozenGasModel       ← NASA-9 cp(T), gamma(T); 固定组成 Y[]
+└── EquilibriumAirModel  ← NASA-9 cp(T); 变组成 (迭代)
+```
+
+Files:
+
+| File | Action | Content |
+|------|--------|---------|
+| `include/aero/cfd/gas_model.hpp` | NEW | `class GasModel`: 纯虚 `cp(rho,e,Y[])`, `gamma(rho,e,Y[])`, `T(rho,e,Y[])`, `h(rho,e,Y[])`, `mu(rho,T,Y[])`; `static create(config, thermodb)` 工厂 |
+| `src/aero/cfd/gas_model.cpp` | NEW | `PerfectGasModel`: `gamma()` 返回 `cfg.gamma` (const); `FrozenGasModel`: 调 `nasa9_eval::mix_cp()`; `EquilibriumAirModel`: Gibbs 最小化 (迭代) |
+| `include/aero/cfd/cfd_config.hpp` | MODIFY | `int gas_model_kind` → `std::string gas_model_config` (指向 `data/config/*.yaml`); 保留 `int gas_model_kind = 0` 作为旧格式兼容 |
+| `include/aero/cfd/thermo.hpp` | DEPRECATE | 添加 `#warning "use gas_model.hpp + thermo_db.hpp instead"` |
+| `src/aero/cfd/thermo.cpp` | DEPRECATE | 保持不变, Phase 15.4 完成后删除 |
+| `include/aero/CMakeLists.txt` | MODIFY | 注册新头文件路径 |
+| `src/aero/CMakeLists.txt` | MODIFY | 添加 `cfd/thermo_db.cpp`, `cfd/nasa9_eval.cpp`, `cfd/transport_eval.cpp`, `cfd/t_from_e.cpp`, `cfd/species_config.cpp`, `cfd/gpu_thermo_table.cu`, `cfd/gas_model.cpp` |
+
+Tasks:
+
+- [ ] `PerfectGasModel`: 现有行为完全不变 (gamma+cp+const, R=287.058), 零代码改动, 仅接口适配
+- [ ] `FrozenGasModel`: 构造时接收 `SpeciesConfig` + `ThermoDb`; `cp(T,Y)` = ΣY_s * (R/M_s) * cp_over_R_s(T); `gamma(T,Y)` = cp/(cp - R_mix); `T_from_e(e,Y)` 调 Phase 15.2
+- [ ] `EquilibriumAirModel`: 固定空气组成 (76.7% N₂, 23.3% O₂), cp/gamma/h 同 FrozenGasModel; `T_from_e()` 使用混合求值
+- [ ] `GasModel::create()` 工厂: 读 `config.gas_model_config` YAML → 实例化对应派生类
+- [ ] 向后兼容 (`gas_model_kind=0` 未配置 YAML 路径时): 自动选择 `PerfectGasModel`, 85/85 测试不变
+- [ ] 删除旧 `SpeciesIdx`/`NUM_AIR_SPECIES`/`d_mix_cp(...)` 等 device 函数 — 由 `nasa9_eval.hpp` 替代
+
+Tests:
+
+| # | Test | What | Tolerance |
+|---|------|------|-----------|
+| 1 | `CFD-GM-1` | `PerfectGasModel`: gamma(T=300K) = gamma(T=3000K) = 1.4 | exact |
+| 2 | `CFD-GM-2` | `FrozenGasModel`: air 5-sp, cp(1000K) 与 `tools/nasa9.py` 混合求值对比 | 0.1% |
+| 3 | `CFD-GM-3` | `FrozenGasModel`: gamma(T) 单调递减 (200K→2000K) | monotonic |
+| 4 | `CFD-GM-4` | 工厂函数: `config="data/config/air_5sp.yaml"` → `FrozenGasModel` 实例 | correct type |
+| 5 | `CFD-GM-5` | 回归: `config_path=""` 或 `gas_model_kind=0` → PerfectGasModel, 85/85 PASS | exact |
+
+### 15.4 CFD 求解器集成: 变组成
+
+将 GasModel 接入主求解器循环: 通量计算使用 `gas_model->gamma()` 替代 `cfg.gamma`, 粘性通量调用 `gas_model->mu()` 替代 Sutherland 常数。
+
+Files:
+
+| File | Action | Content |
+|------|--------|---------|
+| `src/aero/cfd/cfd_solver.cpp` | MODIFY | 主时间步: `Real gamma = gas_model->gamma(rho, e, Y)` 替代 `cfg.gamma` |
+| `src/aero/cfd/inviscid_flux.cpp` | MODIFY | AUSM⁺/Roe: `speed_of_sound = sqrt(gamma * p / rho)` 使用运行时 gamma |
+| `src/aero/cfd/viscous_flux.cpp` | MODIFY | `mu = gas_model->mu(T, Y)`, `kappa = gas_model->kappa(T, Y)` 替代 Sutherland |
+| `src/aero/cfd/gpu_solver.cu` | MODIFY | kernel 内: 通过 constant memory 系数表 + device 求值函数计算 gamma, mu |
+| `include/aero/cfd/cfd_state.hpp` | MODIFY | `PrimitiveState::extra[]` 中第 0 位为 `gamma` (缓存, RK 子步间更新) |
+| `src/aero/cfd/cfd_initial.cpp` | MODIFY | 初始化时: 根据 `gas_model_config` 调用工厂创建 GasModel, 设置初场 Y[] |
+
+Tasks:
+
+- [ ] `CfdSolver` 持有 `std::unique_ptr<GasModel> gas_model_`, 构造时从 config 创建
+- [ ] 通量计算: 所有引用 `cfg.gamma` 的位置替换为 `gas_model_->gamma(T, Y[])`; `cfg.gamma` 仅作为 PerfectGas 的输入参数
+- [ ] 粘性通量: `mu_ref`, `T_ref`, `Sutherland_T` 仅在 PerfectGas 时使用; FrozenGasModel 调 `transport_eval`
+- [ ] 粘度/热导率 GPU kernel: 新增 `compute_transport_kernel` (每当前往粘性步计算 mu_i, lam_i)
+- [ ] YAML config 驱动: `chemistry: frozen` → FrozenGasModel; `chemistry: equilibrium` → EquilibriumAirModel
+
+Tests:
+
+| # | Test | What | Tolerance |
+|---|------|------|-----------|
+| 1 | `CFD-CI-1` | `config_path=""` (默认 PerfectGas): Phase 7 回归, 85/85 PASS | 1e-6 |
+| 2 | `CFD-CI-2` | `config_path="air_5sp.yaml"`: 激波管问题, 解与 PerfectGas 不同但物理合理 | finite |
+| 3 | `CFD-CI-3` | mu(T) 在 GPU kernel 内求值: 与 host 端值一致 | 1e-8 |
+| 4 | `CFD-CI-4` | RK 子步间 gamma 缓存 `extra[0]` 更新正确 | 1e-10 |
+
+### 15.5 Park 5-species finite-rate chemistry
+
+5 组分空气 (N₂, O₂, NO, N, O) 有限速率化学源项, 基于 Park (1993) 5 反应机制的 Arrhenius 速率。NVAR = 10。
+
+反应集:
+
+```
+ r1: N₂ + M ⇌ 2N + M       (M = N₂, O₂, NO, N, O)
+ r2: O₂ + M ⇌ 2O + M
+ r3: NO + M ⇌ N + O + M
+ r4: N₂ + O ⇌ NO + N
+ r5: NO + O ⇌ O₂ + N
+```
+
+Files:
+
+| File | Action | Content |
+|------|--------|---------|
+| `include/aero/cfd/chem_reactions.hpp` | NEW | `struct ArrheniusRate { Real A, n, C; }`; `struct Reaction { int nreact, nprod; int sp_idx[6]; Real nu[6]; ArrheniusRate k_f; }` |
+| `include/aero/cfd/chem_reactions.hpp` | NEW | `constexpr` Park 5 反应数据 (A, n, θ 从 Park 1993 Table 2 转录) |
+| `src/aero/cfd/chem_source_gpu.cu` | NEW | `chem_source_kernel`: 每单元计算 k_f, ω̇_s, Q_chem; 写入 residual[5..9] |
+| `include/aero/cfd/cfd_state.hpp` | MODIFY | `PrimitiveState` 增加 `Real Y[MAX_NSP]` 访问接口 |
+| `src/aero/CMakeLists.txt` | MODIFY | 添加 `cfd/chem_source_gpu.cu` |
+
+状态向量:
+
+```
+Q = [rho, rho*u, rho*v, rho*w, rho*E, rho*Y_N2, rho*Y_O2, rho*Y_NO, rho*Y_N, rho*Y_O]
+W = [rho, u, v, w, T, Y_N2, Y_O2, Y_NO, Y_N, Y_O]
+W[5..9] 来自 Phase 15.0 的 extra[] 字段
+NVAR = 10
+```
+
+Tasks:
+
+- [ ] 反应速率常数组: Park 1993 Table 2 参数, `constexpr ArrheniusRate park_5sp[5]`; 第三体效率 (M) 取默认 1.0
+- [ ] 平衡常数: `K_eq(T) = exp(-ΔG(T)/RT)`, ΔG 来自 Phase 15.2 NASA-9 吉布斯函数求值
+- [ ] 正向速率: `k_f = A * T^n * exp(-θ/T)`
+- [ ] 逆向速率: `k_r = k_f / K_eq(T)`
+- [ ] 物种生成率: `ω̇_s = Σ_i (ν"_si - ν'_si) * (k_f_i * Π(c_j)^ν'_ji - k_r_i * Π(c_j)^ν"_ji)`, `c_j = ρ*Y_j / M_j`
+- [ ] 化学源项: `Q_chem = -Σ_s ω̇_s * h_s(T)` (Phase 15.2 求值器)
+- [ ] GPU kernel: 每 block 处理 256 单元, 寄存器分配, atomicAdd 到 d_residual[5..9]
+- [ ] `gas_model_kind = CHEM_NON_EQ` 时激活; NVAR = `CFD_NVAR + nspecies` (运行时决定)
+
+Tests:
+
+| # | Test | What | Tolerance |
+|---|------|------|-----------|
+| 1 | `CFD-CR-1` | Park 5 反应 Arrhenius 速率 k_f(5000K): 与 Park 1993 Table 3 数值对比 | 5% |
+| 2 | `CFD-CR-2` | K_eq(3000K) 通过 NASA-9 Gibbs 计算: 与 CEA 平衡常数对比 | 1% |
+| 3 | `CFD-CR-3` | 正激波 Mach 10, 30km: 波后温度与 NASA CEA 冻结/平衡极限对比 | 5% |
+| 4 | `CFD-CR-4` | 化学源项单元测试: 给定 (ρ, T, Y) → ω̇_s 有限、守恒 | finite |
+| 5 | `CFD-CR-5` | 回归: `gas_model_kind=0` 85/85 PASS | exact |
+
+### 15.6 Two-temperature model (Park 89)
+
+延长状态向量, 增加振动能量密度 `ρ*e_vib`。Landau-Teller 振动-平动能量交换; Park 双温反应速率。
+
+Files:
+
+| File | Action | Content |
+|------|--------|---------|
+| `include/aero/cfd/chem_two_temp.hpp` | NEW | 状态扩展: `Q = [NVAR_chem, rho*e_vib]`; NVAR = 11 (5-sp) / 17 (11-sp) |
+| `src/aero/cfd/chem_source_gpu.cu` | MODIFY | `chem_source_kernel`: +振动能量方程源项; 反应速率用 `Ta = sqrt(T * Tv)` 控制 |
+
+Tasks:
+
+- [ ] 振动配分函数: `e_vib_s(Tv) = R_s * θ_vib_s / (exp(θ_vib_s/Tv) - 1)`; `θ_vib` 数据 (N₂=3395K, O₂=2270K, NO=2740K)
+- [ ] Landau-Teller 源项: `Q_Tv = Σ_s ρ*Y_s * (e_vib_s(T) - e_vib_s(Tv)) / τ_s`
+- [ ] Millikan-White 松弛时间: `τ_s = Σ_r X_r / (p * exp(A_sr*(T^-1/3 - B_sr) - 18.42))` ; Park 修正高温碰撞极限
+- [ ] Park 控制温度: `Ta = sqrt(T * Tv)` (q=0.5); 离解反应使用 `k_f(Ta)`
+- [ ] NVAR 管理: 双温时 `nvar = CFD_NVAR + nspecies + 1`
+
+Tests:
+
+| # | Test | What | Tolerance |
+|---|------|------|-----------|
+| 1 | `CFD-2T-1` | `e_vib(Tv, T)`: Tv=T 时振动能与平衡值一致 | 1e-10 |
+| 2 | `CFD-2T-2` | Landau-Teller 松弛: 纯 N₂ 等容 (T=5000, Tv=1000) → dt 后 Tv 向 T 靠近 | monotonic |
+| 3 | `CFD-2T-3` | Park 双温正激波 Mach 20, 50km: Tv/T 比与文献 Gnoffo 1999 对比 | 10% |
+
+### 15.7 Wall catalysis
+
+壁面催化边界条件: 非催化/全催化/有限速率表面反应。
+
+Files:
+
+| File | Action | Content |
+|------|--------|---------|
+| `include/aero/cfd/wall_catalysis.hpp` | NEW | `enum CatalysisModel { NONCATALYTIC=0, SUPERCATALYTIC=1, FINITE_RATE=2 }`; 有限速率反应概率 γ 数据 |
+| `src/aero/cfd/gpu_wall.cu` | MODIFY | `wall_force_kernel`: 增加催化 BC → 物种壁面通量; 催化热流 `q_cat` |
+
+Tasks:
+
+- [ ] 非催化: `∂Y_s/∂n = 0` — 壁面梯度零外推
+- [ ] 全催化: `Y_s_wall = Y_s_freestream` — 完全复合, 壁面组分为来流
+- [ ] 有限速率: `ω̇_s_wall = -γ_s * (1/4) * sqrt(8*R*T_wall/(π*M_s)) * ρ*Y_s` (Dankohler 型)
+- [ ] 催化热流: `q_cat = -Σ_s ω̇_s_wall * h_s(T_wall)`; `q_total = q_Fourier + q_cat`
+
+Tests:
+
+| # | Test | What | Tolerance |
+|---|------|------|-----------|
+| 1 | `CFD-WC-1` | 非催化壁面: q_cat=0, q_total=q_Fourier | exact |
+| 2 | `CFD-WC-2` | 全催化壁面: Y_s_wall = Y_s_inf | exact |
+| 3 | `CFD-WC-3` | 有限速率: γ=0 时等效非催化; γ→∞ 时趋近全催化 | inequality |
 
 Gate:
 
-- Variable cp(T) integrated enthalpy `h(T) - h(298)` matches NIST/JANAF data within 1%.
-- Park 5-species normal shock equilibrium composition within 2% of NASA CEA.
-- Stagnation point heat flux within 15% of Fay-Riddell for Mach 15, 40km.
-- `gas_model=PerfectGas` regression to Phase 7 must pass.
-- Catalytic wall: non-catalytic always ≤ finite-rate ≤ supercatalytic (monotonicity).
+- Phase 15.1: `ThermoDb` 从 `thermo.inp` 提取的 5 物种 cp(298.15K) 与 `tools/nasa9.py` 输出一致 (容差 1e-12).
+- Phase 15.2: 单物种 NASA-9 cp(T)/h(T) 与 NIST/JANAF 参考值差异 < 1%.
+- Phase 15.3: `PerfectGasModel` 回归 85/85 测试全 PASS. `FrozenGasModel` gamma(T) 单调递减 (高温 γ → 1.2).
+- Phase 15.4: `config_path=""` 时行为与 Phase 7 完全一致.
+- Phase 15.5: 正激波 Mach 10 波后温度与 NASA CEA 冻结极限差异 < 5%.
+- Phase 15.6: 双温松弛中 `Tv` 单调趋近 `T` (Landau-Teller 第二定律).
+- Phase 15.7: 催化热流: 非催化 ≤ 有限速率 ≤ 全催化 (单调性).
+- 所有阶段: GPU 物性求值器在 `__constant__` 表驻留后, 任意 kernel launch 都能访问; 不产生运行时 H2D/D2H 拷贝.
 
 ---
 

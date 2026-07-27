@@ -1351,3 +1351,17 @@
 - CMakeLists.txt: registered thermo.cpp (missile_cpu)
 - Coefficients verified against Cantera gri30_highT.yaml and NASA Glenn Python library
 - All 85/85 CFD tests PASS (backward compatible, gas_model_kind defaults to 0)
+
+2026-07-27 — Phase 15 complete replan: data-driven thermochemistry architecture
+- Replaced the old Phase 15.1-15.4 (NASA-7 hardcoded approach) with 7 rigorously scoped sub-phases:
+  - 15.0: NVAR migration [DONE]
+  - 15.1: ThermoDb runtime database (parse thermo.inp/trans.inp, GPU __constant__ upload)
+  - 15.2: NASA-9 property evaluators (CPU + GPU __device__ inline)
+  - 15.3: GasModel hierarchy on data layer (replacing old thermo.hpp/cpp)
+  - 15.4: CFD solver integration for variable composition
+  - 15.5: Park 5-species finite-rate chemistry
+  - 15.6: Two-temperature model (Park 89)
+  - 15.7: Wall catalysis
+- Architecture: __constant__ coefficient tables via cudaMemcpyToSymbol, zero runtime H2D copy
+- Tools: tools/nasa9.py = offline validation only (no Python in runtime); yaml-cpp for config parsing
+- Backward compatibility mandated: each sub-phase must keep 85/85 test PASS
