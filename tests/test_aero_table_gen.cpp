@@ -100,8 +100,11 @@ static int test_cfd_gpu_table_in_range() {
     cfg.ref_span   = 3.0f;
     cfg.com_x      = 6.0f;
     cfg.use_fvm    = true;
+    // Production defaults: stl_volume_mesh=true (watertight). Keep coarse bg for CI.
     cfg.mesh_outer_scale = 3.0f;
-    cfg.mesh_subdivisions = 1000;
+    cfg.stl_background_n_per_dim = 16;
+    cfg.stl_max_cells = 500000;
+    cfg.cfd_max_iter = 50; // short smoke; residual strong path still active
 
     std::vector<double> mach   = {2.0, 4.0, 6.0};
     std::vector<double> alpha  = {0.0, 5.0, 10.0};
@@ -249,7 +252,8 @@ static int test_cfd_differs_from_newtonian() {
     cfg.ref_span   = 3.0f;
     cfg.com_x      = 6.0f;
     cfg.mesh_outer_scale = 3.0f;
-    cfg.mesh_subdivisions = 1000;
+    cfg.stl_background_n_per_dim = 16;
+    cfg.cfd_max_iter = 50;
 
     std::vector<double> mach   = {4.0};
     std::vector<double> alpha  = {10.0};  // non-zero alpha for larger difference
@@ -263,7 +267,7 @@ static int test_cfd_differs_from_newtonian() {
             nt_csv.path, mach, alpha, beta, cfg))
         FAIL("Newtonian table failed");
 
-    // CFD GPU
+    // CFD GPU (production STL watertight default)
     TempFile cfd_csv("test_cfd.csv");
     cfg.use_fvm = true;
     if (!generate_aero_table(
@@ -303,7 +307,8 @@ static int test_cfd_gpu_single_beta() {
     cfg.com_x      = 6.0f;
     cfg.use_fvm    = true;
     cfg.mesh_outer_scale = 3.0f;
-    cfg.mesh_subdivisions = 1000;
+    cfg.stl_background_n_per_dim = 16;
+    cfg.cfd_max_iter = 50;
 
     std::vector<double> mach   = {3.0, 5.0};
     std::vector<double> alpha  = {2.0};
@@ -345,7 +350,8 @@ static int test_cfd_gpu_nonzero_beta() {
     cfg.com_x      = 6.0f;
     cfg.use_fvm    = true;
     cfg.mesh_outer_scale = 3.0f;
-    cfg.mesh_subdivisions = 1000;
+    cfg.stl_background_n_per_dim = 16;
+    cfg.cfd_max_iter = 50;
 
     std::vector<double> mach   = {3.0};
     std::vector<double> alpha  = {0.0, 5.0};
@@ -470,7 +476,9 @@ static int test_stl_volume_mesh_differs_from_cube() {
     cfg.mesh_outer_scale  = 3.0f;
 
     TempFile cube_csv("test_table_cube_embed.csv");
-    cfg.stl_volume_mesh = false;
+    cfg.stl_volume_mesh = false; // CubeLegacy
+    cfg.volume_mesh_backend = 3; // VolumeMeshBackend::CubeLegacy
+    cfg.cfd_max_iter = 50;
     if (!generate_aero_table(stl_path, cube_csv.path, mach, alpha, beta, cfg)) {
         std::remove(stl_path);
         FAIL("cube-embedding table generation failed");
@@ -478,9 +486,11 @@ static int test_stl_volume_mesh_differs_from_cube() {
 
     TempFile stl_csv("test_table_stl_volume.csv");
     cfg.stl_volume_mesh = true;
+    cfg.volume_mesh_backend = 1; // StlWatertight production
     cfg.mesh_outer_scale = 3.0f;
     cfg.stl_background_n_per_dim = 24;
     cfg.stl_max_cells = 500000;
+    cfg.cfd_max_iter = 50;
     if (!generate_aero_table(stl_path, stl_csv.path, mach, alpha, beta, cfg)) {
         std::remove(stl_path);
         FAIL("watertight STL table generation failed");
@@ -531,8 +541,10 @@ static int test_stl_volume_mesh_false_regression() {
     cfg.com_x      = 6.0f;
     cfg.use_fvm    = true;
     cfg.stl_volume_mesh = false;
+    cfg.volume_mesh_backend = 3; // CubeLegacy explicit
     cfg.mesh_outer_scale = 3.0f;
     cfg.mesh_subdivisions = 1000;
+    cfg.cfd_max_iter = 50;
 
     if (!generate_aero_table("data/missile/hgv_model_optimized.stl",
             csv.path, {2.0}, {0.0}, {0.0}, cfg))
@@ -565,9 +577,11 @@ static int test_stl_volume_mesh_hgv_production() {
     cfg.com_x      = 6.0f;
     cfg.use_fvm    = true;
     cfg.stl_volume_mesh = true;
+    cfg.volume_mesh_backend = 1; // StlWatertight
     cfg.mesh_outer_scale = 3.0f;
     cfg.stl_background_n_per_dim = 20;
     cfg.stl_max_cells = 2000000;
+    cfg.cfd_max_iter = 80;
 
     TempFile csv("test_table_hgv_stl_volume.csv");
     if (!generate_aero_table("data/missile/hgv_model_optimized.stl",

@@ -85,40 +85,24 @@ bool generate_aero_table(
         }
 
         aerosp::aero::cfd::CfdMesh mesh;
-        if (cfg.stl_volume_mesh) {
-            aerosp::aero::cfd::StlMeshConfig stl_cfg;
-            stl_cfg.outer_scale = static_cast<Real>(
-                cfg.mesh_outer_scale > 0.0f ? cfg.mesh_outer_scale : 5.0f);
-            stl_cfg.max_cells = cfg.stl_max_cells > 0 ? cfg.stl_max_cells : 5000000;
+        aerosp::aero::cfd::StlMeshConfig stl_cfg;
+        stl_cfg.outer_scale = static_cast<Real>(
+            cfg.mesh_outer_scale > 0.0f ? cfg.mesh_outer_scale : 5.0f);
+        stl_cfg.max_cells = cfg.stl_max_cells > 0 ? cfg.stl_max_cells : 5000000;
+        stl_cfg.auto_try_cut_cell = cfg.volume_mesh_auto_try_cut_cell;
 
-            if (cfg.stl_background_n_per_dim > 0) {
-                stl_cfg.background_n_per_dim = cfg.stl_background_n_per_dim;
-            } else {
-                if (cfg.mesh_subdivisions < 0) {
-                    std::cerr << "[aero_table_gen] Warning: mesh_subdivisions="
-                              << cfg.mesh_subdivisions
-                              << " is negative, using absolute value\n";
-                }
-                double effective_sub = std::max(
-                    1.0, static_cast<double>(std::abs(cfg.mesh_subdivisions)));
-                int n = std::max(8, static_cast<int>(
-                    std::ceil(std::pow(effective_sub, 1.0 / 3.0))));
-                stl_cfg.background_n_per_dim = std::min(n, 80);
-            }
+        // Resolve unified backend (production default: StlWatertight).
+        using VMB = aerosp::aero::cfd::VolumeMeshBackend;
+        if (cfg.volume_mesh_backend >= 0 && cfg.volume_mesh_backend <= 3) {
+            stl_cfg.backend = static_cast<VMB>(cfg.volume_mesh_backend);
+        } else {
+            stl_cfg.backend = cfg.stl_volume_mesh
+                ? VMB::StlWatertight
+                : VMB::CubeLegacy;
+        }
 
-            std::cout << "[aero_table_gen] Generating watertight STL hex-cull mesh: path="
-                      << stl_path << " outer_scale=" << stl_cfg.outer_scale
-                      << " n_per_dim=" << stl_cfg.background_n_per_dim << "\n";
-
-            std::string mesh_err;
-            // Production path requires load_mesh 1e-4 closed-surface. Cut-cell
-            // conformal meshes do not yet meet that gate; hex-cull is watertight.
-            if (!aerosp::aero::cfd::generate_watertight_mesh_from_stl(
-                    stl_path, mesh, stl_cfg, &mesh_err)) {
-                std::cerr << "[aero_table_gen] Watertight STL mesh failed: "
-                          << mesh_err << "\n";
-                return false;
-            }
+        if (cfg.stl_background_n_per_dim > 0) {
+            stl_cfg.background_n_per_dim = cfg.stl_background_n_per_dim;
         } else {
             if (cfg.mesh_subdivisions < 0) {
                 std::cerr << "[aero_table_gen] Warning: mesh_subdivisions="
@@ -127,20 +111,31 @@ bool generate_aero_table(
             }
             double effective_sub = std::max(
                 1.0, static_cast<double>(std::abs(cfg.mesh_subdivisions)));
-            int n = std::max(5, static_cast<int>(
-                std::ceil(std::pow(effective_sub / 5.0, 1.0 / 3.0)) + 1.0));
-            // Ensure at least ~2 hex cells across the unit-cube body on each
-            // axis: delta = 2*outer/(n-1) <= 1  =>  n >= 2*outer + 1.
-            double outer = cfg.mesh_outer_scale > 0.0f
-                ? static_cast<double>(cfg.mesh_outer_scale) : 10.0;
-            int n_body = static_cast<int>(std::ceil(2.0 * outer + 1.0));
-            n = std::max(n, n_body);
-            n = std::min(n, 100);
+            if (stl_cfg.backend == VMB::CubeLegacy) {
+                int n = std::max(5, static_cast<int>(
+                    std::ceil(std::pow(effective_sub / 5.0, 1.0 / 3.0)) + 1.0));
+                double outer = static_cast<double>(stl_cfg.outer_scale);
+                int n_body = static_cast<int>(std::ceil(2.0 * outer + 1.0));
+                n = std::max(n, n_body);
+                stl_cfg.background_n_per_dim = std::min(n, 100);
+            } else {
+                int n = std::max(8, static_cast<int>(
+                    std::ceil(std::pow(effective_sub, 1.0 / 3.0))));
+                stl_cfg.background_n_per_dim = std::min(n, 80);
+            }
+        }
 
-            std::cout << "[aero_table_gen] Generating cube mesh: outer_scale="
-                      << cfg.mesh_outer_scale << " n_per_dim=" << n << "\n";
-            mesh = aerosp::aero::cfd::generate_structured_cube_mesh(
-                static_cast<Real>(cfg.mesh_outer_scale), n);
+        std::cout << "[aero_table_gen] Generating volume mesh backend="
+                  << aerosp::aero::cfd::volume_mesh_backend_name(stl_cfg.backend)
+                  << " path=" << stl_path
+                  << " outer_scale=" << stl_cfg.outer_scale
+                  << " n_per_dim=" << stl_cfg.background_n_per_dim << "\n";
+
+        std::string mesh_err;
+        if (!aerosp::aero::cfd::generate_volume_mesh(
+                stl_path, mesh, stl_cfg, &mesh_err)) {
+            std::cerr << "[aero_table_gen] Volume mesh failed: " << mesh_err << "\n";
+            return false;
         }
 
         aerosp::aero::cfd::MeshQualityReport qr =
@@ -153,13 +148,12 @@ bool generate_aero_table(
 
         std::cout << "[aero_table_gen] Mesh ready: cells=" << qr.cells
                   << " faces=" << qr.faces
-                  << (cfg.stl_volume_mesh ? " (conformal STL)" : " (cube)")
+                  << " backend="
+                  << aerosp::aero::cfd::volume_mesh_backend_name(stl_cfg.backend)
                   << "\n";
 
         aerosp::aero::cfd::CfdConfig cfd_cfg;
         cfd_cfg.use_gpu = true;
-        cfd_cfg.cfl = 0.25f;
-        cfd_cfg.max_iter = 2000;
         cfd_cfg.reconstruction_order = 1;
         cfd_cfg.ref_area  = static_cast<Real>(cfg.ref_area);
         cfd_cfg.ref_length = static_cast<Real>(cfg.ref_length);
@@ -168,6 +162,28 @@ bool generate_aero_table(
         cfd_cfg.Re        = static_cast<Real>(cfg.Re);
         cfd_cfg.prandtl   = static_cast<Real>(cfg.prandtl);
         cfd_cfg.wall_temperature = static_cast<Real>(cfg.wall_temperature);
+        cfd_cfg.max_iter = cfg.cfd_max_iter > 0 ? cfg.cfd_max_iter : 2000;
+
+        // Production strong CFD defaults: LTS + CFL ramp + SA (viscous).
+        if (cfg.cfd_strong_defaults) {
+            cfd_cfg.local_time_stepping = true;
+            cfd_cfg.cfl_ramp = true;
+            cfd_cfg.cfl_start = static_cast<Real>(
+                cfg.cfd_cfl_start > 0.f ? cfg.cfd_cfl_start : 0.2f);
+            cfd_cfg.cfl_end = static_cast<Real>(
+                cfg.cfd_cfl_end > cfg.cfd_cfl_start ? cfg.cfd_cfl_end : 5.0f);
+            cfd_cfg.cfl_ramp_steps =
+                cfg.cfd_cfl_ramp_steps > 0 ? cfg.cfd_cfl_ramp_steps : 100;
+            cfd_cfg.cfl = cfd_cfg.cfl_start;
+            cfd_cfg.sa_sub_iters = 2;
+            cfd_cfg.mean_flow_point_implicit = false;
+            if (cfg.viscous && cfg.cfd_turbulence_sa) {
+                cfd_cfg.turbulence_model =
+                    aerosp::aero::cfd::TurbulenceModel::SA;
+            }
+        } else {
+            cfd_cfg.cfl = 0.25f;
+        }
 
         // Validate closed surface / wall set before solving (same checks as CfdSolver::load_mesh).
         {

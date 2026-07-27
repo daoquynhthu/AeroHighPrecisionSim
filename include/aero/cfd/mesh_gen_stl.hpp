@@ -11,6 +11,20 @@ namespace aerosp {
 namespace aero {
 namespace cfd {
 
+// Unified volume-mesh backend for CFD / aero-table production.
+// Production default = StlWatertight (hex-cull, load_mesh 1e-4).
+enum class VolumeMeshBackend : int {
+    // Prefer cut-cell quality mesh; if load_mesh closed-surface fails, fall back
+    // to StlWatertight. Never falls back to cube.
+    Auto = 0,
+    // Hex-cull watertight body-fitted mesh (production strong path).
+    StlWatertight = 1,
+    // Cut-cell conformal mesh (quality); may fail closed-surface gate.
+    StlCutCell = 2,
+    // Legacy structured cube with body cavity (regression only).
+    CubeLegacy = 3,
+};
+
 struct StlMeshConfig {
     Real outer_scale = 5.0f;
     int background_n_per_dim = 20;
@@ -24,26 +38,15 @@ struct StlMeshConfig {
 
     bool multi_body = false;
     Real gap_cell_threshold = 0.0f;
+
+    // Backend selection (production: Auto → watertight with optional cut-cell try).
+    VolumeMeshBackend backend = VolumeMeshBackend::StlWatertight;
+    // When backend==Auto: attempt cut-cell first if true (default false for speed).
+    bool auto_try_cut_cell = false;
 };
 
 // Generate a body-fitted conformal volume mesh from an STL surface mesh.
-// The pipeline:
-//   1. Parse STL triangle soup
-//   2. Build signed-distance field on a background hex grid
-//   3. Hex-cull: remove cells inside the body, cut boundary cells at SDF=0
-//   4. Extract SDF=0 iso-surface as wall boundary faces
-//   5. Assign farfield faces from outer bounding box
-//   6. (Optional) Extrude prism layers from wall surface
-//   7. Rebuild cell-face connectivity and compute metrics
-//   8. Validate mesh (zero negative Jacobians, closed surface)
-//
-// Parameters:
-//   stl_path   - Path to STL file (ASCII or binary)
-//   mesh       - Output mesh (overwritten on success)
-//   cfg        - Generation parameters
-//   error      - Optional error message output
-//
-// Returns true on success, false on failure.
+// Cut-cell pipeline (quality). Closed-surface may not meet load_mesh 1e-4.
 bool generate_conformal_mesh_from_stl(
     const std::string& stl_path,
     CfdMesh& mesh,
@@ -58,6 +61,21 @@ bool generate_watertight_mesh_from_stl(
     CfdMesh& mesh,
     const StlMeshConfig& cfg,
     std::string* error = nullptr);
+
+// Unified production entry: dispatches on cfg.backend.
+// - StlWatertight / Auto: watertight hex-cull (Auto may try cut-cell first)
+// - StlCutCell: conformal only
+// - CubeLegacy: structured cube (stl_path ignored; uses outer_scale / n_per_dim)
+// On success mesh has metrics computed and is load_mesh-ready (except pure
+// StlCutCell which may fail closed-surface — caller must validate).
+bool generate_volume_mesh(
+    const std::string& stl_path,
+    CfdMesh& mesh,
+    const StlMeshConfig& cfg,
+    std::string* error = nullptr);
+
+// Human-readable backend name for logs / fidelity tags.
+const char* volume_mesh_backend_name(VolumeMeshBackend b);
 
 } // namespace cfd
 } // namespace aero

@@ -113,11 +113,18 @@ namespace panel {
         int    mesh_subdivisions = 5000;
         float  mesh_outer_scale = 10.0f;
 
-        // When true with use_fvm: body-fitted volume mesh from stl_path
-        // (Phase 9-B). When false: structured cube-embedding mesh (legacy).
-        bool   stl_volume_mesh = false;
-        // Background hex resolution for conformal meshing (0 = derive from
-        // mesh_subdivisions). Typical production range 20–80.
+        // Production default: body-fitted watertight STL volume mesh (hex-cull).
+        // Set false only for cube-embedding regression. Prefer volume_mesh_backend.
+        bool   stl_volume_mesh = true;
+        // Unified backend (overrides stl_volume_mesh when set ≥ 0).
+        // -1 = derive from stl_volume_mesh (true→StlWatertight, false→CubeLegacy)
+        //  0 = Auto, 1 = StlWatertight, 2 = StlCutCell, 3 = CubeLegacy
+        //    (matches aerosp::aero::cfd::VolumeMeshBackend)
+        int    volume_mesh_backend = -1;
+        // When Auto: try cut-cell first then fall back to watertight.
+        bool   volume_mesh_auto_try_cut_cell = false;
+        // Background hex resolution (0 = derive from mesh_subdivisions).
+        // Typical production range 20–80.
         int    stl_background_n_per_dim = 0;
         int    stl_max_cells = 5000000;
 
@@ -126,6 +133,13 @@ namespace panel {
         float  Re = 1e6f;
         float  prandtl = 0.72f;
         float  wall_temperature = 300.0f;
+        // Production CFD strong defaults (applied when use_fvm=true).
+        bool   cfd_strong_defaults = true;
+        bool   cfd_turbulence_sa = true; // SA when viscous; laminar if viscous=false
+        float  cfd_cfl_start = 0.2f;
+        float  cfd_cfl_end = 5.0f;
+        int    cfd_cfl_ramp_steps = 100;
+        int    cfd_max_iter = 2000;
     };
 
     // Single-GPU-pass generation of complete aerodynamics CSV table.
@@ -134,9 +148,8 @@ namespace panel {
     //
     // When cfg.use_fvm=true, replaces results with GPU CFD solver for
     // in-range conditions (Mach [1.2,30], |alpha|<=30, |beta|<=10).
-    // Mesh: stl_volume_mesh=true uses generate_watertight_mesh_from_stl
-    // (hex-cull, load_mesh 1e-4 closed-surface); stl_volume_mesh=false keeps
-    // the legacy cube-embedding body.
+    // Production mesh: generate_volume_mesh (default StlWatertight hex-cull).
+    // Cube-embedding only via volume_mesh_backend=CubeLegacy or stl_volume_mesh=false.
     bool generate_aero_table(
         const std::string& stl_path,
         const std::string& csv_path,

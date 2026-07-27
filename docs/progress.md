@@ -1438,3 +1438,15 @@
   5) GPU: mean-flow PI kernel, LTS fill/cap, spatial residual logged pre-PI
 - FP64-ORACLE-3: 300 LTS steps, cfl 0.2→2.5; spatial residual peak~5.6e-2 → final~2e-3 (≥2× drop)
 - Gates: peak developed, final≤5e-3, final≤0.5*peak; tests 3/3 oracle, 17/17 RANS, GPU *RANS* 9/9
+
+2026-07-28: Unify volume mesh backends; production defaults = strong path
+- Unified API: VolumeMeshBackend + generate_volume_mesh() in mesh_gen_stl.hpp/cpp
+  - StlWatertight (hex-cull, load_mesh 1e-4) = production strong default
+  - StlCutCell (quality cut-cell)
+  - CubeLegacy (structured cube regression)
+  - Auto: optional cut-cell try then fall back to watertight (never cube)
+- AeroTableConfig production defaults:
+  - stl_volume_mesh=true; volume_mesh_backend (-1 derives from flag)
+  - cfd_strong_defaults=true: LTS + CFL ramp + SA when viscous
+- aero_table_gen: single generate_volume_mesh path; strong CFD config when enabled
+- Tests: TestCfdMeshStl 11/11; TestAeroTableGen 10/10 (TABLE-STL-1/2/3 + CFD table on watertight)

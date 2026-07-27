@@ -1,4 +1,5 @@
 #include "aero/cfd/mesh_gen_stl.hpp"
+#include "aero/cfd/cfd_mesh.hpp"
 #include "aero/cfd/real.hpp"
 #include "aero/cfd/element_types.hpp"
 #include "aero/cfd/mesh_validator.hpp"
@@ -1954,6 +1955,95 @@ bool generate_watertight_mesh_from_stl(
         report.no_slip_wall_faces, report.farfield_faces,
         static_cast<double>(rel));
     return true;
+}
+
+namespace {
+
+bool mesh_closed_surface_ok(const CfdMesh& mesh, Real tol = Real(1e-4)) {
+    double sx = 0, sy = 0, sz = 0, ta = 0;
+    for (const auto& face : mesh.faces) {
+        if (face.boundary == BoundaryKind::Interior) continue;
+        sx += static_cast<double>(face.area) * static_cast<double>(face.nx);
+        sy += static_cast<double>(face.area) * static_cast<double>(face.ny);
+        sz += static_cast<double>(face.area) * static_cast<double>(face.nz);
+        ta += static_cast<double>(face.area);
+    }
+    double ce = std::sqrt(sx * sx + sy * sy + sz * sz);
+    return ce <= static_cast<double>(tol) * (ta + 1e-30);
+}
+
+} // namespace
+
+const char* volume_mesh_backend_name(VolumeMeshBackend b) {
+    switch (b) {
+    case VolumeMeshBackend::Auto: return "auto";
+    case VolumeMeshBackend::StlWatertight: return "stl-watertight";
+    case VolumeMeshBackend::StlCutCell: return "stl-cutcell";
+    case VolumeMeshBackend::CubeLegacy: return "cube-legacy";
+    }
+    return "unknown";
+}
+
+bool generate_volume_mesh(
+    const std::string& stl_path,
+    CfdMesh& mesh,
+    const StlMeshConfig& cfg,
+    std::string* error)
+{
+    VolumeMeshBackend backend = cfg.backend;
+    if (backend == VolumeMeshBackend::Auto) {
+        if (cfg.auto_try_cut_cell && !stl_path.empty()) {
+            std::string cerr;
+            if (generate_conformal_mesh_from_stl(stl_path, mesh, cfg, &cerr) &&
+                !mesh.cells.empty() && mesh_closed_surface_ok(mesh)) {
+                std::fprintf(stderr,
+                    "volume_mesh Auto: using cut-cell (closed-surface OK)\n");
+                return true;
+            }
+            std::fprintf(stderr,
+                "volume_mesh Auto: cut-cell rejected (%s) — falling back to watertight\n",
+                cerr.empty() ? "closed-surface/load gate" : cerr.c_str());
+        }
+        backend = VolumeMeshBackend::StlWatertight;
+    }
+
+    switch (backend) {
+    case VolumeMeshBackend::StlWatertight:
+        if (stl_path.empty()) {
+            if (error) *error = "StlWatertight requires non-empty stl_path";
+            return false;
+        }
+        return generate_watertight_mesh_from_stl(stl_path, mesh, cfg, error);
+
+    case VolumeMeshBackend::StlCutCell:
+        if (stl_path.empty()) {
+            if (error) *error = "StlCutCell requires non-empty stl_path";
+            return false;
+        }
+        return generate_conformal_mesh_from_stl(stl_path, mesh, cfg, error);
+
+    case VolumeMeshBackend::CubeLegacy: {
+        int n = std::max(5, cfg.background_n_per_dim);
+        Real outer = cfg.outer_scale > 0 ? cfg.outer_scale : Real(5);
+        mesh = generate_structured_cube_mesh(outer, n);
+        if (mesh.cells.empty()) {
+            if (error) *error = "CubeLegacy mesh generation returned empty mesh";
+            return false;
+        }
+        auto qr = compute_mesh_metrics(mesh);
+        if (!qr.valid) {
+            if (error) *error = qr.message.empty() ? "CubeLegacy mesh invalid" : qr.message;
+            return false;
+        }
+        return true;
+    }
+
+    case VolumeMeshBackend::Auto:
+        break;
+    }
+
+    if (error) *error = "Unknown VolumeMeshBackend";
+    return false;
 }
 
 } // namespace cfd
