@@ -377,8 +377,15 @@ static int test_transport_eval() {
     if (!tdb.load("data/thermo/trans.inp", &err))
         FAIL("load failed: %s", err.c_str());
 
+    ThermoDb thdb;
+    if (!thdb.load("data/thermo/thermo.inp", &err))
+        FAIL("thermo load failed: %s", err.c_str());
+
     int n2 = tdb.find_species("N2");
     if (n2 < 0) FAIL("N2 not found in trans.inp");
+
+    // Set molecular weights from ThermoDb so Herning-Zipperer uses real M
+    tdb.set_molecular_weights(thdb, {"N2", "O2"});
 
     const auto& rec = tdb.get_record(n2);
     Real mu = species_mu(rec, Real(500));
@@ -398,12 +405,12 @@ static int test_transport_eval() {
     std::vector<const TransportRecord*> trecs = {&tdb.get_record(n2), &tdb.get_record(o2)};
 
     Real mix_mu_val = mix_mu(Real(500), Y, trecs);
-    if (!approx(mix_mu_val, Real(2.824981932856e-5), Real(1e-6)))
-        FAIL("mix_mu(500K): expected 2.82498e-5, got %.12e", (double)mix_mu_val);
+    if (!approx(mix_mu_val, Real(2.832419475866e-5), Real(1e-6)))
+        FAIL("mix_mu(500K): expected 2.83242e-5, got %.12e", (double)mix_mu_val);
 
     Real mix_kap = mix_kappa(Real(500), Y, trecs);
-    if (!approx(mix_kap, Real(3.956982521106e-5), Real(1e-3)))
-        FAIL("mix_kappa(500K): expected 3.95698e-5, got %.12e", (double)mix_kap);
+    if (!approx(mix_kap, Real(3.960987579398e-5), Real(1e-3)))
+        FAIL("mix_kappa(500K): expected 3.96099e-5, got %.12e", (double)mix_kap);
     PASS;
 
     return 0;

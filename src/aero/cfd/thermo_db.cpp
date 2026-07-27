@@ -375,6 +375,17 @@ Real TransportDb::evaluate_mu(const TransportRecord& rec, Real T) {
     return std::exp(ln_mu) * Real(1e-7);  // micropoise → Pa*s
 }
 
+void TransportDb::set_molecular_weights(const ThermoDb& thdb,
+                                         const std::vector<std::string>& names) {
+    for (const auto& name : names) {
+        int ti = find_species(name);
+        if (ti < 0) continue;
+        int si = thdb.find_species(name);
+        if (si < 0) continue;
+        records_[ti].M = thdb.get_species(si).M;
+    }
+}
+
 // ─── SpeciesConfig key=value parser ───────────────────────────────
 
 bool SpeciesConfig::load(const std::string& config_path, std::string* error) {

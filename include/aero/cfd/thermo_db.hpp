@@ -34,6 +34,7 @@ struct SpeciesRecord {
 
 struct TransportRecord {
     std::string name;
+    Real M{Real(0)};               // molar mass [kg/kmol]; set from ThermoDb after load
     int n_intervals;
     Real T_min[CEA4_NINTV];       // low end of each temperature interval
     Real T_max[CEA4_NINTV];       // high end of each temperature interval
@@ -74,6 +75,10 @@ public:
 
     // Evaluate viscosity [Pa*s] using CEA log formula
     static Real evaluate_mu(const TransportRecord& rec, Real T);
+
+    // Set molecular weights from matching ThermoDb species (by name)
+    // Species names not found in either database are skipped.
+    void set_molecular_weights(const ThermoDb& thdb, const std::vector<std::string>& names);
 
 private:
     std::vector<TransportRecord> records_;

@@ -1389,3 +1389,4 @@
 2026-07-27: Updated PLAN.md Phase 15.1 task list to match actual implementation — yaml-cpp parser marked [x], merged files table, test table synced with 15 real tests.
 2026-07-27: Phase 15.1 — fix TransportDb parser bug (coeffs offset 2), add evaluate_mu() + tests. 19/19 ThermoDb tests PASS.
 2026-07-27: Phase 15.2 - NASA-9 cp(T)/h(T)/s(T)/y(T) evaluator, transport evaluator, T_from_e Newton solver. 27/27 tests PASS (19 legacy + 8 new CFD-N9-1..8). Real=float, tolerances 3e-7/3e-6. Python ref scripts saved to scripts/.
+2026-07-27: Fix TransportRecord::M sqrt(29) placeholder: add Real M field + set_molecular_weights() utility + Herning-Zipperer now uses real M. All 27/27 tests PASS.

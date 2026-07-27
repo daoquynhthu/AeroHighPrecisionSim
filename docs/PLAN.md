@@ -1944,7 +1944,9 @@ Files:
 | `include/aero/cfd/nasa9_eval.hpp` | NEW | GPU `__device__ inline` + CPU `inline`: `d_cp_R(T, coeffs)`, `d_h_RT(T, coeffs)`, `d_s_R(T, coeffs)` — 全 FMA 链, 温度区间谓词选择 |
 | `src/aero/cfd/nasa9_eval.cpp` | NEW | CPU 版求值 + 混合气体函数: `mix_cp(T, Y[])`, `mix_h(T, Y[])`, `mix_gamma(T, Y[])` |
 | `include/aero/cfd/transport_eval.hpp` | NEW | GPU `__device__ inline`: `d_mu(T, mu_coeffs)`, `d_kappa(T, kappa_coeffs)`; 4-参数 CEA 对数拟合: `ln(η) = A*lnT + B/T + C/T² + D` |
-| `src/aero/cfd/transport_eval.cpp` | NEW | CPU 版: `species_mu(T, sp)`, `species_kappa(T, sp)`; Wilke 混合律: `mix_mu(T, Y[])`, `mix_kappa(T, Y[])` |
+| `src/aero/cfd/transport_eval.cpp` | NEW | CPU 版: `species_mu(T, sp)`, `species_kappa(T, sp)`; Herning-Zipperer 混合律: `mix_mu(T, Y[])`, `mix_kappa(T, Y[])` — 使用 `TransportRecord::M` 真实分子量 |
+| `include/aero/cfd/thermo_db.hpp` | MODIFY | `TransportRecord` 新增 `Real M{Real(0)}` 字段; `TransportDb::set_molecular_weights()` |
+| `src/aero/cfd/thermo_db.cpp` | MODIFY | 实现 `TransportDb::set_molecular_weights()` 从 ThermoDb 拷贝 M |
 | `include/aero/cfd/t_from_e.hpp` | NEW | `Real T_from_e(Real e, Real* Y, int nsp, Real* gamma_guess)` — 牛顿法反求温度 |
 | `src/aero/cfd/t_from_e.cpp` | NEW | 牛顿迭代: `f(T) = mix_h(T, Y) - e - R_mix*T`; 雅可比 = mix_cp; 容差 1e-8; 回退二分法 |
 
@@ -1999,8 +2001,8 @@ Tests:
 | 4 | `CFD-N9-4` | 热力学恒等式: `(h(T+δ)-h(T-δ))/(2δ) = cp(T)` 数值导数 | 1e-5 | ✅ PASS |
 | 5 | `CFD-N9-5` | 混合 cp: 50/50 N₂+O₂ cp(1000K) 混合求值 | 3e-6 | ✅ PASS |
 | 6 | `CFD-N9-6` | `T_from_e()`: 输入 `e(500K)` → 输出 T≈500K | 1e-4 | ✅ PASS |
-| 7 | `CFD-N9-7` | N₂ 粘度 μ(500K): 与 Sutherland 参考值对比 | 2% | ✅ PASS |
-| 8 | `CFD-N9-8` | 50/50 N₂+O₂ mix_mu(500K) 混合粘度 | 2% | ✅ PASS |
+| 7 | `CFD-N9-7` | 50/50 N₂+O₂ Herning-Zipperer mix_mu(500K): 使用真实 M (N₂=28.0134, O₂=31.9988) | 1e-6 | ✅ PASS |
+| 8 | `CFD-N9-8` | T_from_e 恢复温度 | 1e-4 | ✅ PASS |
 
 ### 15.3 GasModel 层次结构 (替代当前 thermo.hpp/cpp)
 
