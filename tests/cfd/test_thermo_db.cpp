@@ -254,8 +254,8 @@ static int test_gas_constant() {
     if (idx < 0) FAIL("N2 not found");
     Real Rs = db.get_species(idx).R_specific();
     Real expected = R_UNIV / Real(28.0134) * Real(1000);
-    if (!approx(R_UNIV / Real(28.0134), Real(0.29680), Real(1e-4)))
-        FAIL("expected R_spec ~ 0.2968 J/(g*K), got %.8f", (double)(R_UNIV / Real(28.0134)));
+    if (!approx(Rs, expected, Real(1e-4)))
+        FAIL("expected Rs ~ %.8f J/(kg*K), got %.8f", (double)expected, (double)Rs);
     PASS;
 
     return 0;

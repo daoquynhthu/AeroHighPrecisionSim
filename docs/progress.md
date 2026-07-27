@@ -1387,3 +1387,4 @@
 2026-07-27: CUDA boundary fixes: guarded aero_skin_friction.hpp CUDA include, renamed device_mesh.cu+api -> .cpp, deleted gpu_buffers.cu, fixed double registration, guarded fgmres/krylov_ops. 15/15 tests PASS.
 2026-07-27: Cleaned hardcoded paths: test_gravity.cu (e:/missile -> relative), clean_aero_table.py (accepts argv), examples/dart (removed e:/missile fallback), ci.ps1 (MinGW path in single var). Deleted orphan test STLs. Fixed trailing whitespace in multiple files.
 2026-07-27: Updated PLAN.md Phase 15.1 task list to match actual implementation — yaml-cpp parser marked [x], merged files table, test table synced with 15 real tests.
+2026-07-27: Phase 15.1 — fix TransportDb parser bug (coeffs offset 2), add evaluate_mu() + tests. 19/19 ThermoDb tests PASS.

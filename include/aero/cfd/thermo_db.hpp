@@ -11,15 +11,15 @@ namespace aero {
 namespace cfd {
 
 // CEA standard gas constant, J/(mol*K)
-static constexpr Real R_UNIV = Real(8.31451);
+inline constexpr Real R_UNIV = Real(8.31451);
 
 // NASA-9 polynomial: up to 3 temperature intervals, 9 coefficients each
-static constexpr int NASA9_NCOEF = 9;
-static constexpr int NASA9_NINTV = 3;
+inline constexpr int NASA9_NCOEF = 9;
+inline constexpr int NASA9_NINTV = 3;
 
 // Transport (CEA log form): up to 3 intervals, 4 coefficients each
-static constexpr int CEA4_NCOEF = 4;
-static constexpr int CEA4_NINTV = 3;
+inline constexpr int CEA4_NCOEF = 4;
+inline constexpr int CEA4_NINTV = 3;
 
 struct SpeciesRecord {
     std::string name;
@@ -29,7 +29,7 @@ struct SpeciesRecord {
     Real coeffs[NASA9_NINTV][NASA9_NCOEF]; // [interval][a1..a7, b1, b2]
 
     bool has_cp_data() const { return n_intervals > 0; }
-    Real R_specific() const { return R_UNIV / M; }
+    Real R_specific() const { return R_UNIV / M * Real(1000); } // [J/(kg*K)]
 };
 
 struct TransportRecord {
