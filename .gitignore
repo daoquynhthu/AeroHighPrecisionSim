@@ -1,28 +1,57 @@
+# Build directories
 build*/
-.vscode/
-*.png
-*.csv
-*stl
-
-data/
-output/
+cmake-build-*/
+out/
 
 # IDE / editor config
+.vscode/
 .trae/
 .idea/
+.vs/
 *.swp
 *.swo
+*.user
+*.suo
+
+# FetchContent downloads (Eigen, etc.)
+_deps/
 
 # Python bytecode cache
 __pycache__/
 *.pyc
 
-# Test artifacts
-Testing/Temporary/
-
-# Build artifacts
-cmake-build-*/
-
 # OS files
 .DS_Store
 Thumbs.db
+
+# Build artifacts (MSVC)
+*.obj
+*.lib
+*.dll
+*.exp
+*.exe
+*.pdb
+*.ilk
+*.log
+*.tlog
+*.ipch
+*.sdf
+*.db
+Debug/
+Release/
+x64/
+x86/
+
+# Data / output
+data/
+output/
+
+# Test artifacts
+Testing/Temporary/
+
+# Other generated files
+*.png
+*.csv
+*.stl
+*.zip
+*.7z

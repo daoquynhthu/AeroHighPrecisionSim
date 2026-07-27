@@ -1,0 +1,12 @@
+* text=auto
+
+# Binary files that should not be diffed
+*.dll binary
+*.lib binary
+*.pdb binary
+*.obj binary
+*.exe binary
+*.zip binary
+*.png binary
+*.stl binary
+*.csv binary
