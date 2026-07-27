@@ -33,13 +33,13 @@ void run_debug_trajectory(double v0, double pitch_deg, double yaw_deg, double na
         }
         return candidates.front();
     };
-    std::string gravity_path = resolve_path({"data/EGM2008.gfc", "../data/EGM2008.gfc", "e:/missile/data/EGM2008.gfc"});
+    std::string gravity_path = resolve_path({"data/EGM2008.gfc", "../data/EGM2008.gfc", "../data/EGM2008.gfc"});
     std::string aero_path = resolve_path({"data/dart/dart_aero_table.csv", "../data/dart/dart_aero_table.csv", "dart_aero_table.csv"});
 
     // 1. Precise Environment Initialization (Based on LLA: 22.58, 113.96)
-    LLA origin_lla = {dart_cfg.launch_lat * M_PI / 180.0, 
-                      dart_cfg.launch_lon * M_PI / 180.0, 
-                      dart_cfg.launch_alt}; 
+    LLA origin_lla = {dart_cfg.launch_lat * M_PI / 180.0,
+                      dart_cfg.launch_lon * M_PI / 180.0,
+                      dart_cfg.launch_alt};
     Eigen::Vector3d origin_ecef = CoordinateTransform::lla_to_ecef(origin_lla);
 
     // Compute Precise Gravity Magnitude (using EGM2008)
@@ -50,7 +50,7 @@ void run_debug_trajectory(double v0, double pitch_deg, double yaw_deg, double na
     } else {
         // Fallback to Somigliana formula (WGS84) if file missing
         double sin_lat = sin(origin_lla.lat);
-        dart_cfg.gravity_mag = 9.7803253359 * (1 + 0.00193185265241 * sin_lat * sin_lat) / 
+        dart_cfg.gravity_mag = 9.7803253359 * (1 + 0.00193185265241 * sin_lat * sin_lat) /
                                sqrt(1 - 0.00669437999014 * sin_lat * sin_lat);
     }
 
@@ -100,7 +100,7 @@ void run_debug_trajectory(double v0, double pitch_deg, double yaw_deg, double na
     R_en(0, 0) = -sin_lat * cos_lon; R_en(0, 1) = -sin_lat * sin_lon; R_en(0, 2) = cos_lat;
     R_en(1, 0) = -sin_lon;           R_en(1, 1) =  cos_lon;           R_en(1, 2) = 0.0;
     R_en(2, 0) = -cos_lat * cos_lon; R_en(2, 1) = -cos_lat * sin_lon; R_en(2, 2) = -sin_lat;
-    
+
     Eigen::Matrix3d R_ne = R_en.transpose();
 
     Eigen::Vector3d target_ned = dart_cfg.get_base(dart_cfg.target_alt).pos_local;
@@ -111,10 +111,10 @@ void run_debug_trajectory(double v0, double pitch_deg, double yaw_deg, double na
     State6DOF state;
     state.pos_ecef = Eigen::Vector3d::Zero(); // Relative to origin
     state.mass = dart_cfg.mass;
-    
+
     Eigen::Vector3d v_ned(v0 * cos(pitch) * cos(yaw), v0 * cos(pitch) * sin(yaw), -v0 * sin(pitch));
     state.vel_ecef = R_ne * v_ned;
-    
+
     // Initial orientation: body points along velocity in NED
     // Rotation sequence: Yaw (psi) then Pitch (theta)
     // In NED, positive rotation around Y is Pitch UP.
@@ -147,8 +147,8 @@ void run_debug_trajectory(double v0, double pitch_deg, double yaw_deg, double na
     while (t < 5.0) {
         // Use NED for local altitude
         Eigen::Vector3d p_ned = R_en * state.pos_ecef;
-        double alt = dart_cfg.launch_alt - p_ned.z(); 
-        
+        double alt = dart_cfg.launch_alt - p_ned.z();
+
         if (alt < -0.5 && t > 0.1) break;
         if (p_ned.x() > target_ned.x() + 5.0) break;
 
@@ -177,7 +177,7 @@ void run_debug_trajectory(double v0, double pitch_deg, double yaw_deg, double na
 
             auto c = aero_table.get_coeffs(m, a_deg);
             double q = 0.5 * atm_cur.density * v_m * v_m;
-            
+
             // Use config values
             double S = dart_cfg.ref_area;
             double L = dart_cfg.ref_length;
@@ -189,7 +189,7 @@ void run_debug_trajectory(double v0, double pitch_deg, double yaw_deg, double na
             );
 
             if (std::abs(cur_t - t) < 1e-9) {
-                log << std::fixed << std::setprecision(6) 
+                log << std::fixed << std::setprecision(6)
                     << t << "," << p_ned.x() << "," << p_ned.y() << "," << p_ned.z() << ","
                     << v_ned_cur.x() << "," << v_ned_cur.y() << "," << v_ned_cur.z() << ","
                     << s.quat_be.w() << "," << s.quat_be.x() << "," << s.quat_be.y() << "," << s.quat_be.z() << ","
@@ -232,3 +232,4 @@ int main(int argc, char** argv) {
     std::cout << "Debug Simulation Finished. Log saved to dart_debug_log.csv" << std::endl;
     return 0;
 }
+

@@ -8,6 +8,7 @@ param(
 $ErrorActionPreference = "Stop"
 $Root = Split-Path -Parent $PSScriptRoot
 $Build = Join-Path $Root $BuildDir
+$MinGW = "C:\msys64\mingw64"
 
 function Red   { Write-Host "$($PSStyle.Foreground.Red)$($args[0])$($PSStyle.Reset)" }
 function Green { Write-Host "$($PSStyle.Foreground.Green)$($args[0])$($PSStyle.Reset)" }
@@ -125,8 +126,8 @@ switch -Regex ($Action.ToLower()) {
     "^(coverage)$" {
         Step "Coverage build (GCC)..."
         $CovBuild = Join-Path $Root "build_cov"
-        $Gcc = "C:\msys64\mingw64\bin\gcc.exe"
-        $Gxx = "C:\msys64\mingw64\bin\g++.exe"
+        $Gcc = "$MinGW\bin\gcc.exe"
+        $Gxx = "$MinGW\bin\g++.exe"
         Exec "cmake configure -DAEROSIM_COVERAGE=ON -DAEROSIM_USE_CUDA=OFF" {
             cmake -B $CovBuild -DAEROSIM_COVERAGE=ON -DAEROSIM_USE_CUDA=OFF -DCMAKE_C_COMPILER="$Gcc" -DCMAKE_CXX_COMPILER="$Gxx" 2>&1 | Out-Null
             if ($LASTEXITCODE -ne 0) { cmake -B $CovBuild -DAEROSIM_COVERAGE=ON -DAEROSIM_USE_CUDA=OFF -DCMAKE_C_COMPILER="$Gcc" -DCMAKE_CXX_COMPILER="$Gxx" 2>&1 | Select-String -Pattern "error|Error|ERROR" | ForEach-Object { Write-Host "   $_" } }
@@ -139,11 +140,11 @@ switch -Regex ($Action.ToLower()) {
             ctest --test-dir $CovBuild -C Debug -R "Cfd(Mesh|Euler|Diagnostics|Reconstruction|Viscous|State|Rans)" --output-on-failure 2>&1 | ForEach-Object { Write-Host "   $_" }
         }
         Exec "gcovr HTML report" {
-            $env:PATH = "C:\msys64\mingw64\bin;$env:PATH"
+            $env:PATH = "$MinGW\bin;$env:PATH"
             gcovr -r $Root --filter "$Root/src" --filter "$Root/tests" --exclude-directories ".*_deps.*" --html --html-details -o (Join-Path $CovBuild "coverage" "index.html") --gcov-executable "gcov.exe" 2>&1 | Out-Null
         }
         Exec "coverage threshold gate" {
-            $env:PATH = "C:\msys64\mingw64\bin;$env:PATH"
+            $env:PATH = "$MinGW\bin;$env:PATH"
             # Initial thresholds account for ~2000 lines of GPU code not measurable by gcov.
             gcovr -r $Root --filter "$Root/src" --gcov-executable "gcov.exe" --fail-under-line=45 --fail-under-branch=28 2>&1 | ForEach-Object { Write-Host "   $_" }
             if ($LASTEXITCODE -ne 0) { throw "Coverage below threshold (line 45%, branch 28%)" }
@@ -154,8 +155,8 @@ switch -Regex ($Action.ToLower()) {
     "^(sanitize)$" {
         Step "Sanitizer build (GCC + ASAN/UBSAN)..."
         $SanBuild = Join-Path $Root "build_san"
-        $Gcc = "C:\msys64\mingw64\bin\gcc.exe"
-        $Gxx = "C:\msys64\mingw64\bin\g++.exe"
+        $Gcc = "$MinGW\bin\gcc.exe"
+        $Gxx = "$MinGW\bin\g++.exe"
         Exec "cmake configure -DAEROSIM_SANITIZE=ON -DAEROSIM_USE_CUDA=OFF" {
             cmake -B $SanBuild -DAEROSIM_SANITIZE=ON -DAEROSIM_USE_CUDA=OFF -DCMAKE_C_COMPILER="$Gcc" -DCMAKE_CXX_COMPILER="$Gxx" 2>&1 | Out-Null
             if ($LASTEXITCODE -ne 0) { cmake -B $SanBuild -DAEROSIM_SANITIZE=ON -DAEROSIM_USE_CUDA=OFF -DCMAKE_C_COMPILER="$Gcc" -DCMAKE_CXX_COMPILER="$Gxx" 2>&1 | Select-String -Pattern "error|Error|ERROR" | ForEach-Object { Write-Host "   $_" } }

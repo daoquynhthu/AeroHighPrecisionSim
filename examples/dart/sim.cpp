@@ -40,7 +40,7 @@ int main(int argc, char* argv[]) {
         }
         return candidates.front();
     };
-    std::string gravity_path = resolve_path({"data/EGM2008.gfc", "../data/EGM2008.gfc", "e:/missile/data/EGM2008.gfc"});
+    std::string gravity_path = resolve_path({"data/EGM2008.gfc", "../data/EGM2008.gfc", "../data/EGM2008.gfc"});
     std::string aero_path = resolve_path({"data/dart/dart_aero_table.csv", "../data/dart/dart_aero_table.csv", "dart_aero_table.csv"});
     DartAeroTable aero_table(aero_path);
     if (!aero_table.is_loaded()) {
@@ -88,13 +88,13 @@ int main(int argc, char* argv[]) {
     guid_cfg.gravity_mag = config.gravity_mag;
     DartGuidance guidance(guid_cfg);
 
-    double initial_vel = 25.0; 
+    double initial_vel = 25.0;
     double pitch_deg = 6.81;   // Optimized pitch
     double azimuth_deg = 7.3;  // Target Base
     std::string output_path = "dart_trajectory.csv";
     bool silent = false;
     bool use_guidance = true; // NEW: Toggle guidance
-    
+
     // Command line overrides
     if (argc >= 4) {
         initial_vel = std::atof(argv[1]);
@@ -110,9 +110,9 @@ int main(int argc, char* argv[]) {
 
     // 2. Initialize State
     State6DOF state;
-    LLA origin_lla = {config.launch_lat * M_PI / 180.0, 
-                      config.launch_lon * M_PI / 180.0, 
-                      config.launch_alt}; 
+    LLA origin_lla = {config.launch_lat * M_PI / 180.0,
+                      config.launch_lon * M_PI / 180.0,
+                      config.launch_alt};
     Eigen::Vector3d origin_ecef = CoordinateTransform::lla_to_ecef(origin_lla);
 
     // Compute Precise Gravity Magnitude (using EGM2008)
@@ -123,7 +123,7 @@ int main(int argc, char* argv[]) {
     } else {
         // Fallback to Somigliana formula (WGS84) if file missing
         double sin_lat = sin(origin_lla.lat);
-        config.gravity_mag = 9.7803253359 * (1 + 0.00193185265241 * sin_lat * sin_lat) / 
+        config.gravity_mag = 9.7803253359 * (1 + 0.00193185265241 * sin_lat * sin_lat) /
                              sqrt(1 - 0.00669437999014 * sin_lat * sin_lat);
     }
 
@@ -143,14 +143,14 @@ int main(int argc, char* argv[]) {
         std::cout << "Location: (" << config.launch_lat << ", " << config.launch_lon << ")" << std::endl;
         std::cout << "Env: Gravity=" << config.gravity_mag << " m/s2, Density=" << config.atm_density << " kg/m3" << std::endl;
     }
-    
+
     // Velocity Vector in NED
     double theta = pitch_deg * M_PI / 180.0;
     double psi = azimuth_deg * M_PI / 180.0;
     Eigen::Vector3d vel_ned(initial_vel * std::cos(theta) * std::cos(psi),
                             initial_vel * std::cos(theta) * std::sin(psi),
                             -initial_vel * std::sin(theta));
-    
+
     // R_en (ECEF to NED)
     double sin_lat = sin(origin_lla.lat);
     double cos_lat = cos(origin_lla.lat);
@@ -165,24 +165,24 @@ int main(int argc, char* argv[]) {
     // RELATIVE ECEF: Position (0,0,0) at origin
     state.pos_ecef = Eigen::Vector3d::Zero();
     state.vel_ecef = R_ne * vel_ned;
-    
+
     // Initial Orientation (aligned with velocity vector)
     Eigen::AngleAxisd yaw_rot(psi, Eigen::Vector3d::UnitZ());
-    Eigen::AngleAxisd pitch_rot(theta, Eigen::Vector3d::UnitY()); 
-    Eigen::Quaterniond quat_nb = yaw_rot * pitch_rot; 
-    
+    Eigen::AngleAxisd pitch_rot(theta, Eigen::Vector3d::UnitY());
+    Eigen::Quaterniond quat_nb = yaw_rot * pitch_rot;
+
     Eigen::Quaterniond q_ne(R_ne);
-    state.quat_be = q_ne * quat_nb; 
+    state.quat_be = q_ne * quat_nb;
     state.omega_body.setZero();
     state.mass = config.mass;
 
     // 3. Simulation Loop
     double dt = 0.001; // Consistent with MC (1000Hz)
     double t = 0.0;
-    
+
     // Constant gravity in NED
     Eigen::Vector3d g_ecef = R_ne * Eigen::Vector3d(0, 0, config.gravity_mag);
-    
+
     InertialProps inertia_props;
     inertia_props.mass = config.mass;
     inertia_props.inertia = config.inertia;
@@ -194,16 +194,16 @@ int main(int argc, char* argv[]) {
     std::ofstream outfile(output_path);
     outfile << "Time,X,Y,Z,Vel,Pitch,Yaw,Alpha,Beta,Alt,p,q,r\n";
 
-    while (t < 5.0) { 
+    while (t < 5.0) {
         Eigen::Vector3d pos_ned = R_en * state.pos_ecef;
         double current_alt = config.launch_alt - pos_ned.z();
         if (current_alt < 0.0 && t > 0.1) {
             if (!silent) std::cout << "Impact detected at t=" << t << "s" << std::endl;
-            break; 
+            break;
         }
 
         AtmosphereData atm = atm_baseline;
-        
+
         // B. Gravity (Already set as constant g_ecef)
 
         // C. Aerodynamics
@@ -216,17 +216,17 @@ int main(int argc, char* argv[]) {
 
         // Get coefficients from LUT
         auto coeffs = aero_table.get_coeffs(mach, alpha * 180.0 / M_PI, beta * 180.0 / M_PI);
-        
+
         // D. Guidance
         Eigen::Vector3d vel_ned = R_en * state.vel_ecef;
-        
+
         DartGuidance::GuidanceOutput guid_out = {0, 0, false};
         if (use_guidance) {
             guid_out = guidance.update(t, pos_ned, vel_ned, state.omega_body, target_ned, dt);
         }
 
         double q_inf = 0.5 * atm.density * v_mag * v_mag;
-        
+
         // Add control moments (Rudder effectiveness)
         // Heuristic: 1 deg rudder ~ 0.1 Cl/Cm/Cn increment at Mach 0.1
         double ctrl_m = guid_out.delta_pitch * config.ctrl_moment_coeff_pitch;
@@ -235,10 +235,10 @@ int main(int argc, char* argv[]) {
         Eigen::Vector3d force_aero_body(coeffs.CX * q_inf * config.ref_area,
                                          coeffs.CY * q_inf * config.ref_area,
                                          coeffs.CZ * q_inf * config.ref_area);
-        
+
         // Add damping moments (from table)
         double Cl_p = -0.5;
-        
+
         Eigen::Vector3d moment_aero_body(
             (coeffs.Cl + Cl_p * state.omega_body.x()) * q_inf * config.ref_area * config.ref_length,
             (coeffs.Cm + coeffs.Cmq * state.omega_body.y() + ctrl_m) * q_inf * config.ref_area * config.ref_length,
@@ -258,8 +258,8 @@ int main(int argc, char* argv[]) {
         state.normalize();
 
         // E. Logging
-        outfile << t << "," << pos_ned.x() << "," << pos_ned.y() << "," << pos_ned.z() << "," 
-                << v_mag << "," << -theta*180/M_PI << "," << psi*180/M_PI << "," 
+        outfile << t << "," << pos_ned.x() << "," << pos_ned.y() << "," << pos_ned.z() << ","
+                << v_mag << "," << -theta*180/M_PI << "," << psi*180/M_PI << ","
                 << alpha*180/M_PI << "," << beta*180/M_PI << "," << current_alt << ","
                 << state.omega_body.x() << "," << state.omega_body.y() << "," << state.omega_body.z() << "\n";
 
@@ -269,3 +269,4 @@ int main(int argc, char* argv[]) {
     if (!silent) std::cout << "Simulation finished. Trajectory saved to " << output_path << std::endl;
     return 0;
 }
+

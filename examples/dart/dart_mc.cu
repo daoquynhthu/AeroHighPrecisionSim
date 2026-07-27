@@ -140,7 +140,7 @@ CUDA_HOST_DEVICE sim::control::DartGuidance::Config build_guidance_config(const 
 __global__ void dart_mc_kernel(
     MCSimParams params,
     DartAeroTableGPU aero_table,
-    DartConfig dart_cfg, 
+    DartConfig dart_cfg,
     LLA origin_lla,
     Eigen::Vector3d origin_ecef,
     Eigen::Vector3d target_ned,
@@ -172,7 +172,7 @@ __global__ void dart_mc_kernel(
     // 3. Setup Initial State
     double theta = pitch_deg * 3.141592653589793 / 180.0;
     double psi = yaw_deg * 3.141592653589793 / 180.0;
-    
+
     // Rotation matrix from ECEF to NED
     double sin_lat = sin(origin_lla.lat);
     double cos_lat = cos(origin_lla.lat);
@@ -183,10 +183,10 @@ __global__ void dart_mc_kernel(
     R_en(0, 0) = -sin_lat * cos_lon; R_en(0, 1) = -sin_lat * sin_lon; R_en(0, 2) = cos_lat;
     R_en(1, 0) = -sin_lon;           R_en(1, 1) =  cos_lon;           R_en(1, 2) = 0.0;
     R_en(2, 0) = -cos_lat * cos_lon; R_en(2, 1) = -cos_lat * sin_lon; R_en(2, 2) = -sin_lat;
-    
+
     // NED to ECEF is the transpose
     Eigen::Matrix3d R_ne = R_en.transpose();
-    
+
     // Initial velocity in NED: [North, East, Down]
     // Pitch UP is negative Z
     Eigen::Vector3d vel_ned(v0 * cos(theta) * cos(psi),
@@ -195,9 +195,9 @@ __global__ void dart_mc_kernel(
 
     State6DOF state;
     state.pos_ecef = Eigen::Vector3d::Zero(); // RELATIVE ECEF
-    state.mass = dart_cfg.mass; 
+    state.mass = dart_cfg.mass;
     state.vel_ecef = R_ne * vel_ned;
-    
+
     // Initial orientation: body points along velocity in NED
     // Rotation sequence: Yaw (psi) then Pitch (theta)
     // In NED, positive rotation around Y is Pitch UP.
@@ -213,8 +213,8 @@ __global__ void dart_mc_kernel(
 
     // 4. Integration Loop
     double t = 0.0;
-    double dt = 0.001; 
-    
+    double dt = 0.001;
+
     // Physical Properties from Config
     InertialProps inertia;
     inertia.mass = dart_cfg.mass;
@@ -236,9 +236,9 @@ __global__ void dart_mc_kernel(
     while (t < 5.0) {
         // 1. Stable Local Coordinates (state.pos_ecef is relative to origin)
         Eigen::Vector3d p_ned = R_en * state.pos_ecef;
-        double current_alt = dart_cfg.launch_alt - p_ned.z(); 
-        
-        if (current_alt < -0.5 && t > 0.05) break; 
+        double current_alt = dart_cfg.launch_alt - p_ned.z();
+
+        if (current_alt < -0.5 && t > 0.05) break;
         if (p_ned.x() > target_ned.x() + 2.0) break;
         if (t > 4.5) break;
 
@@ -253,7 +253,7 @@ __global__ void dart_mc_kernel(
             Eigen::Vector3d v_b = state.quat_be.inverse() * state.vel_ecef;
             double a_deg = atan2(v_b.z(), v_b.x()) * 180.0 / 3.14159265;
             double mach = v_b.norm() / 340.0;
-            
+
             debug_traj[step_cnt] = {
                 t, p_ned.x(), p_ned.y(), p_ned.z(),
                 v_ned_cur.x(), v_ned_cur.y(), v_ned_cur.z(),
@@ -297,13 +297,13 @@ __global__ void dart_mc_kernel(
             double m = v_m / 340.0;
 
             AeroCoeffsGPU c = DartAeroTable::interpolate_gpu(aero_table, m, a_deg);
-            
+
             double q = 0.5 * rho_base * v_m * v_m;
             double S = dart_cfg.ref_area;
             double L = dart_cfg.ref_length;
-            
+
             Eigen::Vector3d f_b(c.CX * q * S, c.CY * q * S, c.CZ * q * S);
-            
+
             Eigen::Vector3d m_b(
                 (-0.5 * s.omega_body.x()) * q * S * L,
                 (c.Cm + c.Cmq * s.omega_body.y() + dp * dart_cfg.ctrl_moment_coeff_pitch) * q * S * L,
@@ -520,10 +520,10 @@ int main(int argc, char* argv[]) {
         }
         return candidates.front();
     };
-    std::string gravity_path = resolve_path({"data/EGM2008.gfc", "../data/EGM2008.gfc", "e:/missile/data/EGM2008.gfc"});
+    std::string gravity_path = resolve_path({"data/EGM2008.gfc", "../data/EGM2008.gfc", "../data/EGM2008.gfc"});
     std::string aero_path = resolve_path({"data/dart/dart_aero_table.csv", "../data/dart/dart_aero_table.csv", "dart_aero_table.csv"});
-    LLA origin_lla = {dart_cfg.launch_lat * 3.14159265 / 180.0, 
-                      dart_cfg.launch_lon * 3.14159265 / 180.0, 
+    LLA origin_lla = {dart_cfg.launch_lat * 3.14159265 / 180.0,
+                      dart_cfg.launch_lon * 3.14159265 / 180.0,
                       dart_cfg.launch_alt};
     Eigen::Vector3d origin_ecef = CoordinateTransform::lla_to_ecef(origin_lla);
 
@@ -534,7 +534,7 @@ int main(int argc, char* argv[]) {
     } else {
         // Fallback to Somigliana formula (WGS84) if file missing
         double sin_lat = sin(origin_lla.lat);
-        dart_cfg.gravity_mag = 9.7803253359 * (1 + 0.00193185265241 * sin_lat * sin_lat) / 
+        dart_cfg.gravity_mag = 9.7803253359 * (1 + 0.00193185265241 * sin_lat * sin_lat) /
                                sqrt(1 - 0.00669437999014 * sin_lat * sin_lat);
     }
 
@@ -548,7 +548,7 @@ int main(int argc, char* argv[]) {
     std::cout << "--- aerosp: Dart GPU Monte Carlo ---" << std::endl;
     std::cout << "Location: (" << dart_cfg.launch_lat << ", " << dart_cfg.launch_lon << ")" << std::endl;
     std::cout << "Env: Gravity=" << dart_cfg.gravity_mag << " m/s2, Density=" << dart_cfg.atm_density << " kg/m3" << std::endl;
-    std::cout << "Params: v0=" << params.v0_mean << ", pitch=" << params.pitch_mean_deg 
+    std::cout << "Params: v0=" << params.v0_mean << ", pitch=" << params.pitch_mean_deg
               << ", yaw=" << params.yaw_mean_deg << ", sims=" << params.num_sims << std::endl;
     std::cout << "Guidance: PN Ratio=" << params.nav_ratio << ", Gain=" << params.control_gain << ", Seed=" << params.seed
               << ", ForcedDP1=" << params.forced_dp << ", ForcedDP2=" << params.forced_dp_2 << ", SwitchX=" << params.forced_switch_x << std::endl;
@@ -564,7 +564,7 @@ int main(int argc, char* argv[]) {
 
     MCSimResult* d_results;
     cudaMalloc(&d_results, params.num_sims * sizeof(MCSimResult));
-    
+
     TrajectoryPoint* d_debug_traj = nullptr;
     if (!sweep_mode && !closed_loop_sweep_mode && !closed_loop_structure_sweep_mode && params.num_sims >= 1) {
         cudaMalloc(&d_debug_traj, 2000 * sizeof(TrajectoryPoint));
