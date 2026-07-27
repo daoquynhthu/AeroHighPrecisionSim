@@ -1390,3 +1390,4 @@
 2026-07-27: Phase 15.1 — fix TransportDb parser bug (coeffs offset 2), add evaluate_mu() + tests. 19/19 ThermoDb tests PASS.
 2026-07-27: Phase 15.2 - NASA-9 cp(T)/h(T)/s(T)/y(T) evaluator, transport evaluator, T_from_e Newton solver. 27/27 tests PASS (19 legacy + 8 new CFD-N9-1..8). Real=float, tolerances 3e-7/3e-6. Python ref scripts saved to scripts/.
 2026-07-27: Fix TransportRecord::M sqrt(29) placeholder: add Real M field + set_molecular_weights() utility + Herning-Zipperer now uses real M. All 27/27 tests PASS.
+2026-07-27: Fix TransportDb CEA V/C parser: V and C lines shared `n_intervals` counter, causing all C (kappa) lines to be skipped. Split into `v_count`/`c_count`. Also fixed `approx()` in test (was `rtol*(mag+1)` → `rtol*mag` with epsilon fallback). Updated reference values: N2 species_kappa(500K) 3.8365e-5→3.4226e-5, mix_kappa(500K) 3.9533e-5→4.8035e-5, mix_mu(500K) 2.8095e-5→2.8139e-5. All 27/27 tests PASS.

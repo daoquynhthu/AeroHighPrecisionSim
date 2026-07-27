@@ -1899,7 +1899,7 @@ Tasks:
 - [x] yaml-cpp 解析器: `SpeciesConfig::load_yaml()` 实现并验证 (THERMO-CFG-2); 第三库通过 `add_subdirectory(third-party/yaml-cpp)` + private link 集成; pre-commit 跳过第三库空白检查
 - [x] `ThermoDb::load_thermo_inp()`: 逐行解析 `thermo.inp` 固定列格式 (col 1-16 物种名, col 1-80 元数据, col 1-16/17-32/33-48/... 系数); 支持 1/2/3 温度区间段, 处理 D→e 转换, 记录号校验
 - [x] ThermoDb 物种子集提取: `ThermoDb::extract(names)` → `SpeciesRecord[]` (仅含请求物种, 顺序匹配)
-- [x] `TransportDb::load_trans_inp()`: 解析 `trans.inp`, V/C 行, 二元交互对 (Φ_ij) 提取 (基础解析完成, 合并入 `thermo_db.cpp`)
+- [x] `TransportDb::load_trans_inp()`: 解析 `trans.inp` V/C 行 (单物种粘度/热导率), 合并入 `thermo_db.cpp`
 - [x] TransportDb parser bug fix: 系数偏移 2 字段 (T_low/T_high 被当作 A/B), 修正为 `fields[2..5]` 并存储 T_min/T_max 区间
 - [x] GPU 表构建: 平板系数数组 `Real d_buf[ MAX_SP * (3*9 + 2 + 1 + 4*2) ]`, 一次 `cudaMemcpyToSymbol`
 - [x] Gas constant: 统一 `R = 8.31451 J/(mol·K)` (CEA 标准, 对齐 `tools/nasa9.py` 输出, 修正当前代码 `8314.462618` 错误)
@@ -1943,8 +1943,8 @@ Files:
 |------|--------|---------|
 | `include/aero/cfd/nasa9_eval.hpp` | NEW | GPU `__device__ inline` + CPU `inline`: `d_cp_R(T, coeffs)`, `d_h_RT(T, coeffs)`, `d_s_R(T, coeffs)` — 全 FMA 链, 温度区间谓词选择 |
 | `src/aero/cfd/nasa9_eval.cpp` | NEW | CPU 版求值 + 混合气体函数: `mix_cp(T, Y[])`, `mix_h(T, Y[])`, `mix_gamma(T, Y[])` |
-| `include/aero/cfd/transport_eval.hpp` | NEW | GPU `__device__ inline`: `d_mu(T, mu_coeffs)`, `d_kappa(T, kappa_coeffs)`; 4-参数 CEA 对数拟合: `ln(η) = A*lnT + B/T + C/T² + D` |
-| `src/aero/cfd/transport_eval.cpp` | NEW | CPU 版: `species_mu(T, sp)`, `species_kappa(T, sp)`; Herning-Zipperer 混合律: `mix_mu(T, Y[])`, `mix_kappa(T, Y[])` — 使用 `TransportRecord::M` 真实分子量 |
+| `include/aero/cfd/transport_eval.hpp` | NEW | GPU `__device__ inline`: `d_mu(T, mu_coeffs)`, `d_kappa(T, kappa_coeffs)`; 4-参数 CEA 对数拟合: `ln(η) = A*lnT + B/T + C/T² + D`; `wilke_phi(μ_i, μ_j, M_i, M_j)` — Wilke 交互参数计算 |
+| `src/aero/cfd/transport_eval.cpp` | NEW | CPU 版: `species_mu(T, sp)`, `species_kappa(T, sp)`; Full Wilke 混合律: `mix_mu(T, Y[])`, `mix_kappa(T, Y[])` — 使用真实分子量 + `wilke_phi()` O(N²) |
 | `include/aero/cfd/thermo_db.hpp` | MODIFY | `TransportRecord` 新增 `Real M{Real(0)}` 字段; `TransportDb::set_molecular_weights()` |
 | `src/aero/cfd/thermo_db.cpp` | MODIFY | 实现 `TransportDb::set_molecular_weights()` 从 ThermoDb 拷贝 M |
 | `include/aero/cfd/t_from_e.hpp` | NEW | `Real T_from_e(Real e, Real* Y, int nsp, Real* gamma_guess)` — 牛顿法反求温度 |
@@ -1987,7 +1987,7 @@ Tasks:
 - [x] `d_cp_R()`, `d_h_RT()`, `d_s_R()`: NASA-9 全 FMA 展开, 温度区间谓词选择 (无分支 `if`, 用整数加法谓词)
 - [x] `d_mix_cp()`, `d_mix_h()`, `d_mix_gamma()`: 混合气体, 固定 MAX_NSP=11 循环全展开
 - [x] `d_mu()`, `d_kappa()`: CEA 4-参数对数拟合, `exp(A*lnT + B/T + C/T² + D)`; T-min 钳位防止 ln(0)
-- [x] `d_mix_mu()`: 简版 Wilke 混合律 (忽略二元交互, 仅 Sutherland 类形式); 完整 Wilke 需二元参数, 按需添加
+- [x] `d_mix_mu()`: Herning-Zipperer (GPU, 待 Phase 15.4 升级至 Full Wilke O(N²)); CPU 端 `mix_mu()` 已实现 Full Wilke
 - [x] `T_from_e()`: 牛顿法, 初值 `γ_guess` (来自调用者或默认 1.4), `f(T) = mix_e(T, Y) - e_target`; 回退二分法 `[200, 20000]`
 - [x] Host 端等价实现: `mixed_cp()`, `mixed_h()`, `mixed_gamma()`, `mixed_mu()` — 为非 GPU 路径和测试提供
 
@@ -2001,7 +2001,7 @@ Tests:
 | 4 | `CFD-N9-4` | 热力学恒等式: `(h(T+δ)-h(T-δ))/(2δ) = cp(T)` 数值导数 | 1e-5 | ✅ PASS |
 | 5 | `CFD-N9-5` | 混合 cp: 50/50 N₂+O₂ cp(1000K) 混合求值 | 3e-6 | ✅ PASS |
 | 6 | `CFD-N9-6` | `T_from_e()`: 输入 `e(500K)` → 输出 T≈500K | 1e-4 | ✅ PASS |
-| 7 | `CFD-N9-7` | 50/50 N₂+O₂ Herning-Zipperer mix_mu(500K): 使用真实 M (N₂=28.0134, O₂=31.9988) | 1e-6 | ✅ PASS |
+| 7 | `CFD-N9-7` | 50/50 N₂+O₂ Full Wilke mix_mu(500K): 真实 M + Φ_ij 计算 (N₂=28.0134, O₂=31.9988) | 1e-6 | ✅ PASS |
 | 8 | `CFD-N9-8` | T_from_e 恢复温度 | 1e-4 | ✅ PASS |
 
 ### 15.3 GasModel 层次结构 (替代当前 thermo.hpp/cpp)

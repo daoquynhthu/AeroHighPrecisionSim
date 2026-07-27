@@ -283,6 +283,9 @@ bool TransportDb::parse_trans_inp(const std::string& path, std::string* error) {
 
         ++li;
 
+        int v_count = 0;
+        int c_count = 0;
+
         while (li < lines.size()) {
             const std::string& vcline = lines[li];
             if (vcline.empty() || vcline[0] != ' ') break;
@@ -319,39 +322,35 @@ bool TransportDb::parse_trans_inp(const std::string& path, std::string* error) {
                 Real A = fields[2], B = fields[3];
                 Real C = fields[4], D = fields[5];
 
-                if (rec.n_intervals < CEA4_NINTV) {
-                    int iv = rec.n_intervals;
-                    rec.T_min[iv] = T_low;
-                    rec.T_max[iv] = T_high;
-                    if (is_viscosity) {
+                if (is_viscosity) {
+                    if (v_count < CEA4_NINTV) {
+                        int iv = v_count;
+                        rec.T_min[iv] = T_low;
+                        rec.T_max[iv] = T_high;
                         rec.mu_coeffs[iv][0] = A;
                         rec.mu_coeffs[iv][1] = B;
                         rec.mu_coeffs[iv][2] = C;
                         rec.mu_coeffs[iv][3] = D;
-                    } else {
+                        ++v_count;
+                    }
+                } else {
+                    if (c_count < CEA4_NINTV) {
+                        int iv = c_count;
+                        rec.T_min[iv] = T_low;
+                        rec.T_max[iv] = T_high;
                         rec.kappa_coeffs[iv][0] = A;
                         rec.kappa_coeffs[iv][1] = B;
                         rec.kappa_coeffs[iv][2] = C;
                         rec.kappa_coeffs[iv][3] = D;
+                        ++c_count;
                     }
-                    if (iv == rec.n_intervals)
-                        ++rec.n_intervals;
                 }
             }
 
             ++li;
         }
 
-        int actual_iv = 0;
-        for (int iv = 0; iv < CEA4_NINTV; ++iv) {
-            bool has_v = false, has_c = false;
-            for (int k = 0; k < CEA4_NCOEF; ++k) {
-                if (rec.mu_coeffs[iv][k] != Real(0)) has_v = true;
-                if (rec.kappa_coeffs[iv][k] != Real(0)) has_c = true;
-            }
-            if (has_v || has_c) ++actual_iv;
-        }
-        rec.n_intervals = actual_iv;
+        rec.n_intervals = (std::max)(v_count, c_count);
 
         if (rec.n_intervals > 0)
             records_.push_back(std::move(rec));
