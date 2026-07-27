@@ -178,12 +178,16 @@ __global__ void __launch_bounds__(256) cap_local_dt_kernel(
     int idx = blockIdx.x * blockDim.x + threadIdx.x;
     if (idx >= n_cells) return;
     Real min_dt = __ldg(d_min_dt);
-    Real dt = d_dt_cell[idx];
-    if (ratio_max > 1.0f && min_dt > 0.0f) {
-        Real cap = min_dt * ratio_max;
-        if (dt > cap) dt = cap;
+    if (!(min_dt > 0) || !real_isfinite(min_dt)) min_dt = Real(1e-30);
+    // ratio_max <= 1: force every cell to global min_dt (broadcast fill)
+    if (!(ratio_max > 1.0f)) {
+        d_dt_cell[idx] = min_dt;
+        return;
     }
-    if (!(dt > 0) || !real_isfinite(dt)) dt = min_dt > 0 ? min_dt : Real(1e-30);
+    Real dt = d_dt_cell[idx];
+    Real cap = min_dt * ratio_max;
+    if (dt > cap) dt = cap;
+    if (!(dt > 0) || !real_isfinite(dt)) dt = min_dt;
     d_dt_cell[idx] = dt;
 }
 

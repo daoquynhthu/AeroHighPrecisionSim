@@ -124,6 +124,73 @@ __global__ void __launch_bounds__(256) update_and_l2_kernel(
 
 } // namespace
 
+__global__ void __launch_bounds__(256) mean_flow_point_implicit_kernel(
+    Real* d_q, Real* d_residual, const Real* d_h_min, const Real* d_dt,
+    int n_cells, int nvar, Real gamma,
+    bool viscous, Real mu_ref, Real T_ref, Real sutherland_T, Real Re, bool sa) {
+    int idx = blockIdx.x * blockDim.x + threadIdx.x;
+    if (idx >= n_cells) return;
+    Real rho = d_q[idx * nvar + 0];
+    if (!(rho > 0) || !real_isfinite(rho)) return;
+    Real inv = 1.0f / rho;
+    Real u = d_q[idx * nvar + 1] * inv;
+    Real v = d_q[idx * nvar + 2] * inv;
+    Real w = d_q[idx * nvar + 3] * inv;
+    Real E = d_q[idx * nvar + 4];
+    Real kinetic = 0.5f * (u*u + v*v + w*w);
+    Real p = (gamma - 1.0f) * (E - rho * kinetic);
+    if (!(p > 0) || !real_isfinite(p)) return;
+    Real h = d_h_min[idx];
+    if (!(h > 0) || !real_isfinite(h)) h = 1e-10f;
+    Real vmag = real_sqrt(u*u + v*v + w*w);
+    Real a = real_sqrt(gamma * p / rho);
+    Real lambda = (vmag + a) / h;
+    if (viscous) {
+        Real T = p * inv;
+        Real t_ratio = T / T_ref;
+        Real mu = mu_ref * t_ratio * real_sqrt(t_ratio) * (T_ref + sutherland_T) / (T + sutherland_T);
+        if (mu > 0) {
+            Real nu_mol = mu / (rho * Re + 1e-30f);
+            Real nu_t = 0;
+            if (sa && nvar > 5) {
+                Real nu = d_q[idx * nvar + 5] * inv;
+                if (nu > 0) {
+                    Real chi = Re * rho * nu / (mu + 1e-30f);
+                    if (chi > Real(1e6)) chi = Real(1e6);
+                    Real chi3 = chi*chi*chi;
+                    Real cv13 = 7.1f*7.1f*7.1f;
+                    Real fv1 = chi3 / (chi3 + cv13 + 1e-30f);
+                    nu_t = nu * fv1;
+                }
+            }
+            lambda += (nu_mol + real_fmax(nu_t, Real(0))) / (h * h + 1e-30f);
+        }
+    }
+    Real dt = d_dt ? d_dt[idx] : 0;
+    if (!(dt > 0)) return;
+    Real f = 1.0f / (1.0f + dt * lambda + 1e-30f);
+    d_residual[idx * nvar + 0] *= f;
+    d_residual[idx * nvar + 1] *= f;
+    d_residual[idx * nvar + 2] *= f;
+    d_residual[idx * nvar + 3] *= f;
+    d_residual[idx * nvar + 4] *= f;
+}
+
+bool apply_mean_flow_point_implicit_gpu(DeviceMesh& mesh, const Real* d_dt,
+    Real gamma, bool viscous, Real mu_ref, Real T_ref, Real sutherland_T, Real Re,
+    bool sa, std::string* error, cudaStream_t stream) {
+    int nc = static_cast<int>(mesh.cell_count());
+    if (nc <= 0 || !d_dt) return true;
+    int block = 128;
+    int grid = (nc + block - 1) / block;
+    DeviceCellData cd = mesh.cell_data();
+    mean_flow_point_implicit_kernel<<<grid, block, 0, stream>>>(
+        mesh.state_device(), mesh.residual_device(), cd.h_min, d_dt,
+        nc, mesh.nvar(), gamma, viscous, mu_ref, T_ref, sutherland_T, Re, sa);
+    if (!cuda_check(cudaGetLastError(), "mean_flow_point_implicit launch", error)) return false;
+    return true;
+}
+
 bool compute_update_gpu(DeviceMesh& mesh, const Real* d_min_dt, Real gamma,
     Real* d_l2_sum, int* d_failed,
     int* d_failure_cell, Real* d_failure_state,

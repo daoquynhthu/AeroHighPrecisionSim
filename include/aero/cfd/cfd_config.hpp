@@ -60,6 +60,9 @@ struct CfdConfig {
     Real cfl_start = 1.0f;
     Real cfl_end = 1e6f;
     int cfl_ramp_steps = 100;
+    // When true (or implicit=true), CFL ramps cfl_start → cfl_end over cfl_ramp_steps.
+    // Explicit steady RANS should set cfl_ramp=true with moderate cfl_end (e.g. 5–50).
+    bool cfl_ramp = false;
     bool local_time_stepping = true;
     int fgmres_restart = 30;
     int fgmres_max_iter = 100;
@@ -72,6 +75,10 @@ struct CfdConfig {
     int sa_sub_iters = 2;
     // Cap local/global dt ratio for LTS coupling stability (max_dt <= ratio * min_dt).
     Real lts_dt_ratio_max = 1.0e4f;
+    // Point-implicit residual scaling for mean-flow eqs via local spectral radius.
+    // When true, prefer larger CFL (cfl_ramp) because PI already damps by ~1/(1+CFL).
+    // Default false: spectral CFL alone is the stability mechanism (avoids double damping).
+    bool mean_flow_point_implicit = false;
 };
 
 struct FreestreamCondition {

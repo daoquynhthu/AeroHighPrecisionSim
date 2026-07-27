@@ -30,6 +30,10 @@ bool compute_update_gpu(DeviceMesh& mesh, const Real* d_min_dt, Real gamma,
     int* d_failure_cell = nullptr, Real* d_failure_state = nullptr,
     cudaStream_t stream = nullptr, const Real* d_dt_cell = nullptr);
 
+bool apply_mean_flow_point_implicit_gpu(DeviceMesh& mesh, const Real* d_dt,
+    Real gamma, bool viscous, Real mu_ref, Real T_ref, Real sutherland_T, Real Re,
+    bool sa, std::string* error = nullptr, cudaStream_t stream = nullptr);
+
 bool compute_wall_forces_gpu(DeviceMesh& mesh, Real gamma, Real* d_forces);
 bool compute_wall_forces_gpu(DeviceMesh& mesh, Real gamma, Real* d_forces,
     bool viscous, Real prandtl, Real mu_ref, Real T_ref, Real sutherland_T,

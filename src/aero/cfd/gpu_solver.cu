@@ -210,7 +210,7 @@ static CfdSolveSummary solve_gpu_impl(
     cudaEventCreate(&event_update_done);
     cudaEventRecord(event_update_done, stream_main); // signaled for first iter
 
-    if (config.implicit || config.local_time_stepping) {
+    if (config.implicit || config.local_time_stepping || config.mean_flow_point_implicit) {
         if (!cuda_check(cudaMalloc(&d_dt_cell, n_cells * sizeof(Real)), "cudaMalloc d_dt_cell", error)) goto fail;
     }
     if (config.implicit) {
@@ -363,21 +363,38 @@ static CfdSolveSummary solve_gpu_impl(
         {
             const bool sa_dt = (config.turbulence_model == TurbulenceModel::SA ||
                                config.turbulence_model == TurbulenceModel::SA_DDES);
-            if (!compute_timestep_gpu(d_mesh, config.gamma, config.cfl, d_min_dt,
+            Real cfl_now = config.cfl;
+            if (config.implicit || config.cfl_ramp) {
+                Real c0 = config.cfl_start > 0 ? config.cfl_start : config.cfl;
+                Real c1 = config.cfl_end > c0 ? config.cfl_end : c0;
+                int n_ramp = config.cfl_ramp_steps > 0 ? config.cfl_ramp_steps : 1;
+                Real t = static_cast<Real>(iter) / static_cast<Real>(n_ramp);
+                if (t > Real(1)) t = Real(1);
+                cfl_now = c0 * real_pow(c1 / c0, t);
+            }
+            if (!compute_timestep_gpu(d_mesh, config.gamma, cfl_now, d_min_dt,
                     config.viscous, config.mu_ref, config.T_ref, config.sutherland_T, config.Re,
                     stream_pre, sa_dt)) {
                 if (error) *error = "timestep kernel failed";
                 goto fail;
             }
-            if (config.local_time_stepping && d_dt_cell) {
-                if (!compute_local_timestep_gpu(d_mesh, config.gamma, config.cfl, d_dt_cell,
-                        config.viscous, config.mu_ref, config.T_ref, config.sutherland_T, config.Re,
-                        error, stream_pre, sa_dt)) {
-                    goto fail;
-                }
-                if (!cap_local_timestep_gpu(d_dt_cell, d_min_dt, config.lts_dt_ratio_max,
-                        n_cells, error, stream_pre)) {
-                    goto fail;
+            if (d_dt_cell) {
+                if (config.local_time_stepping) {
+                    if (!compute_local_timestep_gpu(d_mesh, config.gamma, cfl_now, d_dt_cell,
+                            config.viscous, config.mu_ref, config.T_ref, config.sutherland_T, config.Re,
+                            error, stream_pre, sa_dt)) {
+                        goto fail;
+                    }
+                    if (!cap_local_timestep_gpu(d_dt_cell, d_min_dt, config.lts_dt_ratio_max,
+                            n_cells, error, stream_pre)) {
+                        goto fail;
+                    }
+                } else {
+                    // Global dt: every cell uses min_dt
+                    if (!cap_local_timestep_gpu(d_dt_cell, d_min_dt, Real(1),
+                            n_cells, error, stream_pre)) {
+                        goto fail;
+                    }
                 }
             }
         }
@@ -423,9 +440,42 @@ if (config.viscous) {
             if (error && error->empty()) *error = "turbulence source kernel failed";
             goto fail;
         }
+
+        // Spatial residual L2 before point-implicit (steady convergence metric).
+        // For implicit Newton path, residual is re-normed later from d_r_saved.
+        if (!config.implicit) {
+            if (!dnrm2_gpu(d_mesh.residual_device(), nvar_cells, d_l2_sum, stream_main)) {
+                if (error) *error = "spatial residual L2 failed"; goto fail;
+            }
+            if (config.turbulence_model == TurbulenceModel::SST && d_mesh.has_sst()) {
+                if (!dnrm2_gpu(d_mesh.residual_k_device(), n_cells, d_l2_sum + 2, stream_main)) {
+                    if (error) *error = "SST k spatial L2 failed"; goto fail;
+                }
+                if (!dnrm2_gpu(d_mesh.residual_omega_device(), n_cells, d_l2_sum + 3, stream_main)) {
+                    if (error) *error = "SST omega spatial L2 failed"; goto fail;
+                }
+                sst_l2_accumulate_kernel<<<1, 1, 0, stream_main>>>(d_l2_sum, d_l2_sum + 2);
+                if (!cuda_check(cudaGetLastError(), "sst_l2_accumulate spatial", error)) goto fail;
+            }
+            check_status_kernel<<<1, 1, 0, stream_main>>>(
+                d_failed, d_l2_sum, nvar_ncells,
+                config.convergence_tol, d_residual_history + iter);
+            if (!cuda_check(cudaGetLastError(), "check_status spatial residual", error)) goto fail;
+        }
+
+        if (!config.implicit && config.mean_flow_point_implicit && d_dt_cell) {
+            const bool sa_pi = (config.turbulence_model == TurbulenceModel::SA ||
+                                config.turbulence_model == TurbulenceModel::SA_DDES);
+            if (!apply_mean_flow_point_implicit_gpu(d_mesh, d_dt_cell, config.gamma,
+                    config.viscous, config.mu_ref, config.T_ref, config.sutherland_T,
+                    config.Re, sa_pi, error, stream_main)) {
+                goto fail;
+            }
+        }
+
         if (config.turbulence_model != TurbulenceModel::LAMINAR &&
                 config.turbulence_model != TurbulenceModel::SST && !config.implicit) {
-            if (config.local_time_stepping && d_dt_cell) {
+            if (d_dt_cell) {
                 if (!apply_rans_implicit_per_cell_gpu(d_mesh, config.Re, d_dt_cell, error, stream_main)) {
                     if (error && error->empty()) *error = "RANS implicit per-cell kernel failed";
                     goto fail;
@@ -632,22 +682,30 @@ newton_accepted:
                 if (error) *error = "final L2 norm failed"; goto fail;
             }
         } else {
-            const Real* dt_ptr = (config.local_time_stepping && d_dt_cell) ? d_dt_cell : nullptr;
             if (!compute_update_gpu(d_mesh, d_min_dt, config.gamma, d_l2_sum, d_failed,
-                    d_failure_cell, d_failure_state, stream_main, dt_ptr)) {
+                    d_failure_cell, d_failure_state, stream_main, d_dt_cell)) {
                 if (error) *error = "update kernel failed";
                 goto fail;
             }
-            if (!dnrm2_gpu(d_mesh.residual_device(), nvar_cells, d_l2_sum, stream_main)) {
-                if (error) *error = "residual L2 norm failed"; goto fail;
-            }
+            // Spatial residual already written to history before PI; do not overwrite.
         }
 
-        if (config.turbulence_model == TurbulenceModel::SST && d_mesh.has_sst()) {
-            if (!dnrm2_gpu(d_mesh.residual_k_device(), n_cells, d_l2_sum + 2, stream_main)) { if (error) *error = "SST k L2 norm failed"; goto fail; }
-            if (!dnrm2_gpu(d_mesh.residual_omega_device(), n_cells, d_l2_sum + 3, stream_main)) { if (error) *error = "SST omega L2 norm failed"; goto fail; }
-            sst_l2_accumulate_kernel<<<1, 1, 0, stream_main>>>(d_l2_sum, d_l2_sum + 2);
-            if (!cuda_check(cudaGetLastError(), "sst_l2_accumulate kernel", error)) goto fail;
+        if (config.implicit) {
+            if (config.turbulence_model == TurbulenceModel::SST && d_mesh.has_sst()) {
+                if (!dnrm2_gpu(d_mesh.residual_k_device(), n_cells, d_l2_sum + 2, stream_main)) { if (error) *error = "SST k L2 norm failed"; goto fail; }
+                if (!dnrm2_gpu(d_mesh.residual_omega_device(), n_cells, d_l2_sum + 3, stream_main)) { if (error) *error = "SST omega L2 norm failed"; goto fail; }
+                sst_l2_accumulate_kernel<<<1, 1, 0, stream_main>>>(d_l2_sum, d_l2_sum + 2);
+                if (!cuda_check(cudaGetLastError(), "sst_l2_accumulate kernel", error)) goto fail;
+            }
+            { int df = 0; Real l2 = 0;
+              cudaMemcpy(&df, d_failed, sizeof(int), cudaMemcpyDeviceToHost);
+              cudaMemcpy(&l2, d_l2_sum, sizeof(Real), cudaMemcpyDeviceToHost);
+              if (df != 0 || !real_isfinite(l2))
+                  std::fprintf(stderr, "DIAG before check_status: d_failed=%d l2=%.6e (iter=%d)\n", df, l2, iter); }
+            check_status_kernel<<<1, 1, 0, stream_main>>>(
+                d_failed, d_l2_sum, nvar_ncells,
+                config.convergence_tol, d_residual_history + iter);
+            if (!cuda_check(cudaGetLastError(), "check_status kernel launch", error)) goto fail;
         }
 
         if (diagnostics_enabled) {
@@ -657,15 +715,6 @@ newton_accepted:
             }
         }
 
-        { int df = 0; Real l2 = 0;
-          cudaMemcpy(&df, d_failed, sizeof(int), cudaMemcpyDeviceToHost);
-          cudaMemcpy(&l2, d_l2_sum, sizeof(Real), cudaMemcpyDeviceToHost);
-          if (df != 0 || !real_isfinite(l2))
-              std::fprintf(stderr, "DIAG before check_status: d_failed=%d l2=%.6e (iter=%d)\n", df, l2, iter); }
-        check_status_kernel<<<1, 1, 0, stream_main>>>(
-            d_failed, d_l2_sum, nvar_ncells,
-            config.convergence_tol, d_residual_history + iter);
-        if (!cuda_check(cudaGetLastError(), "check_status kernel launch", error)) goto fail;
         cudaEventRecord(event_update_done, stream_main);
 
 #ifdef MPI_ENABLED

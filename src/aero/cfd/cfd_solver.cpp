@@ -643,8 +643,21 @@ CfdSolveSummary CfdSolver::solve_from_state(
     const bool use_lts = config.local_time_stepping;
     const bool use_sa = (config.turbulence_model == TurbulenceModel::SA ||
                          config.turbulence_model == TurbulenceModel::SA_DDES);
+    Real cfl_adapt = Real(1); // residual-driven CFL multiplier (never increases past 1 without ramp)
 
     for (int iter = 0; iter < config.max_iter; ++iter) {
+        Real cfl_now = config.cfl;
+        if (config.implicit || config.cfl_ramp) {
+            Real c0 = config.cfl_start > 0 ? config.cfl_start : config.cfl;
+            Real c1 = config.cfl_end > c0 ? config.cfl_end : c0;
+            int n_ramp = config.cfl_ramp_steps > 0 ? config.cfl_ramp_steps : 1;
+            Real t = static_cast<Real>(iter) / static_cast<Real>(n_ramp);
+            if (t > Real(1)) t = Real(1);
+            cfl_now = c0 * std::pow(c1 / c0, t);
+        }
+        cfl_now *= cfl_adapt;
+        if (cfl_now < Real(1e-6)) cfl_now = Real(1e-6);
+
         Real min_dt = std::numeric_limits<Real>::max();
         DtLimiterSnapshot dt_limiter;
         dt_limiter.iteration = iter;
@@ -670,7 +683,7 @@ CfdSolveSummary CfdSolver::solve_from_state(
             Real signal_speed = vmag + a;
             Real h_min_val = mesh_.cells[i].h_min;
             if (h_min_val <= 0.0f) h_min_val = 1e-10f;
-            Real dt = config.cfl * h_min_val / (signal_speed + Real(1e-30));
+            Real dt = cfl_now * h_min_val / (signal_speed + Real(1e-30));
             Real mu = Real(0);
             Real nu_mol = Real(0);
             if (config.viscous) {
@@ -684,7 +697,7 @@ CfdSolveSummary CfdSolver::solve_from_state(
                         if (use_sa)
                             nu_t = sa_eddy_viscosity(w[i].nu_tilde, w[i].rho, mu, config.Re);
                         Real nu_eff = nu_mol + std::max(nu_t, Real(0));
-                        Real dt_visc = config.cfl * h_min_val * h_min_val / (nu_eff + 1e-30f);
+                        Real dt_visc = cfl_now * h_min_val * h_min_val / (nu_eff + 1e-30f);
                         if (dt_visc < dt) dt = dt_visc;
                     }
                 }
@@ -694,7 +707,7 @@ CfdSolveSummary CfdSolver::solve_from_state(
                 Real g_sa = sa_damping_rate(Real(0), w[i].nu_tilde, nu_mol, d_wall, h_min_val);
                 g_sa = std::max(g_sa, sa_diffusive_rate(w[i].nu_tilde, nu_mol, h_min_val));
                 if (g_sa > 0) {
-                    Real dt_sa = config.cfl / g_sa;
+                    Real dt_sa = cfl_now / g_sa;
                     if (dt_sa < dt) dt = dt_sa;
                 }
             }
@@ -902,6 +915,46 @@ CfdSolveSummary CfdSolver::solve_from_state(
             }
         }
 
+        // Spatial residual L2 (before any point-implicit transforms) — true
+        // steady-state convergence metric. PI only changes the update map.
+        Real l2_spatial = 0.0f;
+        for (std::size_t i = 0; i < q.size(); ++i) {
+            l2_spatial += residual[i].mass * residual[i].mass
+                + residual[i].mom_x * residual[i].mom_x
+                + residual[i].mom_y * residual[i].mom_y
+                + residual[i].mom_z * residual[i].mom_z
+                + residual[i].energy * residual[i].energy
+                + residual[i].turbulence * residual[i].turbulence;
+        }
+
+        // Mean-flow spectral point-implicit: R_eff = R / (1 + dt*lambda)
+        // lambda ≈ |u|/h + a/h + nu_eff/h^2  (no zero-state pull on q).
+        if (config.mean_flow_point_implicit && config.mms_source.empty()) {
+            for (std::size_t i = 0; i < q.size(); ++i) {
+                Real h = mesh_.cells[i].h_min;
+                if (!(h > 0) || !std::isfinite(h)) h = 1e-10f;
+                Real vmag = std::sqrt(w[i].u*w[i].u + w[i].v*w[i].v + w[i].w*w[i].w);
+                Real a = speed_of_sound(w[i], config.gamma);
+                Real lambda = (vmag + a) / h;
+                if (config.viscous) {
+                    Real T = w[i].p / std::max(w[i].rho, Real(1e-30));
+                    Real mu = sutherland_viscosity(T, config.T_ref, config.sutherland_T);
+                    if (!(mu > 0)) mu = config.mu_ref;
+                    Real nu_mol = mu / (w[i].rho * config.Re + 1e-30f);
+                    Real nu_t = use_sa
+                        ? sa_eddy_viscosity(w[i].nu_tilde, w[i].rho, mu, config.Re)
+                        : Real(0);
+                    lambda += (nu_mol + std::max(nu_t, Real(0))) / (h * h + 1e-30f);
+                }
+                Real f = 1.0f / (1.0f + dt_cell[i] * lambda + 1e-30f);
+                residual[i].mass *= f;
+                residual[i].mom_x *= f;
+                residual[i].mom_y *= f;
+                residual[i].mom_z *= f;
+                residual[i].energy *= f;
+            }
+        }
+
         // SA full-residual point-implicit (sources + inviscid/viscous turb fluxes):
         //   U_new = (U + dt_i/V * R) / (1 + dt_i*g)
         // Sub-iters re-linearize volume source against frozen face fluxes (R_flux).
@@ -1002,12 +1055,43 @@ CfdSolveSummary CfdSolver::solve_from_state(
         if (config.turbulence_model == TurbulenceModel::SST) {
             nvar_eff += 2;
             for (std::size_t i = 0; i < q.size(); ++i) {
-                l2 += sst_residual_k_[i] * sst_residual_k_[i]
+                l2_spatial += sst_residual_k_[i] * sst_residual_k_[i]
                     + sst_residual_omega_[i] * sst_residual_omega_[i];
             }
         }
-        Real residual_l2 = std::sqrt(l2 / (nvar_eff * static_cast<Real>(q.size())));
+        (void)l2; // post-PI residual kept for optional future diagnostics
+        Real residual_l2 = std::sqrt(l2_spatial / (nvar_eff * static_cast<Real>(q.size())));
+        // Residual-adaptive CFL: cut on spikes; recover on decrease or plateau.
+        if (!summary.residual_history.empty() && std::isfinite(residual_l2)) {
+            Real r_prev = summary.residual_history.back();
+            if (r_prev > 0 && residual_l2 > r_prev * Real(2)) {
+                cfl_adapt *= Real(0.5);
+                if (cfl_adapt < Real(1e-3)) cfl_adapt = Real(1e-3);
+            } else if (r_prev > 0 && residual_l2 < r_prev * Real(0.9)) {
+                cfl_adapt = std::min(Real(1), cfl_adapt * Real(1.08));
+            } else if (r_prev > 0) {
+                Real rel = std::fabs(residual_l2 - r_prev) / r_prev;
+                if (rel < Real(1e-3))
+                    cfl_adapt = std::min(Real(1), cfl_adapt * Real(1.02));
+            }
+        }
         summary.residual_history.push_back(residual_l2);
+
+        // Reject invalid updates: keep previous state and cut CFL instead of failing later.
+        bool update_ok = true;
+        for (std::size_t i = 0; i < q_next.size(); ++i) {
+            PrimitiveState wn;
+            if (!conservative_to_primitive(q_next[i], config.gamma, wn)) {
+                update_ok = false;
+                break;
+            }
+        }
+        if (!update_ok) {
+            cfl_adapt *= Real(0.25);
+            if (cfl_adapt < Real(1e-4)) cfl_adapt = Real(1e-4);
+            // Keep q; skip swap. Still recorded residual of the rejected step.
+            continue;
+        }
         q.swap(q_next);
 
         // SST explicit update for k and omega

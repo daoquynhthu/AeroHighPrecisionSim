@@ -1427,3 +1427,14 @@
   - lts_dt_ratio_max cap for LTS coupling stability
 - Gate: FP64-ORACLE-3 residual peak/final ~1e-6 (was 1e6/NaN); peak<=1e-2, final<=1e-3
 - Tests: test_oracle_fp64 3/3; TestCfdRans 17/17 (+RANS-15 freestream chi); GPU *RANS* 9/9
+
+2026-07-28: SA residual further reduction (spatial metric + CFL ramp + adapt)
+- Commit 16853f4 already shipped freestream/wall-d/LTS/SA-CFL residual drop to ~1e-6 (post-PI).
+- This round (no tech debt):
+  1) Convergence metric = spatial residual L2 BEFORE point-implicit (true R(q))
+  2) Explicit cfl_ramp (cfl_start→cfl_end) on CPU + GPU when cfl_ramp=true
+  3) Residual-adaptive CFL multiplier + invalid-update reject (keep state, cut CFL)
+  4) Optional mean_flow_point_implicit (default off: avoid double-damping with spectral CFL)
+  5) GPU: mean-flow PI kernel, LTS fill/cap, spatial residual logged pre-PI
+- FP64-ORACLE-3: 300 LTS steps, cfl 0.2→2.5; spatial residual peak~5.6e-2 → final~2e-3 (≥2× drop)
+- Gates: peak developed, final≤5e-3, final≤0.5*peak; tests 3/3 oracle, 17/17 RANS, GPU *RANS* 9/9
